@@ -151,6 +151,12 @@ type provisionWorkspaceMsg struct {
 	err  error
 }
 
+type updateActionMsg struct {
+	name    string
+	version string
+	err     error
+}
+
 type baseImageReadyMsg struct {
 	err error
 }
@@ -294,6 +300,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		m.message = fmt.Sprintf("Created workspace %s and provisioned its image/container.", msg.name)
+		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
+	case updateActionMsg:
+		if msg.err != nil {
+			m.message = fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err)
+			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
+		}
+		m.message = fmt.Sprintf("OpenCode updated to %s in %s.", msg.version, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case baseImageReadyMsg:
 		if msg.err != nil {
@@ -675,6 +688,37 @@ func (m model) startSelected() (tea.Model, tea.Cmd) {
 	}
 }
 
+// updateSelected upgrades OpenCode inside the selected workspace container. It
+// is gated on OpenCode being idle: while a task is running (the agent is
+// generating) or blocked on an approval prompt, the update is refused so the
+// post-update container restart cannot interrupt active work.
+func (m model) updateSelected() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Update requires a selected workspace."
+		return m, nil
+	}
+	if m.lifecycleErr != "" {
+		m.message = "Update failed: " + m.lifecycleErr
+		return m, nil
+	}
+
+	name := selected.Manifest.Name
+	switch m.statuses[name].Activity {
+	case workspace.ActivityWorking, workspace.ActivityApproval:
+		m.message = fmt.Sprintf("Cannot update %s while a task is running in opencode. Wait until it is idle.", name)
+		return m, nil
+	}
+
+	m.message = "Updating OpenCode in " + name + " (this restarts the container)..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		version, err := m.lifecycle.UpdateOpenCode(ctx, selected)
+		return updateActionMsg{name: name, version: version, err: err}
+	}
+}
+
 func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 	switch command {
 	case "":
@@ -705,7 +749,7 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 	case "edit":
 		m.message = m.workspaceActionMessage("Edit")
 	case "update":
-		m.message = m.workspaceActionMessage("Update OpenCode")
+		return m.updateSelected()
 	default:
 		m.message = fmt.Sprintf("Unknown command %q. Press ? for help.", command)
 	}

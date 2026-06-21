@@ -36,6 +36,7 @@ type Driver interface {
 	RemoveImage(context.Context, string) error
 	ExecCommand(string, []string) *exec.Cmd
 	ExecOutput(context.Context, string, []string) ([]byte, error)
+	ExecOutputAs(context.Context, string, string, []string) ([]byte, error)
 }
 
 type BaseBuildSpec struct {
@@ -312,8 +313,16 @@ func (d CLIDriver) ExecCommand(name string, command []string) *exec.Cmd {
 
 // ExecOutput runs a command inside a running container without a TTY and
 // returns its standard output. Used to collect machine-readable output such as
-// `tokscale --json`.
+// `tokscale --json`. It runs as the container's default user.
 func (d CLIDriver) ExecOutput(ctx context.Context, name string, command []string) ([]byte, error) {
+	return d.ExecOutputAs(ctx, name, "", command)
+}
+
+// ExecOutputAs is like ExecOutput but runs the command as the given container
+// user (e.g. "0" for root). An empty user keeps the container's default user.
+// Updating the globally installed OpenCode needs root because the container's
+// main process runs as the unprivileged workspace user.
+func (d CLIDriver) ExecOutputAs(ctx context.Context, name, user string, command []string) ([]byte, error) {
 	if name == "" {
 		return nil, fmt.Errorf("container name is required")
 	}
@@ -321,7 +330,12 @@ func (d CLIDriver) ExecOutput(ctx context.Context, name string, command []string
 		return nil, fmt.Errorf("exec command is required")
 	}
 
-	args := append([]string{"exec", name}, command...)
+	args := []string{"exec"}
+	if user != "" {
+		args = append(args, "--user", user)
+	}
+	args = append(args, name)
+	args = append(args, command...)
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 
 	var stdout, stderr bytes.Buffer

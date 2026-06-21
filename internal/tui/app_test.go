@@ -1,6 +1,50 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/mickael-menu/opencode-manager/internal/workspace"
+)
+
+func updateTestModel(activity workspace.Activity) model {
+	ws := workspace.Summary{Manifest: workspace.Manifest{Name: "app"}}
+	return model{
+		workspaces: []workspace.Summary{ws},
+		statuses: map[string]workspace.Status{
+			"app": {Activity: activity},
+		},
+	}
+}
+
+// Update must be refused while OpenCode is mid-task so the post-update restart
+// cannot interrupt active work.
+func TestUpdateRefusedWhileTaskRunning(t *testing.T) {
+	for _, activity := range []workspace.Activity{workspace.ActivityWorking, workspace.ActivityApproval} {
+		m := updateTestModel(activity)
+		next, cmd := m.updateSelected()
+		if cmd != nil {
+			t.Fatalf("activity %q: expected no command", activity)
+		}
+		if msg := next.(model).message; !strings.Contains(msg, "Cannot update") {
+			t.Fatalf("activity %q: message = %q, want refusal", activity, msg)
+		}
+	}
+}
+
+// Update is allowed (a command is dispatched) when no task is running.
+func TestUpdateDispatchedWhenIdle(t *testing.T) {
+	for _, activity := range []workspace.Activity{workspace.ActivityWaiting, workspace.ActivityAsleep, workspace.ActivityNew} {
+		m := updateTestModel(activity)
+		next, cmd := m.updateSelected()
+		if cmd == nil {
+			t.Fatalf("activity %q: expected an update command", activity)
+		}
+		if msg := next.(model).message; !strings.Contains(msg, "Updating OpenCode") {
+			t.Fatalf("activity %q: message = %q, want progress message", activity, msg)
+		}
+	}
+}
 
 func TestActionsUseK9sBindings(t *testing.T) {
 	keys := map[string]string{}
