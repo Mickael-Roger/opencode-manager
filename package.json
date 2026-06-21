@@ -3,6 +3,14 @@
   "version": "0.1.1",
   "description": "TUI for managing isolated OpenCode workspaces.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mickael-Roger/opencode-manager.git"
+  },
+  "homepage": "https://github.com/Mickael-Roger/opencode-manager#readme",
+  "bugs": {
+    "url": "https://github.com/Mickael-Roger/opencode-manager/issues"
+  },
   "bin": {
     "opencode-manager": "bin/opencode-manager"
   },
