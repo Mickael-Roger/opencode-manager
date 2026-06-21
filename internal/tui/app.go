@@ -15,7 +15,7 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
 
-const commandPrompt = "> "
+const appVersion = "v0.1.0"
 
 type model struct {
 	cfg           config.Config
@@ -33,56 +33,98 @@ type model struct {
 	message       string
 	command       string
 	commandMode   bool
+	filter        string
+	filterMode    bool
 	createMode    bool
 	createName    string
 	confirmDelete bool
+	dialogFocus   int // 0 = OK/primary button, 1 = Cancel
+	showHelp      bool
+	showDescribe  bool
+	tokens        map[string]tokenState
 }
 
-type commandItem struct {
-	Name        string
-	Shortcut    string
-	Description string
+// tokenState caches the tokscale token-usage synthesis for one workspace.
+type tokenState struct {
+	loading bool
+	loaded  bool
+	err     string
+	usage   workspace.TokenUsage
 }
 
-var commands = []commandItem{
-	{Name: "/help", Shortcut: "h", Description: "show available commands"},
-	{Name: "/create", Shortcut: "c", Description: "create a new workspace"},
-	{Name: "/attach", Shortcut: "a", Description: "attach to selected workspace"},
-	{Name: "/edit", Shortcut: "e", Description: "edit selected workspace"},
-	{Name: "/delete", Shortcut: "d", Description: "delete selected workspace"},
-	{Name: "/stop", Shortcut: "s", Description: "stop selected workspace"},
-	{Name: "/update", Shortcut: "u", Description: "update OpenCode in selected workspace"},
-	{Name: "/quit", Shortcut: "q", Description: "quit opencode-manager"},
+// action mirrors a k9s menu entry: a hotkey, the command word typed after ":",
+// and a human description shown in the keyboard menu and help.
+type action struct {
+	Key  string
+	Cmd  string
+	Desc string
 }
+
+var actions = []action{
+	{Key: "", Cmd: "attach", Desc: "Attach"},
+	{Key: "s", Cmd: "shell", Desc: "Shell"},
+	{Key: "t", Cmd: "toggle", Desc: "Start/Stop"},
+	{Key: "d", Cmd: "describe", Desc: "Describe"},
+	{Key: "e", Cmd: "edit", Desc: "Edit"},
+	{Key: "u", Cmd: "update", Desc: "Update"},
+	{Key: "c", Cmd: "create", Desc: "Create"},
+	{Key: "ctrl-d", Cmd: "delete", Desc: "Delete"},
+}
+
+// k9s default ("stock") skin colors.
+var (
+	colBorder      = lipgloss.Color("#1e90ff") // dodgerblue
+	colBorderFocus = lipgloss.Color("#87cefa") // lightskyblue
+	colTitle       = lipgloss.Color("#00ffff") // aqua
+	colCounter     = lipgloss.Color("#ffefd5") // papayawhip
+	colFilter      = lipgloss.Color("#2e8b57") // seagreen
+	colMenuKey     = lipgloss.Color("#1e90ff") // dodgerblue
+	colMenuText    = lipgloss.Color("#ffffff") // white
+	colInfoKey     = lipgloss.Color("#ffa500") // orange
+	colInfoVal     = lipgloss.Color("#ffffff") // white
+	colLogo        = lipgloss.Color("#ffa500") // orange
+	colBody        = lipgloss.Color("#5f9ea0") // cadetblue
+	colHeader      = lipgloss.Color("#ffffff") // white
+	colCursorFg    = lipgloss.Color("#000000") // black
+	colCursorBg    = lipgloss.Color("#00ffff") // aqua
+	colError       = lipgloss.Color("#ff5f5f") // red
+	colRunning     = lipgloss.Color("#5fff87") // green
+	colStopped     = lipgloss.Color("#ffaf00") // orange
+	colStarting    = lipgloss.Color("#ffd75f") // yellow
+	colMuted       = lipgloss.Color("#5f9ea0") // cadetblue/gray
+)
 
 var (
-	appStyle = lipgloss.NewStyle().Padding(1, 2)
-	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("62")).
-			Padding(1, 2)
-	commandStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("238")).
-			Padding(0, 1)
-	confirmStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
-			Padding(1, 4)
-	confirmTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("252"))
-	confirmButtonStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("203"))
-	cancelButtonStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("245"))
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
-	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("62")).Bold(true)
-	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	infoKeyStyle  = lipgloss.NewStyle().Foreground(colInfoKey)
+	infoValStyle  = lipgloss.NewStyle().Foreground(colInfoVal)
+	menuKeyStyle  = lipgloss.NewStyle().Foreground(colMenuKey)
+	menuTextStyle = lipgloss.NewStyle().Foreground(colMenuText)
+	logoStyle     = lipgloss.NewStyle().Foreground(colLogo).Bold(true)
+	titleStyle    = lipgloss.NewStyle().Foreground(colTitle)
+	counterStyle  = lipgloss.NewStyle().Foreground(colCounter)
+	headerStyle   = lipgloss.NewStyle().Foreground(colHeader).Bold(true)
+	bodyStyle     = lipgloss.NewStyle().Foreground(colBody)
+	mutedStyle    = lipgloss.NewStyle().Foreground(colMuted)
+	errorStyle    = lipgloss.NewStyle().Foreground(colError)
+	cursorStyle   = lipgloss.NewStyle().Foreground(colCursorFg).Background(colCursorBg).Bold(true)
+	crumbStyle    = lipgloss.NewStyle().Foreground(colCursorFg).Background(colCursorBg).Bold(true).Padding(0, 1)
+	filterStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colFilter).Bold(true).Padding(0, 1)
+	promptStyle   = lipgloss.NewStyle().Foreground(colTitle)
+	borderStyle   = lipgloss.NewStyle().Foreground(colBorder)
+
+	// k9s dialog ("Dialog") skin.
+	dialogText      = lipgloss.NewStyle().Foreground(colBody)                                                                       // cadetblue
+	dialogLabel     = lipgloss.NewStyle().Foreground(colMenuText).Bold(true)                                                        // white
+	dialogButton    = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#483d8b")).Padding(0, 2) // darkslateblue
+	dialogButtonHot = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colBorder).Bold(true).Padding(0, 2)      // dodgerblue focus
 )
+
+var logoLines = []string{
+	"╭──────────╮",
+	"│ opencode │",
+	"│  manager │",
+	"╰──────────╯",
+}
 
 type workspaceListMsg struct {
 	workspaces []workspace.Summary
@@ -114,9 +156,16 @@ type baseImageReadyMsg struct {
 }
 
 type attachReadyMsg struct {
+	noun string // "Attach" or "Shell"
 	name string
 	cmd  tea.Cmd
 	err  error
+}
+
+type tokenUsageMsg struct {
+	name  string
+	usage workspace.TokenUsage
+	err   error
 }
 
 func Run(cfg config.Config) error {
@@ -156,6 +205,7 @@ func newModel(cfg config.Config) model {
 		lifecycle:    lifecycle,
 		lifecycleErr: lifecycleErr,
 		statuses:     map[string]workspace.Status{},
+		tokens:       map[string]tokenState{},
 		width:        100,
 		height:       30,
 		message:      "Creating the base image...",
@@ -172,34 +222,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
-		if m.confirmDelete {
-			return m.updateDeleteConfirmation(msg)
-		}
-
-		if m.createMode {
-			return m.updateCreate(msg)
-		}
-
-		if m.commandMode {
-			return m.updateCommand(msg)
-		}
-
-		key := msg.String()
-		switch key {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "/":
-			m.commandMode = true
-			m.command = "/"
-		case "up", "k":
-			m.moveWorkspace(-1)
-		case "down", "j":
-			m.moveWorkspace(1)
-		case "enter":
-			return m.attachSelected()
-		default:
-			return m.executeShortcut(key)
-		}
+		return m.updateKey(msg)
 	case workspaceListMsg:
 		if msg.err != nil {
 			m.loadError = msg.err.Error()
@@ -209,9 +232,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.loadError = ""
 		m.workspaces = msg.workspaces
-		if m.workspacePos >= len(m.workspaces) {
-			m.workspacePos = max(0, len(m.workspaces)-1)
-		}
+		m.clampSelection()
 		return m, m.loadStatuses
 	case runtimeStatusMsg:
 		m.runtimeName = msg.name
@@ -244,14 +265,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("Base image creation failed: %v", msg.err)
 			return m, nil
 		}
-		m.message = "Base image ready. Type / for commands. Select a workspace with up/down."
+		m.message = "Base image ready. Press : for commands, / to filter, ? for help."
 		return m, nil
 	case attachReadyMsg:
 		if msg.err != nil {
-			m.message = fmt.Sprintf("Attach failed for %s: %v", msg.name, msg.err)
+			m.message = fmt.Sprintf("%s failed for %s: %v", msg.noun, msg.name, msg.err)
 			return m, m.loadStatuses
 		}
-		m.message = fmt.Sprintf("Attached to %s.", msg.name)
+		m.message = fmt.Sprintf("%s session started for %s.", msg.noun, msg.name)
 		return m, msg.cmd
 	case workspace.AttachResultMsg:
 		if msg.Err != nil {
@@ -260,6 +281,94 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Attach session closed."
 		}
 		return m, m.loadStatuses
+	case workspace.ShellResultMsg:
+		if msg.Err != nil {
+			m.message = fmt.Sprintf("Shell session failed: %v", msg.Err)
+		} else {
+			m.message = "Shell session closed."
+		}
+		return m, m.loadStatuses
+	case tokenUsageMsg:
+		state := tokenState{loaded: true}
+		if msg.err != nil {
+			state.err = msg.err.Error()
+		} else {
+			state.usage = msg.usage
+		}
+		m.tokens[msg.name] = state
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.confirmDelete {
+		return m.updateDeleteConfirmation(msg)
+	}
+	if m.createMode {
+		return m.updateCreate(msg)
+	}
+	if m.commandMode {
+		return m.updateCommand(msg)
+	}
+	if m.filterMode {
+		return m.updateFilter(msg)
+	}
+	if m.showDescribe {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc", "q":
+			m.showDescribe = false
+			m.message = ""
+		}
+		return m, nil
+	}
+	if m.showHelp {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		default:
+			m.showHelp = false
+		}
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case ":":
+		m.commandMode = true
+		m.command = ""
+	case "/":
+		m.filterMode = true
+	case "?":
+		m.showHelp = true
+	case "ctrl+d":
+		m.requestDelete()
+	case "esc":
+		if m.filter != "" {
+			m.filter = ""
+			m.clampSelection()
+			m.message = "Filter cleared."
+		}
+	case "up", "k":
+		m.moveWorkspace(-1)
+	case "down", "j":
+		m.moveWorkspace(1)
+	case "g", "home":
+		m.workspacePos = 0
+	case "G", "end":
+		m.workspacePos = max(0, len(m.visibleWorkspaces())-1)
+	case "ctrl+f", "pgdown":
+		m.moveWorkspace(10)
+	case "ctrl+b", "pgup":
+		m.moveWorkspace(-10)
+	case "enter":
+		return m.attachSelected()
+	default:
+		return m.executeShortcut(msg.String())
 	}
 
 	return m, nil
@@ -269,10 +378,15 @@ func (m model) updateDeleteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "y", "enter":
+	case "tab", "shift+tab", "left", "right", "h", "l":
+		m.dialogFocus = (m.dialogFocus + 1) % 2
+	case "enter":
 		m.confirmDelete = false
-		return m.deleteSelected()
-	case "n", "esc", "q":
+		if m.dialogFocus == 0 {
+			return m.deleteSelected()
+		}
+		m.message = "Delete cancelled."
+	case "esc":
 		m.confirmDelete = false
 		m.message = "Delete cancelled."
 	}
@@ -308,6 +422,32 @@ func (m model) updateCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.filterMode = false
+		m.filter = ""
+		m.clampSelection()
+	case "enter":
+		m.filterMode = false
+		m.clampSelection()
+	case "backspace", "ctrl+h":
+		if len(m.filter) > 0 {
+			m.filter = m.filter[:len(m.filter)-1]
+		}
+		m.clampSelection()
+	default:
+		if len(msg.Runes) > 0 {
+			m.filter += string(msg.Runes)
+			m.clampSelection()
+		}
+	}
+
+	return m, nil
+}
+
 func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -316,7 +456,15 @@ func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.createMode = false
 		m.createName = ""
 		m.message = "Create cancelled."
+	case "tab", "shift+tab":
+		m.dialogFocus = (m.dialogFocus + 1) % 2
 	case "enter":
+		if m.dialogFocus == 1 {
+			m.createMode = false
+			m.createName = ""
+			m.message = "Create cancelled."
+			return m, nil
+		}
 		return m.createWorkspace(strings.TrimSpace(m.createName))
 	case "backspace", "ctrl+h":
 		if len(m.createName) > 0 {
@@ -335,8 +483,8 @@ func (m model) executeCommand() (tea.Model, tea.Cmd) {
 	command := strings.TrimSpace(m.command)
 	m.commandMode = false
 	m.command = ""
-	if strings.HasPrefix(command, "/create ") {
-		return m.createWorkspace(strings.TrimSpace(strings.TrimPrefix(command, "/create ")))
+	if strings.HasPrefix(command, "create ") {
+		return m.createWorkspace(strings.TrimSpace(strings.TrimPrefix(command, "create ")))
 	}
 
 	return m.executeCommandName(command)
@@ -428,43 +576,107 @@ func (m model) attachSelected() (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		cmd, err := m.lifecycle.Attach(ctx, selected)
-		return attachReadyMsg{name: selected.Manifest.Name, cmd: cmd, err: err}
+		return attachReadyMsg{noun: "Attach", name: selected.Manifest.Name, cmd: cmd, err: err}
+	}
+}
+
+func (m model) shellSelected() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Shell requires a selected workspace."
+		return m, nil
+	}
+	if m.lifecycleErr != "" {
+		m.message = "Shell failed: " + m.lifecycleErr
+		return m, nil
+	}
+
+	m.message = "Opening shell in " + selected.Manifest.Name + "..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		cmd, err := m.lifecycle.Shell(ctx, selected)
+		return attachReadyMsg{noun: "Shell", name: selected.Manifest.Name, cmd: cmd, err: err}
+	}
+}
+
+// toggleStartStop starts a stopped workspace or stops a running one, based on
+// the current container status.
+func (m model) toggleStartStop() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Start/Stop requires a selected workspace."
+		return m, nil
+	}
+
+	if status, ok := m.statuses[selected.Manifest.Name]; ok && status.Container == runtime.StatusRunning {
+		return m.stopSelected()
+	}
+
+	return m.startSelected()
+}
+
+func (m model) startSelected() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Start requires a selected workspace."
+		return m, nil
+	}
+	if m.lifecycleErr != "" {
+		m.message = "Start failed: " + m.lifecycleErr
+		return m, nil
+	}
+
+	m.message = "Starting " + selected.Manifest.Name + "..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		return lifecycleActionMsg{action: "Start", name: selected.Manifest.Name, err: m.lifecycle.EnsureStarted(ctx, selected)}
 	}
 }
 
 func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 	switch command {
-	case "", "/":
-		m.message = "No command entered. Type /help to list commands."
-	case "/help":
-		m.message = m.helpMessage()
-	case "/quit":
+	case "":
+		m.message = "No command entered. Press ? for help."
+	case "q", "quit":
 		return m, tea.Quit
-	case "/delete":
+	case "help", "?":
+		m.showHelp = true
+	case "delete":
 		m.requestDelete()
-	case "/stop":
+	case "describe":
+		return m.describeSelected()
+	case "shell":
+		return m.shellSelected()
+	case "toggle":
+		return m.toggleStartStop()
+	case "start":
+		return m.startSelected()
+	case "stop":
 		return m.stopSelected()
-	case "/attach":
+	case "attach":
 		return m.attachSelected()
-	case "/create":
+	case "create":
 		m.createMode = true
 		m.createName = ""
+		m.dialogFocus = 0
 		m.message = "Enter a workspace name. Press Enter to create, Esc to cancel."
-	case "/edit":
+	case "edit":
 		m.message = m.workspaceActionMessage("Edit")
-	case "/update":
+	case "update":
 		m.message = m.workspaceActionMessage("Update OpenCode")
 	default:
-		m.message = fmt.Sprintf("Unknown command %q. Type /help.", command)
+		m.message = fmt.Sprintf("Unknown command %q. Press ? for help.", command)
 	}
 
 	return m, nil
 }
 
 func (m model) executeShortcut(key string) (tea.Model, tea.Cmd) {
-	for _, command := range commands {
-		if key == command.Shortcut {
-			return m.executeCommandName(command.Name)
+	for _, a := range actions {
+		if a.Key != "" && key == a.Key {
+			return m.executeCommandName(a.Cmd)
 		}
 	}
 
@@ -474,133 +686,527 @@ func (m model) executeShortcut(key string) (tea.Model, tea.Cmd) {
 func (m *model) autocompleteCommand() {
 	matches := m.commandSuggestions()
 	if len(matches) == 1 {
-		m.command = matches[0].Name
+		m.command = matches[0].Cmd
 	}
 }
 
 func (m model) View() string {
-	width := max(60, m.width-4)
-	mainHeight := max(10, m.height-9)
+	width := max(40, m.width)
+	height := max(12, m.height)
 
-	main := m.renderWorkspaceBox(width, mainHeight)
-	message := mutedStyle.Width(width).Render(m.message)
-	command := m.renderCommandBar(width)
+	header := m.renderHeader(width)
+	headerHeight := lipgloss.Height(header)
 
-	view := lipgloss.JoinVertical(lipgloss.Left, main, message, command)
+	crumbs := m.renderCrumbs()
+	prompt := m.renderPrompt(width)
+
+	bodyHeight := height - headerHeight - lipgloss.Height(crumbs) - lipgloss.Height(prompt) - 1
+	bodyHeight = max(3, bodyHeight)
+
+	var body string
+	if m.showDescribe {
+		body = m.renderDescribePage(width, bodyHeight)
+	} else {
+		body = m.renderTable(width, bodyHeight)
+	}
+
+	view := lipgloss.JoinVertical(lipgloss.Left, header, body, crumbs, prompt)
+
 	if m.createMode {
-		view = overlayCentered(view, m.renderCreatePrompt(width), width, m.height-2)
+		view = overlayCentered(view, m.renderCreatePrompt(), width, height)
 	}
 	if m.confirmDelete {
-		view = overlayCentered(view, m.renderDeleteConfirmation(width), width, m.height-2)
+		view = overlayCentered(view, m.renderDeleteConfirmation(), width, height)
+	}
+	if m.showHelp {
+		view = overlayCentered(view, m.renderHelp(), width, height)
 	}
 
-	return appStyle.Render(view)
+	return view
 }
 
-func (m model) renderWorkspaceBox(width int, height int) string {
-	var b strings.Builder
+func (m model) renderHeader(width int) string {
+	info := m.renderInfo()
+	menu := m.renderMenu()
+	left := lipgloss.JoinHorizontal(lipgloss.Top, info, "    ", menu)
 
-	topLine := titleStyle.Render("Workspaces") + "    " + helpStyle.Render(shortcutSummary())
-	b.WriteString(topLine)
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render(fmt.Sprintf("runtime: %s | root: %s", m.runtimeStatus(), m.cfg.WorkspaceRoot)))
-	b.WriteString("\n\n")
+	logo := logoStyle.Render(strings.Join(logoLines, "\n"))
+	gap := width - lipgloss.Width(left) - lipgloss.Width(logo)
+	if width >= 84 && gap >= 2 {
+		spacer := strings.Repeat(" ", gap)
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, logo)
+	}
 
-	if m.loadError != "" {
-		b.WriteString(errorStyle.Render(m.loadError))
-	} else if len(m.workspaces) == 0 {
-		b.WriteString("No workspaces yet. Type /create to create one.")
-	} else {
-		for i, ws := range m.workspaces {
-			line := fmt.Sprintf("%s  %s  container:%s", ws.Manifest.Name, m.renderWorkspaceStatus(ws), ws.Manifest.ContainerName)
-			if i == m.workspacePos {
-				line = selectedStyle.Render(" > " + line)
-			} else {
-				line = "   " + line
-			}
-			b.WriteString(line)
-			b.WriteString("\n")
+	return left
+}
+
+func (m model) renderInfo() string {
+	rows := [][2]string{
+		{"Context", "opencode-manager"},
+		{"Runtime", m.runtimeStatus()},
+		{"Root", m.cfg.WorkspaceRoot},
+		{"Workspaces", fmt.Sprintf("%d", len(m.workspaces))},
+		{"Rev", appVersion},
+	}
+
+	keyWidth := 0
+	for _, row := range rows {
+		if len(row[0]) > keyWidth {
+			keyWidth = len(row[0])
 		}
 	}
 
-	return boxStyle.Width(width).Height(height).Render(b.String())
+	lines := make([]string, len(rows))
+	for i, row := range rows {
+		key := infoKeyStyle.Render(fit(row[0]+":", keyWidth+1))
+		lines[i] = key + " " + infoValStyle.Render(row[1])
+	}
+
+	return strings.Join(lines, "\n")
 }
 
-func (m model) renderCommandBar(width int) string {
-	command := m.command
-	if command == "" && !m.commandMode {
-		command = "/"
+func (m model) renderMenu() string {
+	type entry struct{ key, desc string }
+	entries := []entry{
+		{":", "Command"},
+		{"/", "Filter"},
+		{"?", "Help"},
+		{"↵", "Attach"},
+		{"s", "Shell"},
+		{"t", "Start/Stop"},
+		{"d", "Describe"},
+		{"e", "Edit"},
+		{"u", "Update"},
+		{"c", "Create"},
+		{"^d", "Delete"},
+		{"q", "Quit"},
 	}
 
-	line := commandPrompt + command
-	if m.commandMode {
-		line += "_"
-	} else {
-		line += "  " + helpStyle.Render("type / for commands, tab to autocomplete, or press a shortcut")
+	lines := make([]string, len(entries))
+	for i, e := range entries {
+		lines[i] = menuKeyStyle.Render(fmt.Sprintf("<%s>", e.key)) + " " + menuTextStyle.Render(e.desc)
 	}
 
-	suggestions := m.renderSuggestions()
-	if suggestions != "" {
-		line += "\n" + suggestions
+	half := (len(lines) + 1) / 2
+	col1 := lipgloss.JoinVertical(lipgloss.Left, lines[:half]...)
+	col2 := lipgloss.JoinVertical(lipgloss.Left, lines[half:]...)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, col1, "   ", col2)
+}
+
+func (m model) renderTable(width, height int) string {
+	inner := width - 2
+	contentWidth := inner - 2
+	visible := m.visibleWorkspaces()
+
+	widths := columnWidths(contentWidth)
+	headers := []string{"NAME↑", "STATUS", "RUNTIME", "CONTAINER", "IMAGE"}
+	headerCells := make([]string, len(headers))
+	for i, h := range headers {
+		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
+	}
+	headerRow := " " + strings.Join(headerCells, "  ") + " "
+
+	bodyRows := make([]string, 0, height-1)
+	bodyRows = append(bodyRows, headerRow)
+
+	rowCapacity := height - 1
+	switch {
+	case m.loadError != "":
+		bodyRows = append(bodyRows, " "+errorStyle.Render(fit(m.loadError, contentWidth)))
+	case len(visible) == 0:
+		empty := "No workspaces match the filter."
+		if m.filter == "" {
+			empty = "No workspaces yet. Press c to create one."
+		}
+		bodyRows = append(bodyRows, " "+mutedStyle.Render(fit(empty, contentWidth)))
+	default:
+		for i, ws := range visible {
+			if len(bodyRows) >= rowCapacity {
+				break
+			}
+			bodyRows = append(bodyRows, m.renderRow(ws, widths, contentWidth, i == m.workspacePos))
+			_ = i
+		}
 	}
 
-	return commandStyle.Width(width).Render(line)
+	for len(bodyRows) < height-1 {
+		bodyRows = append(bodyRows, " "+strings.Repeat(" ", contentWidth)+" ")
+	}
+
+	return m.boxWithTitle(m.tableTitle(len(visible)), bodyRows, width)
+}
+
+func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, selected bool) string {
+	name := ws.Manifest.Name
+	statusText, statusColor := m.workspaceStatus(ws)
+	rt := ws.Manifest.Runtime
+	container := ws.Manifest.ContainerName
+	image := ws.Manifest.ImageName
+
+	if selected {
+		cells := []string{
+			fit(name, widths[0]),
+			fit(statusText, widths[1]),
+			fit(rt, widths[2]),
+			fit(container, widths[3]),
+			fit(image, widths[4]),
+		}
+		return cursorStyle.Render(" " + strings.Join(cells, "  ") + " ")
+	}
+
+	cells := []string{
+		bodyStyle.Render(fit(name, widths[0])),
+		lipgloss.NewStyle().Foreground(statusColor).Render(fit(statusText, widths[1])),
+		mutedStyle.Render(fit(rt, widths[2])),
+		mutedStyle.Render(fit(container, widths[3])),
+		mutedStyle.Render(fit(image, widths[4])),
+	}
+	return " " + strings.Join(cells, "  ") + " "
+}
+
+func (m model) tableTitle(count int) string {
+	scope := "all"
+	if m.filter != "" {
+		scope = "/" + m.filter
+	}
+	return titleStyle.Render("Workspaces") + counterStyle.Render(fmt.Sprintf("(%s)[%d]", scope, count))
+}
+
+// boxWithTitle draws a k9s-style bordered box with the title embedded in the
+// top border line: ┌ Title ──────┐
+func (m model) boxWithTitle(title string, rows []string, width int) string {
+	titleWidth := lipgloss.Width(title)
+	dashes := width - 4 - titleWidth
+	if dashes < 0 {
+		dashes = 0
+	}
+
+	top := borderStyle.Render("┌ ") + title + borderStyle.Render(" "+strings.Repeat("─", dashes)+"┐")
+	bottom := borderStyle.Render("└" + strings.Repeat("─", width-2) + "┘")
+
+	var b strings.Builder
+	b.WriteString(top)
+	b.WriteString("\n")
+	for _, row := range rows {
+		b.WriteString(borderStyle.Render("│"))
+		b.WriteString(row)
+		b.WriteString(borderStyle.Render("│"))
+		b.WriteString("\n")
+	}
+	b.WriteString(bottom)
+
+	return b.String()
+}
+
+func (m model) renderCrumbs() string {
+	crumbs := crumbStyle.Render("workspaces")
+	if m.showDescribe {
+		crumbs += " " + crumbStyle.Render("describe")
+	}
+	if m.filter != "" {
+		crumbs += " " + filterStyle.Render("/"+m.filter)
+	}
+	return crumbs
+}
+
+func (m model) renderPrompt(width int) string {
+	switch {
+	case m.commandMode:
+		line := promptStyle.Render(":"+m.command) + "▏"
+		if s := m.renderSuggestions(); s != "" {
+			line += "  " + s
+		}
+		return line
+	case m.filterMode:
+		return filterStyle.Render("/"+m.filter) + "▏"
+	default:
+		style := mutedStyle
+		if strings.Contains(strings.ToLower(m.message), "fail") || strings.Contains(strings.ToLower(m.message), "error") {
+			style = errorStyle
+		}
+		return style.Render(fit(m.message, width))
+	}
 }
 
 func (m model) renderSuggestions() string {
-	if !m.commandMode {
-		return ""
-	}
-
 	matches := m.commandSuggestions()
 	if len(matches) == 0 {
-		return helpStyle.Render("no matching command")
+		return mutedStyle.Render("no matching command")
 	}
 
 	parts := make([]string, 0, len(matches))
 	for _, match := range matches {
-		parts = append(parts, fmt.Sprintf("%s [%s] %s", match.Name, match.Shortcut, mutedStyle.Render(match.Description)))
+		parts = append(parts, menuKeyStyle.Render(match.Cmd))
 	}
 
-	return strings.Join(parts, "\n")
+	return mutedStyle.Render("(" + strings.Join(parts, " ") + ")")
 }
 
-func (m model) helpMessage() string {
-	parts := make([]string, 0, len(commands))
-	for _, command := range commands {
-		parts = append(parts, fmt.Sprintf("%s=%s", command.Shortcut, command.Name))
+func (m model) renderHelp() string {
+	rows := [][2]string{
+		{":", "command mode"},
+		{"/", "filter workspaces"},
+		{"?", "toggle this help"},
+		{"j / ↓", "down"},
+		{"k / ↑", "up"},
+		{"g / G", "top / bottom"},
+		{"^f / ^b", "page down / up"},
+		{"↵", "attach to workspace"},
+		{"s", "shell into container"},
+		{"t", "start / stop container"},
+		{"d", "describe"},
+		{"e", "edit"},
+		{"u", "update OpenCode"},
+		{"c", "create"},
+		{"^d", "delete"},
+		{"q / ^c", "quit"},
 	}
 
-	return "Commands: " + strings.Join(parts, ", ") + "."
-}
-
-func shortcutSummary() string {
-	parts := make([]string, 0, len(commands))
-	for _, command := range commands {
-		parts = append(parts, fmt.Sprintf("%s %s", command.Shortcut, strings.TrimPrefix(command.Name, "/")))
+	keyWidth := 0
+	for _, row := range rows {
+		if len(row[0]) > keyWidth {
+			keyWidth = len(row[0])
+		}
 	}
 
-	return strings.Join(parts, "  ")
+	lines := make([]string, 0, len(rows)+2)
+	for _, row := range rows {
+		lines = append(lines, menuKeyStyle.Render(fit(row[0], keyWidth))+"  "+menuTextStyle.Render(row[1]))
+	}
+	lines = append(lines, "")
+	lines = append(lines, mutedStyle.Render("Press any key to close."))
+
+	return k9sDialog("Help", strings.Join(lines, "\n"), colBorder)
 }
 
-func (m model) renderDeleteConfirmation(width int) string {
+type describeField struct {
+	key   string
+	value string
+	color lipgloss.Color // empty -> default value color
+}
+
+func (m model) describeFields(selected workspace.Summary) []describeField {
+	manifest := selected.Manifest
+	statusText, statusColor := m.workspaceStatus(selected)
+
+	modules := "none"
+	if len(manifest.Modules) > 0 {
+		names := make([]string, 0, len(manifest.Modules))
+		for _, mod := range manifest.Modules {
+			names = append(names, mod.Name)
+		}
+		modules = strings.Join(names, ", ")
+	}
+
+	fields := []describeField{
+		{key: "Name", value: manifest.Name},
+		{key: "Status", value: statusText, color: statusColor},
+		{key: "Runtime", value: manifest.Runtime},
+		{key: "Image", value: manifest.ImageName},
+		{key: "Container", value: manifest.ContainerName},
+		{key: "Home", value: manifest.HomeDir},
+		{key: "Base image", value: manifest.Image.BaseImage},
+		{key: "Modules", value: modules},
+		{key: "Created", value: manifest.CreatedAt.Format(time.RFC3339)},
+	}
+
+	return append(fields, m.tokenFields(manifest.Name)...)
+}
+
+// tokenFields renders the tokscale token-usage synthesis (total and today) for
+// the workspace, reflecting the current fetch state.
+func (m model) tokenFields(name string) []describeField {
+	if !m.isRunning(name) {
+		return []describeField{{key: "Tokens", value: "start the container to measure usage", color: colMuted}}
+	}
+
+	state, ok := m.tokens[name]
+	switch {
+	case !ok || state.loading || !state.loaded:
+		return []describeField{{key: "Tokens", value: "measuring with tokscale…", color: colMuted}}
+	case state.err != "":
+		return []describeField{{key: "Tokens", value: "tokscale error: " + state.err, color: colError}}
+	}
+
+	usage := state.usage
+	return []describeField{
+		{key: "Tokens total", value: fmt.Sprintf("%s tok   %s   %d msg", humanCount(usage.TotalTokens), money(usage.TotalCost), usage.TotalMsgs), color: colRunning},
+		{key: "Tokens today", value: fmt.Sprintf("%s tok   %s   %d msg", humanCount(usage.TodayTokens), money(usage.TodayCost), usage.TodayMsgs)},
+	}
+}
+
+// humanCount formats an integer with thousands separators, e.g. 1234567 -> 1,234,567.
+func humanCount(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+
+	var out strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out.WriteByte(',')
+		}
+		out.WriteRune(r)
+	}
+
+	if neg {
+		return "-" + out.String()
+	}
+	return out.String()
+}
+
+func money(v float64) string {
+	return fmt.Sprintf("$%.2f", v)
+}
+
+// renderDescribePage renders the describe view as a full page (like k9s pushes
+// a describe view), replacing the workspace table while it is open.
+func (m model) renderDescribePage(width, height int) string {
+	inner := width - 2
+	contentWidth := inner - 2
+
+	blank := " " + strings.Repeat(" ", contentWidth) + " "
+
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		rows := []string{" " + mutedStyle.Render(fit("No workspace selected.", contentWidth)) + " "}
+		for len(rows) < height-1 {
+			rows = append(rows, blank)
+		}
+		return m.boxWithTitle(titleStyle.Render("Describe"), rows, width)
+	}
+
+	fields := m.describeFields(selected)
+	labelWidth := 0
+	for _, f := range fields {
+		if len(f.key)+1 > labelWidth {
+			labelWidth = len(f.key) + 1
+		}
+	}
+
+	rows := make([]string, 0, height-1)
+	rows = append(rows, blank)
+	for _, f := range fields {
+		key := infoKeyStyle.Render(fit(f.key+":", labelWidth))
+		valWidth := contentWidth - labelWidth - 1
+		valRaw := fit(f.value, valWidth)
+		val := infoValStyle.Render(valRaw)
+		if f.color != "" {
+			val = lipgloss.NewStyle().Foreground(f.color).Render(valRaw)
+		}
+		rows = append(rows, " "+key+" "+val+" ")
+	}
+	for len(rows) < height-1 {
+		rows = append(rows, blank)
+	}
+
+	title := titleStyle.Render("Describe") + counterStyle.Render("("+selected.Manifest.Name+")")
+	return m.boxWithTitle(title, rows, width)
+}
+
+func (m model) renderDeleteConfirmation() string {
 	name := m.selectedWorkspaceName()
 	if name == "" {
 		name = "selected workspace"
 	}
 
-	body := lipgloss.JoinVertical(
+	content := lipgloss.JoinVertical(
 		lipgloss.Center,
-		confirmTitleStyle.Render("Delete workspace?"),
+		dialogText.Render("Delete workspace ")+dialogLabel.Render(name)+dialogText.Render("?"),
+		dialogText.Render("This action cannot be undone."),
 		"",
-		titleStyle.Render(name),
-		"",
-		mutedStyle.Render("This action cannot be undone."),
-		"",
-		confirmButtonStyle.Render("y delete")+mutedStyle.Render("  /  ")+cancelButtonStyle.Render("esc cancel"),
+		dialogButtons([]string{"OK", "Cancel"}, m.dialogFocus),
 	)
 
-	return confirmStyle.Width(min(width-12, 46)).Render(body)
+	return k9sDialog("Confirm Delete", content, colBorder)
+}
+
+func (m model) renderCreatePrompt() string {
+	display := dialogLabel.Render(m.createName) + "▏"
+	if m.createName == "" {
+		display = mutedStyle.Render("workspace name") + "▏"
+	}
+
+	field := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colBorder).
+		Padding(0, 1).
+		Width(34).
+		Render(display)
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		dialogText.Render("Enter a name for the new workspace."),
+		"",
+		field,
+		"",
+		dialogButtons([]string{"OK", "Cancel"}, m.dialogFocus),
+	)
+
+	return k9sDialog("New Workspace", content, colBorder)
+}
+
+// k9sDialog renders a k9s-style popup: a bordered box with the title centered
+// in the top border and the content block padded inside. The caller controls
+// the internal alignment of content (center it with JoinVertical(Center) or
+// keep it left-aligned with JoinVertical(Left)).
+func k9sDialog(title, content string, border lipgloss.Color) string {
+	lines := strings.Split(content, "\n")
+	blockWidth := 0
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > blockWidth {
+			blockWidth = w
+		}
+	}
+
+	const padX = 3
+	titleText := " " + title + " "
+	inner := blockWidth + padX*2
+	if w := lipgloss.Width(titleText) + 2; w > inner {
+		inner = w
+	}
+
+	bs := lipgloss.NewStyle().Foreground(border)
+	titleWidth := lipgloss.Width(titleText)
+	leftDash := (inner - titleWidth) / 2
+	rightDash := inner - titleWidth - leftDash
+
+	top := bs.Render("┌"+strings.Repeat("─", leftDash)) + dialogLabel.Render(titleText) + bs.Render(strings.Repeat("─", rightDash)+"┐")
+	padRow := bs.Render("│") + strings.Repeat(" ", inner) + bs.Render("│")
+	bottom := bs.Render("└" + strings.Repeat("─", inner) + "┘")
+
+	var b strings.Builder
+	b.WriteString(top + "\n")
+	b.WriteString(padRow + "\n")
+	for _, line := range lines {
+		right := inner - padX - lipgloss.Width(line)
+		if right < 0 {
+			right = 0
+		}
+		b.WriteString(bs.Render("│") + strings.Repeat(" ", padX) + line + strings.Repeat(" ", right) + bs.Render("│") + "\n")
+	}
+	b.WriteString(padRow + "\n")
+	b.WriteString(bottom)
+
+	return b.String()
+}
+
+// dialogButtons renders k9s-style buttons; the button at focused index is
+// highlighted with the focus colors.
+func dialogButtons(labels []string, focused int) string {
+	parts := make([]string, len(labels))
+	for i, label := range labels {
+		if i == focused {
+			parts[i] = dialogButtonHot.Render(label)
+		} else {
+			parts[i] = dialogButton.Render(label)
+		}
+	}
+
+	return strings.Join(parts, "  ")
 }
 
 func overlayCentered(base string, popup string, width int, height int) string {
@@ -629,35 +1235,11 @@ func overlayCentered(base string, popup string, width int, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m model) renderCreatePrompt(width int) string {
-	name := m.createName
-	if name == "" {
-		name = mutedStyle.Render("workspace name")
-	}
-
-	body := lipgloss.JoinVertical(
-		lipgloss.Center,
-		confirmTitleStyle.Render("Create workspace"),
-		"",
-		commandStyle.Width(min(width-20, 36)).Render(name+"_"),
-		"",
-		confirmButtonStyle.Foreground(lipgloss.Color("114")).Render("enter create")+
-			mutedStyle.Render("  /  ")+
-			cancelButtonStyle.Render("esc cancel"),
-	)
-
-	return confirmStyle.Width(min(width-12, 46)).BorderForeground(lipgloss.Color("240")).Render(body)
-}
-
-func (m model) commandSuggestions() []commandItem {
-	if m.command == "" {
-		return nil
-	}
-
-	matches := make([]commandItem, 0, len(commands))
-	for _, command := range commands {
-		if strings.HasPrefix(command.Name, m.command) {
-			matches = append(matches, command)
+func (m model) commandSuggestions() []action {
+	matches := make([]action, 0, len(actions))
+	for _, a := range actions {
+		if strings.HasPrefix(a.Cmd, m.command) {
+			matches = append(matches, a)
 		}
 	}
 
@@ -666,44 +1248,90 @@ func (m model) commandSuggestions() []commandItem {
 
 func (m model) runtimeStatus() string {
 	if m.runtimeError != "" {
-		return errorStyle.Render(m.cfg.Runtime + " unavailable")
+		return m.cfg.Runtime + " unavailable"
 	}
 
 	if m.runtimeName == "" {
-		return mutedStyle.Render(m.cfg.Runtime + " checking")
+		return m.cfg.Runtime + " checking"
 	}
 
 	return m.runtimeName + " available"
 }
 
-func (m model) renderWorkspaceStatus(ws workspace.Summary) string {
+// workspaceStatus returns the display text and color for a workspace container.
+func (m model) workspaceStatus(ws workspace.Summary) (string, lipgloss.Color) {
 	status, ok := m.statuses[ws.Manifest.Name]
 	if !ok || status.Container == "" {
-		return mutedStyle.Render("checking")
+		return "checking", colMuted
 	}
 	if status.Error != "" {
-		return errorStyle.Render("error")
+		return "error", colError
 	}
 
 	switch status.Container {
 	case runtime.StatusRunning:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Render("running")
-	case runtime.StatusMissing:
-		return mutedStyle.Render("missing")
+		return "running", colRunning
+	case runtime.StatusCreated:
+		return "created", colStarting
+	case "restarting":
+		return "starting", colStarting
+	case "paused":
+		return "paused", colStopped
 	case runtime.StatusExited:
-		return mutedStyle.Render("stopped")
+		return "stopped", colStopped
+	case "dead":
+		return "dead", colError
+	case "removing":
+		return "removing", colMuted
+	case runtime.StatusMissing:
+		return "missing", colMuted
 	default:
-		return mutedStyle.Render(status.Container)
+		return status.Container, colMuted
 	}
 }
 
 func (m *model) requestDelete() {
-	if len(m.workspaces) == 0 {
+	if len(m.visibleWorkspaces()) == 0 {
 		m.message = "No workspace selected."
 		return
 	}
 
+	m.dialogFocus = 0
 	m.confirmDelete = true
+}
+
+func (m model) describeSelected() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Describe requires a selected workspace."
+		return m, nil
+	}
+
+	m.showDescribe = true
+	m.message = "Describe — press esc to go back."
+
+	// Refresh token usage if the container is running; tokscale runs inside it.
+	name := selected.Manifest.Name
+	if m.lifecycleErr == "" && m.isRunning(name) {
+		m.tokens[name] = tokenState{loading: true}
+		return m, m.fetchTokenUsage(selected)
+	}
+
+	return m, nil
+}
+
+func (m model) fetchTokenUsage(summary workspace.Summary) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		usage, err := m.lifecycle.TokenUsage(ctx, summary)
+		return tokenUsageMsg{name: summary.Manifest.Name, usage: usage, err: err}
+	}
+}
+
+func (m model) isRunning(name string) bool {
+	status, ok := m.statuses[name]
+	return ok && status.Container == runtime.StatusRunning
 }
 
 func (m model) workspaceActionMessage(action string) string {
@@ -715,29 +1343,98 @@ func (m model) workspaceActionMessage(action string) string {
 	return fmt.Sprintf("%s selected for %s. This action is not wired yet.", action, name)
 }
 
+func (m model) visibleWorkspaces() []workspace.Summary {
+	if m.filter == "" {
+		return m.workspaces
+	}
+
+	query := strings.ToLower(m.filter)
+	out := make([]workspace.Summary, 0, len(m.workspaces))
+	for _, ws := range m.workspaces {
+		if strings.Contains(strings.ToLower(ws.Manifest.Name), query) {
+			out = append(out, ws)
+		}
+	}
+
+	return out
+}
+
 func (m model) selectedWorkspaceName() string {
-	if len(m.workspaces) == 0 {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
 		return ""
 	}
 
-	return m.workspaces[m.workspacePos].Manifest.Name
+	return selected.Manifest.Name
 }
 
 func (m model) selectedWorkspace() (workspace.Summary, bool) {
-	if len(m.workspaces) == 0 {
+	visible := m.visibleWorkspaces()
+	if len(visible) == 0 || m.workspacePos < 0 || m.workspacePos >= len(visible) {
 		return workspace.Summary{}, false
 	}
 
-	return m.workspaces[m.workspacePos], true
+	return visible[m.workspacePos], true
 }
 
 func (m *model) moveWorkspace(delta int) {
-	if len(m.workspaces) == 0 {
+	visible := m.visibleWorkspaces()
+	if len(visible) == 0 {
 		m.workspacePos = 0
 		return
 	}
 
-	m.workspacePos = clamp(m.workspacePos+delta, 0, len(m.workspaces)-1)
+	m.workspacePos = clamp(m.workspacePos+delta, 0, len(visible)-1)
+}
+
+func (m *model) clampSelection() {
+	visible := m.visibleWorkspaces()
+	if len(visible) == 0 {
+		m.workspacePos = 0
+		return
+	}
+
+	m.workspacePos = clamp(m.workspacePos, 0, len(visible)-1)
+}
+
+// columnWidths splits the available content width across the five columns,
+// keeping STATUS and RUNTIME fixed and sharing the rest.
+func columnWidths(contentWidth int) []int {
+	const gaps = 8 // four 2-space separators
+	avail := contentWidth - gaps
+	if avail < 20 {
+		avail = 20
+	}
+
+	wStatus := 8
+	wRuntime := 7
+	rest := avail - wStatus - wRuntime
+	if rest < 12 {
+		rest = 12
+	}
+
+	wName := max(8, rest*30/100)
+	wContainer := max(8, rest*35/100)
+	wImage := max(6, rest-wName-wContainer)
+
+	return []int{wName, wStatus, wRuntime, wContainer, wImage}
+}
+
+// fit truncates or right-pads s to exactly w display columns.
+func fit(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+
+	r := []rune(s)
+	if len(r) > w {
+		if w == 1 {
+			return "…"
+		}
+		return string(r[:w-1]) + "…"
+	}
+
+	return s + strings.Repeat(" ", w-len(r))
 }
 
 func clamp(value, minValue, maxValue int) int {

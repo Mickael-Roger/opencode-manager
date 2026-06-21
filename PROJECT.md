@@ -381,12 +381,18 @@ Status as of 2026-06-20:
 - Containers run an OpenCode entrypoint in `/home/debian/workspace`; it starts `opencode` when no sessions exist and `opencode -c` otherwise.
 - Added initial config, workspace, and runtime tests.
 - Added validation for invalid workspace slugs and malformed manifests.
+- Reworked the TUI to follow the k9s look-and-feel and key bindings: a three-zone header (context info, keyboard menu, logo), a titled workspace table with a highlighted cursor row, a breadcrumb line, and the k9s default ("stock") skin colors.
+- Adopted k9s key bindings: `:` enters command mode, `/` filters the workspace list, `?` toggles help, `Enter` (or `:attach`) attaches, `s` opens a shell in the container, `t` starts or stops the container based on its current status, `d` describes the selected workspace, `e` edit, `u` update, `c` create, `ctrl-d` delete (guarded), `j`/`k`/`g`/`G` and `ctrl-f`/`ctrl-b` navigate, and `q`/`ctrl-c` quit. Command words are typed without a leading slash (for example `:attach`, `:shell`, `:create my-app`, `:q`).
+- Added a runtime `ExecCommand` and a workspace `Shell` action that ensures the container is running, then opens an interactive `/bin/bash` inside it via `docker/podman exec -it`.
+- Restyled the confirmation/create/help popups as k9s dialogs: the title is embedded in the top border, with `OK`/`Cancel` buttons that are focusable (Tab/←/→ cycles, Enter activates the focused button, Esc cancels) and use the k9s dialog focus colors.
+- Made describe a full page (like k9s pushes a describe view) instead of a popup: pressing `d` replaces the workspace table with a `Describe(name)` panel and adds a `describe` breadcrumb; Esc or `q` returns to the list.
+- Installed `tokscale` in the managed base image and added an OpenCode token-usage synthesis to the describe page: when the container is running, opening describe runs `tokscale --json --client opencode` (and `--today`) inside it via a non-TTY `ExecOutput`, then shows total and daily tokens, cost, and message counts. Usage is fetched asynchronously and cached per workspace; stopped containers show a hint instead.
 
 Current limitations:
 
 - Module loading and hooks are not implemented yet.
 - OpenCode client/server mode is intentionally not used.
-- Created containers are not started automatically by `/create`; attach with `a` or `/attach` when ready to enter the workspace.
+- Created containers are not started automatically by `create`; attach with `a` or `:attach` when ready to enter the workspace.
 - Module selection is not part of the create flow yet.
 
 Security review notes before implementing container lifecycle actions:

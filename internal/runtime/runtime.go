@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -32,6 +33,8 @@ type Driver interface {
 	RemoveContainer(context.Context, string) error
 	RemoveImage(context.Context, string) error
 	AttachCommand(string) *exec.Cmd
+	ExecCommand(string, []string) *exec.Cmd
+	ExecOutput(context.Context, string, []string) ([]byte, error)
 }
 
 type BaseBuildSpec struct {
@@ -236,6 +239,37 @@ func (d CLIDriver) AttachCommand(name string) *exec.Cmd {
 	return exec.Command(d.binary, "attach", name)
 }
 
+// ExecCommand runs a command inside an already-running container with an
+// interactive TTY, e.g. an interactive shell.
+func (d CLIDriver) ExecCommand(name string, command []string) *exec.Cmd {
+	args := append([]string{"exec", "--interactive", "--tty", name}, command...)
+	return exec.Command(d.binary, args...)
+}
+
+// ExecOutput runs a command inside a running container without a TTY and
+// returns its standard output. Used to collect machine-readable output such as
+// `tokscale --json`.
+func (d CLIDriver) ExecOutput(ctx context.Context, name string, command []string) ([]byte, error) {
+	if name == "" {
+		return nil, fmt.Errorf("container name is required")
+	}
+	if len(command) == 0 {
+		return nil, fmt.Errorf("exec command is required")
+	}
+
+	args := append([]string{"exec", name}, command...)
+	cmd := exec.CommandContext(ctx, d.binary, args...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s exec %s: %w: %s", d.binary, name, err, strings.TrimSpace(stderr.String()))
+	}
+
+	return stdout.Bytes(), nil
+}
+
 func (d CLIDriver) run(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 	output, err := cmd.CombinedOutput()
@@ -296,6 +330,7 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	b.WriteString("RUN su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew && /home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	b.WriteString("RUN git --version && rg --version && jq --version && npx --version && uvx --version && su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	b.WriteString("RUN curl -fsSL https://opencode.ai/install | bash && cp /root/.opencode/bin/opencode /usr/local/bin/opencode && chmod 0755 /usr/local/bin/opencode && /usr/local/bin/opencode --version\n")
+	b.WriteString("RUN npm install -g tokscale@latest && which tokscale\n")
 	b.WriteString("RUN cat > /usr/local/bin/opencode-manager-entrypoint <<'EOF'\n")
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("sessions=$(opencode session list 2>/dev/null || true)\n")
