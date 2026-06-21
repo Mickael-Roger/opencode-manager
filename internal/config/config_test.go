@@ -20,12 +20,16 @@ func TestLoadUsesDefaultsWhenConfigDoesNotExist(t *testing.T) {
 	if cfg.BaseImage.Name == "" {
 		t.Fatal("BaseImage should have a default value")
 	}
+
+	if cfg.UseLocalOpenCodeAuth {
+		t.Fatal("UseLocalOpenCodeAuth should default to false")
+	}
 }
 
 func TestLoadMergesConfigWithDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	writeFile(t, path, []byte("runtime: podman\nworkspaceRoot: /tmp/workspaces\nbaseImage:\n  packages:\n    - ripgrep\n  commands:\n    - update-ca-certificates\n"))
+	writeFile(t, path, []byte("runtime: podman\nworkspaceRoot: /tmp/workspaces\nuseLocalOpenCodeAuth: true\nbaseImage:\n  packages:\n    - ripgrep\n  commands:\n    - update-ca-certificates\n"))
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -38,6 +42,9 @@ func TestLoadMergesConfigWithDefaults(t *testing.T) {
 
 	if cfg.WorkspaceRoot != "/tmp/workspaces" {
 		t.Fatalf("WorkspaceRoot = %q, want /tmp/workspaces", cfg.WorkspaceRoot)
+	}
+	if !cfg.UseLocalOpenCodeAuth {
+		t.Fatal("UseLocalOpenCodeAuth = false, want true")
 	}
 
 	if cfg.BaseImage.Name == "" {

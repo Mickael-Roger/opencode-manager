@@ -15,10 +15,11 @@ const (
 )
 
 type Config struct {
-	WorkspaceRoot string          `yaml:"workspaceRoot"`
-	Runtime       string          `yaml:"runtime"`
-	BaseImage     BaseImageConfig `yaml:"baseImage"`
-	ModuleDirs    []string        `yaml:"moduleDirs"`
+	WorkspaceRoot        string          `yaml:"workspaceRoot"`
+	Runtime              string          `yaml:"runtime"`
+	UseLocalOpenCodeAuth bool            `yaml:"useLocalOpenCodeAuth"`
+	BaseImage            BaseImageConfig `yaml:"baseImage"`
+	ModuleDirs           []string        `yaml:"moduleDirs"`
 }
 
 type BaseImageConfig struct {

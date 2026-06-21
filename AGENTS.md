@@ -24,6 +24,7 @@
 - Workspace containers are long-lived and tied to the workspace lifecycle.
 - New workspaces seed OpenCode files from `~/.config/opencode-manager/opencode/` into `home/.config/opencode/` for `opencode.json`, `agent/`, `commands/`, `plugins/`, and `skills/`.
 - `config.yaml` defines `baseImage.name`, `baseImage.packages`, and `baseImage.commands`; commands run during image build immediately after package installation.
+- `config.yaml` supports `useLocalOpenCodeAuth` (default `false`); when `true`, `~/.local/share/opencode/auth.json` is mounted read-write into the same path in workspace containers.
 - Generated workspace images must include `brew`, `npx`, `uvx`, `git`, `ripgrep`, and `jq` by default.
 - Managed base images are tagged from a stable hash of `baseImage` definition and reused until that definition changes.
 - The TUI ensures the managed base image exists at startup and shows `Creating the base image...` while it is built.
@@ -36,3 +37,10 @@
 - Runtime execution must use structured `exec.CommandContext` calls, not shell command strings.
 - Run `gofmt -w cmd internal` and `go test ./...` after Go changes.
 - Do not run code review or security-review subagents unless the user explicitly requests them.
+
+## Packaging Notes
+
+- npm packaging is defined by `package.json`, `bin/opencode-manager`, and `scripts/postinstall.js`.
+- The npm package expects prebuilt binaries in `dist/opencode-manager-{linux,darwin}-{x64,arm64}`.
+- `.github/workflows/package.yml` builds those binaries, uploads them as artifacts, packages the npm tarball, and publishes on `v*` tags when `NPM_TOKEN` is set.
+- The npm postinstall script creates the same user config directory used by Go's `os.UserConfigDir`, writes `config.yaml` only when absent, and copies bundled `modules/` entries without overwriting user files.

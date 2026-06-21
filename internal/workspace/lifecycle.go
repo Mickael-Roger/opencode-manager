@@ -141,9 +141,14 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 
-	mounts, err := globalTemplateMounts()
+	mounts, err := openCodeMounts(l.cfg.UseLocalOpenCodeAuth)
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+	if l.cfg.UseLocalOpenCodeAuth {
+		if err := os.MkdirAll(filepath.Join(manifest.HomeDir, ".local", "share", "opencode"), 0o700); err != nil {
+			return runtime.StatusUnknown, runtime.ContainerSpec{}, fmt.Errorf("create workspace OpenCode data directory: %w", err)
+		}
 	}
 
 	spec := runtime.ContainerSpec{
@@ -184,16 +189,21 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	return status, spec, nil
 }
 
+// openCodeHomeDir is the workspace user's home directory inside the container.
+const openCodeHomeDir = "/home/debian"
+
 // openCodeConfigDir is where OpenCode reads its global configuration inside the
-// container. The workspace home directory is mounted at /home/debian.
-const openCodeConfigDir = "/home/debian/.config/opencode"
+// container.
+const openCodeConfigDir = openCodeHomeDir + "/.config/opencode"
+
+const openCodeAuthRelPath = ".local/share/opencode/auth.json"
 
 // globalTemplateMounts returns the read-only bind mounts that expose the global
 // OpenCode templates (~/.config/opencode-manager) inside the workspace at
 // /home/debian/.config/opencode. Editing a host template propagates live to
 // every workspace; adding or removing a template takes effect on the next
 // container (re)creation.
-func globalTemplateMounts() ([]runtime.Mount, error) {
+func openCodeMounts(useLocalAuth bool) ([]runtime.Mount, error) {
 	dir, err := config.GlobalDir()
 	if err != nil {
 		return nil, err
@@ -208,8 +218,46 @@ func globalTemplateMounts() ([]runtime.Mount, error) {
 			ReadOnly: true,
 		})
 	}
+	if useLocalAuth {
+		source, err := localOpenCodeAuthPath()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateOpenCodeAuthFile(source); err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, runtime.Mount{
+			Source:   source,
+			Target:   openCodeHomeDir + "/" + openCodeAuthRelPath,
+			ReadOnly: false,
+		})
+	}
 
 	return mounts, nil
+}
+
+func localOpenCodeAuthPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find user home directory: %w", err)
+	}
+
+	return filepath.Join(homeDir, openCodeAuthRelPath), nil
+}
+
+func validateOpenCodeAuthFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("local OpenCode auth file %q is required when useLocalOpenCodeAuth is true", path)
+		}
+		return fmt.Errorf("check local OpenCode auth file %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("local OpenCode auth path %q is a directory", path)
+	}
+
+	return nil
 }
 
 func (l Lifecycle) recreateAndStart(ctx context.Context, summary Summary, spec runtime.ContainerSpec) error {

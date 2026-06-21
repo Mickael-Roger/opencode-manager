@@ -123,6 +123,7 @@ Example:
 ```yaml
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
+useLocalOpenCodeAuth: false
 baseImage:
   name: debian:stable-slim
   packages:
@@ -135,6 +136,11 @@ moduleDirs:
 ```
 
 The runtime must be either `docker` or `podman`.
+
+When `useLocalOpenCodeAuth` is `true`, the host file
+`~/.local/share/opencode/auth.json` is mounted read-write into the same path in
+workspace containers. It defaults to `false`, so host OpenCode auth is not shared
+unless explicitly enabled.
 
 Generated workspace images always include `brew`, `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Additional Debian packages are declared through `baseImage.packages`, and additional build steps are declared through `baseImage.commands`.
 
