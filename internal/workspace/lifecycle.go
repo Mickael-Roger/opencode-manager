@@ -31,6 +31,10 @@ type AttachResultMsg struct {
 	Err error
 }
 
+type ShellResultMsg struct {
+	Err error
+}
+
 func NewLifecycle(cfg config.Config) (Lifecycle, error) {
 	driver, err := runtime.NewDriver(cfg.Runtime)
 	if err != nil {
@@ -217,12 +221,112 @@ func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error)
 	}), nil
 }
 
+// ShellCommand ensures the workspace container is running and returns a command
+// that opens an interactive shell inside it.
+func (l Lifecycle) ShellCommand(ctx context.Context, summary Summary) (*exec.Cmd, error) {
+	if err := l.EnsureStarted(ctx, summary); err != nil {
+		return nil, err
+	}
+
+	return l.driver.ExecCommand(summary.Manifest.ContainerName, []string{"/bin/bash"}), nil
+}
+
+func (l Lifecycle) Shell(ctx context.Context, summary Summary) (tea.Cmd, error) {
+	cmd, err := l.ShellCommand(ctx, summary)
+	if err != nil {
+		return nil, err
+	}
+
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return ShellResultMsg{Err: err}
+	}), nil
+}
+
 func shouldStartForAttach(status string) bool {
 	return status != runtime.StatusRunning
 }
 
 func interactiveOpenCodeCommand() []string {
 	return []string{"/usr/local/bin/opencode-manager-entrypoint"}
+}
+
+// TokenUsage is a synthesis of OpenCode token usage for a workspace, as
+// reported by tokscale running inside the workspace container.
+type TokenUsage struct {
+	TotalTokens int64
+	TotalCost   float64
+	TotalMsgs   int
+	TodayTokens int64
+	TodayCost   float64
+	TodayMsgs   int
+}
+
+type tokscaleEntry struct {
+	Input        int64   `json:"input"`
+	Output       int64   `json:"output"`
+	CacheRead    int64   `json:"cacheRead"`
+	CacheWrite   int64   `json:"cacheWrite"`
+	Reasoning    int64   `json:"reasoning"`
+	MessageCount int     `json:"messageCount"`
+	Cost         float64 `json:"cost"`
+}
+
+type tokscaleReport struct {
+	Entries []tokscaleEntry `json:"entries"`
+}
+
+type tokscaleAggregate struct {
+	tokens int64
+	cost   float64
+	msgs   int
+}
+
+// TokenUsage runs tokscale inside the workspace container to summarize OpenCode
+// token usage, both all-time and for the current day. The container must be
+// running.
+func (l Lifecycle) TokenUsage(ctx context.Context, summary Summary) (TokenUsage, error) {
+	containerName := summary.Manifest.ContainerName
+
+	total, err := l.runTokscale(ctx, containerName, nil)
+	if err != nil {
+		return TokenUsage{}, err
+	}
+
+	today, err := l.runTokscale(ctx, containerName, []string{"--today"})
+	if err != nil {
+		return TokenUsage{}, err
+	}
+
+	return TokenUsage{
+		TotalTokens: total.tokens,
+		TotalCost:   total.cost,
+		TotalMsgs:   total.msgs,
+		TodayTokens: today.tokens,
+		TodayCost:   today.cost,
+		TodayMsgs:   today.msgs,
+	}, nil
+}
+
+func (l Lifecycle) runTokscale(ctx context.Context, containerName string, extra []string) (tokscaleAggregate, error) {
+	args := append([]string{"tokscale", "--json", "--client", "opencode"}, extra...)
+	output, err := l.driver.ExecOutput(ctx, containerName, args)
+	if err != nil {
+		return tokscaleAggregate{}, err
+	}
+
+	var report tokscaleReport
+	if err := json.Unmarshal(output, &report); err != nil {
+		return tokscaleAggregate{}, fmt.Errorf("parse tokscale output: %w", err)
+	}
+
+	var agg tokscaleAggregate
+	for _, entry := range report.Entries {
+		agg.tokens += entry.Input + entry.Output + entry.CacheRead + entry.CacheWrite + entry.Reasoning
+		agg.cost += entry.Cost
+		agg.msgs += entry.MessageCount
+	}
+
+	return agg, nil
 }
 
 func imageConfigFromConfig(cfg config.Config) ImageConfig {
