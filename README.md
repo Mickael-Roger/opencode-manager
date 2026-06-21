@@ -175,7 +175,24 @@ Secrets may be stored as environment variables or plain text files inside the wo
 Install the npm package with:
 
 ```sh
-npm install -g opencode-manager
+npm install -g @mickaelroger78/opencode-manager
+```
+
+The global install links the `opencode-manager` command into npm's global binary
+directory, so that directory must be in your shell `PATH`.
+
+For a project-local install, npm links the command under `node_modules/.bin`
+instead of your shell `PATH`:
+
+```sh
+npm install @mickaelroger78/opencode-manager
+npm exec -- opencode-manager
+```
+
+You can also run it without installing globally:
+
+```sh
+npx @mickaelroger78/opencode-manager
 ```
 
 The package ships prebuilt Linux and macOS binaries for x64 and arm64. During
