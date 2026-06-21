@@ -99,6 +99,7 @@ Example:
 ```yaml
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
+useLocalOpenCodeAuth: false
 baseImage:
   name: debian:stable-slim
   packages:
@@ -111,6 +112,10 @@ moduleDirs:
 ```
 
 `runtime` must be either `docker` or `podman`.
+
+Set `useLocalOpenCodeAuth: true` to mount the host file
+`~/.local/share/opencode/auth.json` read-write into the same path in each
+workspace container. The default `false` keeps auth isolated from the host.
 
 Generated workspace images always include `brew`, `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Add project-specific extras with `baseImage.packages` and `baseImage.commands`.
 
@@ -164,6 +169,22 @@ A workspace starts with no implicit host access.
 Every cloud credential, Kubernetes context, SSH key, token, config file, tool, command, skill, agent, or environment variable must be added by a selected module.
 
 Secrets may be stored as environment variables or plain text files inside the workspace when a module needs them.
+
+## Installation
+
+Install the npm package with:
+
+```sh
+npm install -g opencode-manager
+```
+
+The package ships prebuilt Linux and macOS binaries for x64 and arm64. During
+installation it creates the global `opencode-manager` config directory, writes a
+default `config.yaml` when one does not already exist, and copies bundled
+modules into the default `modules/` directory without overwriting existing
+entries.
+
+Docker or Podman must be installed separately on the host.
 
 ## Development
 

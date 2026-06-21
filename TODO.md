@@ -3,7 +3,7 @@
 - [ ] Create a function to create a new workspace by copying an existing one
 - [x] Rename the project opencode-manager
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
-- [ ] Add a npm packaging + github CI to publish it. This package install what is needed to
+- [x] Add a npm packaging + github CI to publish it. This package install what is needed to
 - [ ] Add a config.yaml edition part in the TUI
 - [x] Add 's' shortcut to get a shell in a workspace container
 - [x] Add 'd' for describe a workspace and you get the number of used token in addition to the started date, ...

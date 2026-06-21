@@ -1,0 +1,34 @@
+{
+  "name": "opencode-manager",
+  "version": "0.1.0",
+  "description": "TUI for managing isolated OpenCode workspaces.",
+  "license": "UNLICENSED",
+  "bin": {
+    "opencode-manager": "bin/opencode-manager"
+  },
+  "scripts": {
+    "build": "go build -o dist/opencode-manager-$(node -p \"process.platform\")-$(node -p \"process.arch\") ./cmd/opencode-manager",
+    "test": "go test ./...",
+    "prepack": "node scripts/verify-package.js",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "modules/",
+    "scripts/postinstall.js",
+    "scripts/verify-package.js"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
