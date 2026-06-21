@@ -41,6 +41,7 @@
 ## Packaging Notes
 
 - npm packaging is defined by `package.json`, `bin/opencode-manager`, and `scripts/postinstall.js`.
+- The npm package name is `@mickaelroger78/opencode-manager`.
 - The npm package expects prebuilt binaries in `dist/opencode-manager-{linux,darwin}-{x64,arm64}`.
-- `.github/workflows/package.yml` builds those binaries, uploads them as artifacts, packages the npm tarball, and publishes on `v*` tags when `NPM_TOKEN` is set.
+- `.github/workflows/package.yml` builds those binaries, uploads them as artifacts, packages the npm tarball, and publishes on `v*` tags using npm trusted publishing.
 - The npm postinstall script creates the same user config directory used by Go's `os.UserConfigDir`, writes `config.yaml` only when absent, and copies bundled `modules/` entries without overwriting user files.
