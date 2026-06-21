@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -283,6 +284,62 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 	}
 
 	return l.driver.StopContainer(ctx, summary.Manifest.ContainerName)
+}
+
+// UpdateOpenCode upgrades OpenCode to the latest npm release inside the
+// workspace container and restarts it so the new binary becomes the running
+// server. It returns the resulting OpenCode version.
+//
+// OpenCode must be idle: the TUI only invokes this when no task is running, so a
+// restart cannot interrupt active work. OpenCode is installed globally under
+// /usr/local (owned by root), so the upgrade runs as root even though the
+// container's main process is the unprivileged workspace user. A stop/start
+// restart preserves the container's writable layer, so the freshly installed
+// package survives and the persistent `opencode serve` process reloads it.
+func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string, error) {
+	name := summary.Manifest.ContainerName
+
+	// The container must be running to exec the upgrade into it.
+	if err := l.EnsureStarted(ctx, summary); err != nil {
+		return "", err
+	}
+
+	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"npm", "install", "-g", "opencode-ai@latest"}); err != nil {
+		return "", fmt.Errorf("update OpenCode: %w", err)
+	}
+
+	version, err := l.openCodeVersion(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
+	if err := l.driver.StopContainer(ctx, name); err != nil {
+		return "", fmt.Errorf("restart after update: stop container: %w", err)
+	}
+	if err := l.driver.StartContainer(ctx, name); err != nil {
+		return "", fmt.Errorf("restart after update: start container: %w", err)
+	}
+
+	return version, nil
+}
+
+// openCodeVersion returns the OpenCode version installed in the running
+// container, as reported by `opencode --version`.
+func (l Lifecycle) openCodeVersion(ctx context.Context, containerName string) (string, error) {
+	output, err := l.driver.ExecOutput(ctx, containerName, []string{"opencode", "--version"})
+	if err != nil {
+		return "", fmt.Errorf("read OpenCode version: %w", err)
+	}
+
+	version := strings.TrimSpace(string(output))
+	if i := strings.IndexByte(version, '\n'); i >= 0 {
+		version = strings.TrimSpace(version[:i])
+	}
+	if version == "" {
+		return "unknown", nil
+	}
+
+	return version, nil
 }
 
 func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {

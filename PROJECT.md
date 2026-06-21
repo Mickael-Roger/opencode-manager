@@ -453,7 +453,7 @@ Security review notes before implementing container lifecycle actions:
 - [ ] Edit workspace module values.
 - [ ] Re-run module application.
 - [ ] Rebuild workspace image when needed.
-- [ ] Update OpenCode inside an existing workspace.
+- [x] Update OpenCode inside an existing workspace.
 - [x] Show workspace status and runtime health in the main TUI.
 
 ## Open Questions
