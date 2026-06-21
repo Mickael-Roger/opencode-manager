@@ -52,6 +52,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Need full history + tags so `git describe` can resolve the version.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -66,7 +69,12 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w" -o dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }} ./cmd/opencode-manager
+          # Version comes from the git tag: exactly "vX.Y.Z" on a tag build, or a
+          # "vX.Y.Z-N-gSHA" describe string on branch/PR builds.
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/mickael-menu/opencode-manager/internal/tui.appVersion=${VERSION}" \
+            -o dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }} ./cmd/opencode-manager
           chmod 755 dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }}
 
       - name: Upload binary
@@ -112,9 +120,9 @@ jobs:
           cp artifacts/opencode-manager-darwin-arm64/opencode-manager-darwin-arm64 dist/
           chmod 755 dist/opencode-manager-*
 
-      - name: Verify tag version
+      - name: Set package version from tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
 
       - name: Verify tag is merged into main
         if: startsWith(github.ref, 'refs/tags/v')
