@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -132,6 +133,11 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 
+	mounts, err := globalTemplateMounts()
+	if err != nil {
+		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+
 	spec := runtime.ContainerSpec{
 		Name:      manifest.ContainerName,
 		ImageName: manifest.ImageName,
@@ -139,6 +145,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		UID:       uid,
 		GID:       gid,
 		Env:       manifest.Env,
+		Mounts:    mounts,
 		Command:   interactiveOpenCodeCommand(),
 	}
 
@@ -155,6 +162,34 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	}
 
 	return status, spec, nil
+}
+
+// openCodeConfigDir is where OpenCode reads its global configuration inside the
+// container. The workspace home directory is mounted at /home/debian.
+const openCodeConfigDir = "/home/debian/.config/opencode"
+
+// globalTemplateMounts returns the read-only bind mounts that expose the global
+// OpenCode templates (~/.config/opencode-manager) inside the workspace at
+// /home/debian/.config/opencode. Editing a host template propagates live to
+// every workspace; adding or removing a template takes effect on the next
+// container (re)creation.
+func globalTemplateMounts() ([]runtime.Mount, error) {
+	dir, err := config.GlobalDir()
+	if err != nil {
+		return nil, err
+	}
+
+	names := append([]string{"AGENTS.md", "opencode.json"}, config.GlobalTemplateDirs...)
+	mounts := make([]runtime.Mount, 0, len(names))
+	for _, name := range names {
+		mounts = append(mounts, runtime.Mount{
+			Source:   filepath.Join(dir, name),
+			Target:   openCodeConfigDir + "/" + name,
+			ReadOnly: true,
+		})
+	}
+
+	return mounts, nil
 }
 
 func (l Lifecycle) recreateAndStart(ctx context.Context, summary Summary, spec runtime.ContainerSpec) error {

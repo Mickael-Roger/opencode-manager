@@ -150,13 +150,16 @@ func (r Registry) Delete(summary Summary) error {
 }
 
 func (r Registry) createLayout(workspacePath string) error {
+	// The global OpenCode templates (opencode.json, AGENTS.md, agents/,
+	// commands/, plugins/, skills/) are mounted read-only from
+	// ~/.config/opencode-manager at container creation, so they are not
+	// materialized here. Only the writable home layout is created;
+	// .config/opencode remains read-write for OpenCode's own state
+	// (e.g. auth credentials) under the read-only template mounts.
 	dirs := []string{
 		"home",
 		filepath.Join("home", "workspace"),
-		filepath.Join("home", ".config", "opencode", "agent"),
-		filepath.Join("home", ".config", "opencode", "commands"),
-		filepath.Join("home", ".config", "opencode", "plugins"),
-		filepath.Join("home", ".config", "opencode", "skills"),
+		filepath.Join("home", ".config", "opencode"),
 	}
 
 	for _, dir := range dirs {
@@ -164,109 +167,6 @@ func (r Registry) createLayout(workspacePath string) error {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("create workspace directory %q: %w", path, err)
 		}
-	}
-
-	files := map[string]string{
-		filepath.Join("home", ".config", "opencode", "opencode.json"): "{}\n",
-	}
-
-	for name, content := range files {
-		path := filepath.Join(workspacePath, name)
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("write workspace file %q: %w", path, err)
-		}
-	}
-
-	if err := r.copyOpenCodePreconfiguration(workspacePath); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (r Registry) copyOpenCodePreconfiguration(workspacePath string) error {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return fmt.Errorf("find user config directory: %w", err)
-	}
-
-	sourceDir := filepath.Join(configDir, "opencode-manager", "opencode")
-	if _, err := os.Stat(sourceDir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-
-		return fmt.Errorf("check opencode preconfiguration directory %q: %w", sourceDir, err)
-	}
-
-	targetDir := filepath.Join(workspacePath, "home", ".config", "opencode")
-	for _, name := range []string{"opencode.json", "agent", "commands", "plugins", "skills"} {
-		sourcePath := filepath.Join(sourceDir, name)
-		if _, err := os.Lstat(sourcePath); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-
-			return fmt.Errorf("check opencode preconfiguration path %q: %w", sourcePath, err)
-		}
-
-		if err := copyPath(sourcePath, filepath.Join(targetDir, name)); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func copyPath(sourcePath, targetPath string) error {
-	info, err := os.Lstat(sourcePath)
-	if err != nil {
-		return fmt.Errorf("check source path %q: %w", sourcePath, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refuse to copy symlink %q", sourcePath)
-	}
-
-	if info.IsDir() {
-		return copyDir(sourcePath, targetPath)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("refuse to copy non-regular file %q", sourcePath)
-	}
-
-	return copyFile(sourcePath, targetPath, info.Mode().Perm())
-}
-
-func copyDir(sourcePath, targetPath string) error {
-	if err := os.MkdirAll(targetPath, 0o700); err != nil {
-		return fmt.Errorf("create target directory %q: %w", targetPath, err)
-	}
-
-	entries, err := os.ReadDir(sourcePath)
-	if err != nil {
-		return fmt.Errorf("read source directory %q: %w", sourcePath, err)
-	}
-	for _, entry := range entries {
-		if err := copyPath(filepath.Join(sourcePath, entry.Name()), filepath.Join(targetPath, entry.Name())); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func copyFile(sourcePath, targetPath string, mode os.FileMode) error {
-	data, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return fmt.Errorf("read source file %q: %w", sourcePath, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
-		return fmt.Errorf("create target directory %q: %w", filepath.Dir(targetPath), err)
-	}
-
-	if err := os.WriteFile(targetPath, data, mode); err != nil {
-		return fmt.Errorf("write target file %q: %w", targetPath, err)
 	}
 
 	return nil

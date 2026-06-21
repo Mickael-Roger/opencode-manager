@@ -22,6 +22,36 @@ func TestDriverName(t *testing.T) {
 	}
 }
 
+func TestCreateArgsIncludesReadOnlyMounts(t *testing.T) {
+	args := createArgs(ContainerSpec{
+		Name:      "opencode-manager-demo",
+		ImageName: "opencode-manager/demo:latest",
+		HomeDir:   "/data/demo/home",
+		UID:       501,
+		GID:       20,
+		Mounts: []Mount{
+			{Source: "/cfg/AGENTS.md", Target: "/home/debian/.config/opencode/AGENTS.md", ReadOnly: true},
+			{Source: "/cfg/skills", Target: "/home/debian/.config/opencode/skills", ReadOnly: true},
+		},
+		Command: []string{"opencode"},
+	})
+
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--volume /data/demo/home:/home/debian",
+		"--volume /cfg/AGENTS.md:/home/debian/.config/opencode/AGENTS.md:ro",
+		"--volume /cfg/skills:/home/debian/.config/opencode/skills:ro",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("create args missing %q:\n%s", want, joined)
+		}
+	}
+
+	if args[len(args)-1] != "opencode" || args[len(args)-2] != "opencode-manager/demo:latest" {
+		t.Fatalf("expected image then command at end of args, got: %v", args)
+	}
+}
+
 func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 	content := renderBaseContainerfile(BaseBuildSpec{
 		ImageName: "opencode-manager/base:test",

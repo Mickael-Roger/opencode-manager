@@ -8,3 +8,4 @@
 - [x] Add 's' shortcut to get a shell in a workspace container
 - [x] Add 'd' for describe a workspace and you get the number of used token in addition to the started date, ...
 - [ ] agents, AGENT.md, commands, ... must be links to thoses defined in the template
+- [ ] Trap the alert or wait for interraction in every session and show it in the central dashboard

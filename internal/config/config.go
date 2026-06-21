@@ -28,18 +28,89 @@ type BaseImageConfig struct {
 }
 
 func DefaultPath() (string, error) {
+	dir, err := GlobalDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(dir, "config.yaml"), nil
+}
+
+// GlobalDir returns the opencode-manager configuration directory
+// (~/.config/opencode-manager). It holds config.yaml as well as the OpenCode
+// templates (AGENTS.md, opencode.json, agents/, commands/, plugins/, skills/)
+// mounted read-only into every workspace container.
+func GlobalDir() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("find user config directory: %w", err)
 	}
 
-	return filepath.Join(dir, "opencode-manager", "config.yaml"), nil
+	return filepath.Join(dir, "opencode-manager"), nil
+}
+
+// GlobalTemplateDirs are the OpenCode template subdirectories created in the
+// global config directory and mounted read-only into each workspace.
+var GlobalTemplateDirs = []string{"agents", "commands", "plugins", "skills"}
+
+// defaultOpenCodeJSON is the minimal valid content seeded into the global
+// opencode.json when it does not exist yet. OpenCode requires a non-empty
+// config, so it cannot be left blank like AGENTS.md.
+const defaultOpenCodeJSON = "{\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n"
+
+// EnsureGlobalConfig creates the global config directory and the OpenCode
+// template files/directories if they are missing. Existing files are never
+// overwritten so user edits are preserved.
+func EnsureGlobalConfig() error {
+	dir, err := GlobalDir()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create global config directory %q: %w", dir, err)
+	}
+
+	for _, name := range GlobalTemplateDirs {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("create global template directory %q: %w", path, err)
+		}
+	}
+
+	files := map[string]string{
+		"AGENTS.md":     "",
+		"opencode.json": defaultOpenCodeJSON,
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := ensureFile(path, content); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ensureFile writes content to path only if the file does not already exist.
+func ensureFile(path, content string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check global template file %q: %w", path, err)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write global template file %q: %w", path, err)
+	}
+
+	return nil
 }
 
 func Default() (Config, error) {
-	configDir, err := os.UserConfigDir()
+	globalDir, err := GlobalDir()
 	if err != nil {
-		return Config{}, fmt.Errorf("find user config directory: %w", err)
+		return Config{}, err
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -55,7 +126,7 @@ func Default() (Config, error) {
 		BaseImage: BaseImageConfig{
 			Name: "debian:stable-slim",
 		},
-		ModuleDirs: []string{filepath.Join(configDir, "opencode-manager", "modules")},
+		ModuleDirs: []string{filepath.Join(globalDir, "modules")},
 	}, nil
 }
 
