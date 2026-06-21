@@ -15,7 +15,10 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
 
-const appVersion = "v0.1.0"
+// appVersion is the build version shown as "Rev" in the header. It is injected
+// at release time from the git tag via -ldflags (see .github/workflows/package.yml)
+// and stays "dev" for local builds, so it never needs to be edited by hand.
+var appVersion = "dev"
 
 type model struct {
 	cfg           config.Config
@@ -42,6 +45,14 @@ type model struct {
 	showHelp      bool
 	showDescribe  bool
 	tokens        map[string]tokenState
+	versions      map[string]versionState
+}
+
+// versionState caches the OpenCode version reported by a running workspace
+// container so the dashboard column does not re-exec on every refresh.
+type versionState struct {
+	loading bool
+	value   string
 }
 
 // tokenState caches the tokscale token-usage synthesis for one workspace.
@@ -174,6 +185,12 @@ type tokenUsageMsg struct {
 	err   error
 }
 
+type versionMsg struct {
+	name    string
+	version string
+	err     error
+}
+
 // tickMsg drives periodic refresh of container/activity statuses so the
 // dashboard reflects opencode activity without any user interaction.
 type tickMsg time.Time
@@ -233,6 +250,7 @@ func newModel(cfg config.Config) model {
 		lifecycleErr: lifecycleErr,
 		statuses:     map[string]workspace.Status{},
 		tokens:       map[string]tokenState{},
+		versions:     map[string]versionState{},
 		width:        100,
 		height:       30,
 		message:      "Creating the base image...",
@@ -271,6 +289,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusListMsg:
 		next := make(map[string]workspace.Status, len(msg.statuses))
 		ring := false
+		var cmds []tea.Cmd
 		for _, status := range msg.statuses {
 			name := status.Workspace.Manifest.Name
 			// Ring the bell when a workspace newly starts needing approval.
@@ -280,10 +299,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			next[name] = status
+
+			// Fetch the running container's OpenCode version once and cache it;
+			// drop the cache when it stops so a fresh value is read on restart.
+			if status.Container == runtime.StatusRunning {
+				if st, ok := m.versions[name]; !ok || (!st.loading && st.value == "") {
+					m.versions[name] = versionState{loading: true}
+					cmds = append(cmds, m.fetchVersion(status.Workspace))
+				}
+			} else {
+				delete(m.versions, name)
+			}
 		}
 		m.statuses = next
 		if ring {
-			return m, bellCmd()
+			cmds = append(cmds, bellCmd())
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 	case tickMsg:
 		return m, tea.Batch(m.loadStatuses, tickCmd())
@@ -307,6 +340,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		m.message = fmt.Sprintf("OpenCode updated to %s in %s.", msg.version, msg.name)
+		delete(m.versions, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case baseImageReadyMsg:
 		if msg.err != nil {
@@ -349,6 +383,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state.usage = msg.usage
 		}
 		m.tokens[msg.name] = state
+		return m, nil
+	case versionMsg:
+		value := msg.version
+		if msg.err != nil || value == "" {
+			value = "unknown"
+		}
+		m.versions[msg.name] = versionState{value: value}
 		return m, nil
 	}
 
@@ -919,7 +960,7 @@ func (m model) renderTable(width, height int) string {
 	visible := m.visibleWorkspaces()
 
 	widths := columnWidths(contentWidth)
-	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "CONTAINER", "IMAGE"}
+	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "CONTAINER"}
 	headerCells := make([]string, len(headers))
 	for i, h := range headers {
 		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
@@ -961,8 +1002,8 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 	statusText, statusColor := m.workspaceStatus(ws)
 	activityText, activityColor := m.workspaceActivity(ws)
 	rt := ws.Manifest.Runtime
+	version := m.workspaceVersion(ws)
 	container := ws.Manifest.ContainerName
-	image := ws.Manifest.ImageName
 
 	if selected {
 		cells := []string{
@@ -970,8 +1011,8 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 			fit(statusText, widths[1]),
 			fit(activityText, widths[2]),
 			fit(rt, widths[3]),
-			fit(container, widths[4]),
-			fit(image, widths[5]),
+			fit(version, widths[4]),
+			fit(container, widths[5]),
 		}
 		return cursorStyle.Render(" " + strings.Join(cells, "  ") + " ")
 	}
@@ -981,8 +1022,8 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 		lipgloss.NewStyle().Foreground(statusColor).Render(fit(statusText, widths[1])),
 		lipgloss.NewStyle().Foreground(activityColor).Render(fit(activityText, widths[2])),
 		mutedStyle.Render(fit(rt, widths[3])),
-		mutedStyle.Render(fit(container, widths[4])),
-		mutedStyle.Render(fit(image, widths[5])),
+		mutedStyle.Render(fit(version, widths[4])),
+		mutedStyle.Render(fit(container, widths[5])),
 	}
 	return " " + strings.Join(cells, "  ") + " "
 }
@@ -1501,6 +1542,29 @@ func (m model) fetchTokenUsage(summary workspace.Summary) tea.Cmd {
 	}
 }
 
+func (m model) fetchVersion(summary workspace.Summary) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		version, err := m.lifecycle.OpenCodeVersion(ctx, summary)
+		return versionMsg{name: summary.Manifest.Name, version: version, err: err}
+	}
+}
+
+// workspaceVersion returns the OpenCode version display text for a workspace:
+// a dash when the container is stopped, an ellipsis while it is being read, and
+// the cached version once known.
+func (m model) workspaceVersion(ws workspace.Summary) string {
+	if !m.isRunning(ws.Manifest.Name) {
+		return "—"
+	}
+	st, ok := m.versions[ws.Manifest.Name]
+	if !ok || st.loading || st.value == "" {
+		return "…"
+	}
+	return st.value
+}
+
 func (m model) isRunning(name string) bool {
 	status, ok := m.statuses[name]
 	return ok && status.Container == runtime.StatusRunning
@@ -1570,7 +1634,8 @@ func (m *model) clampSelection() {
 }
 
 // columnWidths splits the available content width across the six columns,
-// keeping STATUS, ACTIVITY, and RUNTIME fixed and sharing the rest.
+// keeping STATUS, ACTIVITY, RUNTIME, and OPENCODE fixed and sharing the rest
+// between NAME and CONTAINER.
 func columnWidths(contentWidth int) []int {
 	const gaps = 10 // five 2-space separators
 	avail := contentWidth - gaps
@@ -1581,16 +1646,16 @@ func columnWidths(contentWidth int) []int {
 	wStatus := 8
 	wActivity := 9
 	wRuntime := 7
-	rest := avail - wStatus - wActivity - wRuntime
-	if rest < 12 {
-		rest = 12
+	wVersion := 9
+	rest := avail - wStatus - wActivity - wRuntime - wVersion
+	if rest < 16 {
+		rest = 16
 	}
 
-	wName := max(8, rest*30/100)
-	wContainer := max(8, rest*35/100)
-	wImage := max(6, rest-wName-wContainer)
+	wName := max(8, rest*45/100)
+	wContainer := max(8, rest-wName)
 
-	return []int{wName, wStatus, wActivity, wRuntime, wContainer, wImage}
+	return []int{wName, wStatus, wActivity, wRuntime, wVersion, wContainer}
 }
 
 // fit truncates or right-pads s to exactly w display columns.

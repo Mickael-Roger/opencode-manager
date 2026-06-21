@@ -323,6 +323,12 @@ func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string,
 	return version, nil
 }
 
+// OpenCodeVersion returns the OpenCode version installed in the workspace's
+// running container, as reported by `opencode --version`.
+func (l Lifecycle) OpenCodeVersion(ctx context.Context, summary Summary) (string, error) {
+	return l.openCodeVersion(ctx, summary.Manifest.ContainerName)
+}
+
 // openCodeVersion returns the OpenCode version installed in the running
 // container, as reported by `opencode --version`.
 func (l Lifecycle) openCodeVersion(ctx context.Context, containerName string) (string, error) {
