@@ -121,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: npm-package
-          path: opencode-manager-*.tgz
+          path: "*.tgz"
           if-no-files-found: error
 
       - name: Publish to npm

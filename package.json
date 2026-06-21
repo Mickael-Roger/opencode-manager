@@ -1,8 +1,8 @@
 {
-  "name": "opencode-manager",
+  "name": "@mickaelroger78/opencode-manager",
   "version": "0.1.0",
   "description": "TUI for managing isolated OpenCode workspaces.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "bin": {
     "opencode-manager": "bin/opencode-manager"
   },
