@@ -1,0 +1,87 @@
+package runtime
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestNewDriverRejectsUnsupportedRuntime(t *testing.T) {
+	if _, err := NewDriver("containerd"); err == nil {
+		t.Fatal("NewDriver returned nil error, want unsupported runtime error")
+	}
+}
+
+func TestDriverName(t *testing.T) {
+	driver, err := NewDriver("docker")
+	if err != nil {
+		t.Fatalf("NewDriver returned error: %v", err)
+	}
+
+	if driver.Name() != "docker" {
+		t.Fatalf("Name = %q, want docker", driver.Name())
+	}
+}
+
+func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
+	content := renderBaseContainerfile(BaseBuildSpec{
+		ImageName: "opencode-manager/base:test",
+		FromImage: "debian:stable-slim",
+		Packages:  []string{"kubectl"},
+		Commands:  []string{"update-ca-certificates"},
+	})
+
+	for _, want := range []string{
+		"FROM debian:stable-slim",
+		"COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/",
+		"git",
+		"ripgrep",
+		"jq",
+		"nodejs",
+		"npm",
+		"kubectl",
+		"RUN update-ca-certificates",
+		"useradd -m -s /bin/bash linuxbrew",
+		"su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
+		"git --version && rg --version && jq --version && npx --version && uvx --version",
+		"su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'",
+		"curl -fsSL https://opencode.ai/install | bash && cp /root/.opencode/bin/opencode /usr/local/bin/opencode",
+		"/usr/local/bin/opencode-manager-entrypoint",
+		"sessions=$(opencode session list 2>/dev/null || true)",
+		"exec opencode -c",
+		"ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("base Containerfile missing %q:\n%s", want, content)
+		}
+	}
+
+	packages := strings.Index(content, "apt-get update && apt-get install")
+	command := strings.Index(content, "RUN update-ca-certificates")
+	opencodeInstall := strings.Index(content, "curl -fsSL https://opencode.ai/install")
+	if packages == -1 || command == -1 || opencodeInstall == -1 || !(packages < command && command < opencodeInstall) {
+		t.Fatalf("expected base image commands after package install and before OpenCode install:\n%s", content)
+	}
+}
+
+func TestRenderWorkspaceContainerfileUsesCachedBaseAndHostUIDGIDArgs(t *testing.T) {
+	content := renderWorkspaceContainerfile(BuildSpec{
+		ImageName: "test:latest",
+		BaseImage: "opencode-manager/base:abc123",
+		UID:       501,
+		GID:       20,
+	})
+
+	for _, want := range []string{
+		"FROM opencode-manager/base:abc123",
+		"ARG UID",
+		"ARG GID",
+		"getent group ${GID}",
+		"useradd -m -u ${UID} -g ${GID}",
+		"/home/debian/workspace",
+		"chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("workspace Containerfile missing %q:\n%s", want, content)
+		}
+	}
+}
