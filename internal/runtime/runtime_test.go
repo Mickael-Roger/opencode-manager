@@ -74,10 +74,9 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		"su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
 		"su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'",
-		"curl -fsSL https://opencode.ai/install | bash && cp /root/.opencode/bin/opencode /usr/local/bin/opencode",
-		"/usr/local/bin/opencode-manager-entrypoint",
-		"sessions=$(opencode session list 2>/dev/null || true)",
-		"exec opencode -c",
+		"npm install -g opencode-ai && which opencode && opencode --version",
+		"/usr/local/bin/opencode-manager-attach",
+		"exec opencode attach \"$url\" --dir \"$dir\" -c",
 		"ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin",
 	} {
 		if !strings.Contains(content, want) {
@@ -87,7 +86,7 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 
 	packages := strings.Index(content, "apt-get update && apt-get install")
 	command := strings.Index(content, "RUN update-ca-certificates")
-	opencodeInstall := strings.Index(content, "curl -fsSL https://opencode.ai/install")
+	opencodeInstall := strings.Index(content, "npm install -g opencode-ai")
 	if packages == -1 || command == -1 || opencodeInstall == -1 || !(packages < command && command < opencodeInstall) {
 		t.Fatalf("expected base image commands after package install and before OpenCode install:\n%s", content)
 	}

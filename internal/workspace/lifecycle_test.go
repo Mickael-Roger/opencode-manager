@@ -5,20 +5,19 @@ import (
 	"testing"
 )
 
-func TestShouldStartForAttach(t *testing.T) {
-	if shouldStartForAttach("running") {
-		t.Fatal("running container should not be started again before attaching")
-	}
-	if !shouldStartForAttach("missing") {
-		t.Fatal("missing container should be started before attaching")
+func TestOpenCodeServeCommand(t *testing.T) {
+	got := openCodeServeCommand()
+	want := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "4096"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("openCodeServeCommand = %#v, want %#v", got, want)
 	}
 }
 
-func TestInteractiveOpenCodeCommand(t *testing.T) {
-	got := interactiveOpenCodeCommand()
-	want := []string{"/usr/local/bin/opencode-manager-entrypoint"}
+func TestOpenCodeSessionCommand(t *testing.T) {
+	got := openCodeSessionCommand()
+	want := []string{"/usr/local/bin/opencode-manager-attach"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("interactiveOpenCodeCommand = %#v, want %#v", got, want)
+		t.Fatalf("openCodeSessionCommand = %#v, want %#v", got, want)
 	}
 }
 

@@ -27,12 +27,13 @@ type Driver interface {
 	BuildBaseImage(context.Context, BaseBuildSpec) error
 	BuildImage(context.Context, BuildSpec) error
 	ContainerStatus(context.Context, string) (string, error)
+	ContainerImageID(context.Context, string) (string, error)
+	ImageID(context.Context, string) (string, error)
 	CreateContainer(context.Context, ContainerSpec) error
 	StartContainer(context.Context, string) error
 	StopContainer(context.Context, string) error
 	RemoveContainer(context.Context, string) error
 	RemoveImage(context.Context, string) error
-	AttachCommand(string) *exec.Cmd
 	ExecCommand(string, []string) *exec.Cmd
 	ExecOutput(context.Context, string, []string) ([]byte, error)
 }
@@ -259,15 +260,47 @@ func (d CLIDriver) RemoveImage(ctx context.Context, imageName string) error {
 	return d.runAllowMissing(ctx, []string{"rmi", imageName}, "image")
 }
 
-// detachKeys makes the attach client treat Ctrl-C as the detach sequence. In a
-// TTY session Ctrl-C would otherwise reach opencode and exiting it stops the
-// container's main process, killing the workspace. Intercepting Ctrl-C at the
-// attach client detaches instead, leaving opencode running in the background;
-// re-attaching reconnects to the same session.
-const detachKeys = "ctrl-c"
+// ContainerImageID returns the image ID a container was created from, or an
+// empty string if the container does not exist. It is used to detect when the
+// workspace image has been rebuilt and the container needs recreating.
+func (d CLIDriver) ContainerImageID(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("container name is required")
+	}
 
-func (d CLIDriver) AttachCommand(name string) *exec.Cmd {
-	return exec.Command(d.binary, "attach", "--detach-keys", detachKeys, name)
+	cmd := exec.CommandContext(ctx, d.binary, "inspect", "-f", "{{.Image}}", name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		text := strings.ToLower(string(output))
+		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("inspect container image %q: %w: %s", name, err, strings.TrimSpace(string(output)))
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// ImageID returns the current ID of an image, or an empty string if it does not
+// exist.
+func (d CLIDriver) ImageID(ctx context.Context, imageName string) (string, error) {
+	if imageName == "" {
+		return "", fmt.Errorf("image name is required")
+	}
+
+	cmd := exec.CommandContext(ctx, d.binary, "image", "inspect", "-f", "{{.Id}}", imageName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		text := strings.ToLower(string(output))
+		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("inspect image %q: %w: %s", imageName, err, strings.TrimSpace(string(output)))
+	}
+
+	return strings.TrimSpace(string(output)), nil
 }
 
 // ExecCommand runs a command inside an already-running container with an
@@ -360,17 +393,34 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	b.WriteString("RUN useradd -m -s /bin/bash linuxbrew && mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin && chown -R linuxbrew:linuxbrew /home/linuxbrew\n")
 	b.WriteString("RUN su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew && /home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	b.WriteString("RUN git --version && rg --version && jq --version && npx --version && uvx --version && su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
-	b.WriteString("RUN curl -fsSL https://opencode.ai/install | bash && cp /root/.opencode/bin/opencode /usr/local/bin/opencode && chmod 0755 /usr/local/bin/opencode && /usr/local/bin/opencode --version\n")
+	// Install OpenCode from npm rather than the curl|bash installer: the
+	// installer resolves the version via the GitHub API, which is rate-limited
+	// and flaky (504s), whereas the npm registry is reliable and already used
+	// for tokscale below.
+	b.WriteString("RUN npm install -g opencode-ai && which opencode && opencode --version\n")
 	b.WriteString("RUN npm install -g tokscale@latest && which tokscale\n")
-	b.WriteString("RUN cat > /usr/local/bin/opencode-manager-entrypoint <<'EOF'\n")
+	// Attach wrapper: the container's main process is a persistent `opencode
+	// serve`, and attaching runs a TUI client (`opencode attach`) against it over
+	// HTTP. Ctrl-C then exits only the client; the server keeps running in the
+	// background. The wrapper waits for the server to be listening, then attaches
+	// to the last session if one exists (asking the server over HTTP, so no
+	// second opencode process is spawned), otherwise starts a fresh session.
+	b.WriteString("RUN cat > /usr/local/bin/opencode-manager-attach <<'EOF'\n")
 	b.WriteString("#!/bin/sh\n")
-	b.WriteString("sessions=$(opencode session list 2>/dev/null || true)\n")
-	b.WriteString("if [ -z \"$sessions\" ]; then\n")
-	b.WriteString("  exec opencode\n")
+	b.WriteString("url=\"http://127.0.0.1:4096\"\n")
+	b.WriteString("dir=\"/home/debian/workspace\"\n")
+	b.WriteString("i=0\n")
+	b.WriteString("while [ \"$i\" -lt 150 ]; do\n")
+	b.WriteString("  curl -sf -o /dev/null \"$url/session\" && break\n")
+	b.WriteString("  i=$((i+1)); sleep 0.2\n")
+	b.WriteString("done\n")
+	b.WriteString("count=$(curl -sf \"$url/session\" | jq 'length' 2>/dev/null || echo 0)\n")
+	b.WriteString("if [ \"${count:-0}\" -gt 0 ] 2>/dev/null; then\n")
+	b.WriteString("  exec opencode attach \"$url\" --dir \"$dir\" -c\n")
 	b.WriteString("fi\n")
-	b.WriteString("exec opencode -c\n")
+	b.WriteString("exec opencode attach \"$url\" --dir \"$dir\"\n")
 	b.WriteString("EOF\n")
-	b.WriteString("RUN chmod 0755 /usr/local/bin/opencode-manager-entrypoint\n")
+	b.WriteString("RUN chmod 0755 /usr/local/bin/opencode-manager-attach\n")
 	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
 
 	return b.String()

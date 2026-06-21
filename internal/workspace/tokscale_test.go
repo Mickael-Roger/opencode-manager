@@ -22,12 +22,13 @@ func (f *fakeDriver) BuildImage(context.Context, runtime.BuildSpec) error       
 func (f *fakeDriver) ContainerStatus(context.Context, string) (string, error) {
 	return runtime.StatusRunning, nil
 }
+func (f *fakeDriver) ContainerImageID(context.Context, string) (string, error)     { return "", nil }
+func (f *fakeDriver) ImageID(context.Context, string) (string, error)              { return "", nil }
 func (f *fakeDriver) CreateContainer(context.Context, runtime.ContainerSpec) error { return nil }
 func (f *fakeDriver) StartContainer(context.Context, string) error                 { return nil }
 func (f *fakeDriver) StopContainer(context.Context, string) error                  { return nil }
 func (f *fakeDriver) RemoveContainer(context.Context, string) error                { return nil }
 func (f *fakeDriver) RemoveImage(context.Context, string) error                    { return nil }
-func (f *fakeDriver) AttachCommand(string) *exec.Cmd                               { return nil }
 func (f *fakeDriver) ExecCommand(string, []string) *exec.Cmd                       { return nil }
 func (f *fakeDriver) ExecOutput(_ context.Context, _ string, args []string) ([]byte, error) {
 	f.gotArgs = append(f.gotArgs, args)
