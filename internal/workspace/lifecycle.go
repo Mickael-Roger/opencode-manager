@@ -25,11 +25,18 @@ type Lifecycle struct {
 type Status struct {
 	Workspace Summary
 	Container string
+	Activity  Activity
+	Pending   int // sessions currently blocked on a permission prompt
 	Error     string
 }
 
 type AttachResultMsg struct {
 	Err error
+	// StillRunning reports whether the container is still up after the attach
+	// command returned. Detaching (Ctrl-C) exits the attach client non-zero but
+	// leaves opencode running, so this distinguishes a detach from a real
+	// failure or a clean exit that stopped the container.
+	StillRunning bool
 }
 
 type ShellResultMsg struct {
@@ -72,6 +79,7 @@ func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status 
 		if err != nil {
 			status.Error = err.Error()
 		}
+		status.Activity, status.Pending = readActivity(ws.Manifest.HomeDir, containerStatus == runtime.StatusRunning)
 		statuses = append(statuses, status)
 	}
 
@@ -146,12 +154,24 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		GID:       gid,
 		Env:       manifest.Env,
 		Mounts:    mounts,
-		Command:   interactiveOpenCodeCommand(),
+		Command:   openCodeServeCommand(),
 	}
 
 	status, err := l.driver.ContainerStatus(ctx, manifest.ContainerName)
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+
+	// Recreate a container that was built from a now-outdated image (e.g. after
+	// a base-image revision bump or an OpenCode update) so it picks up the new
+	// image and run command.
+	if status != runtime.StatusMissing {
+		if stale, serr := l.containerImageStale(ctx, manifest); serr == nil && stale {
+			if err := l.driver.RemoveContainer(ctx, manifest.ContainerName); err != nil {
+				return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+			}
+			status = runtime.StatusMissing
+		}
 	}
 
 	if status == runtime.StatusMissing {
@@ -232,17 +252,47 @@ func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {
 }
 
 func (l Lifecycle) AttachCommand(ctx context.Context, summary Summary) (*exec.Cmd, error) {
-	status, err := l.driver.ContainerStatus(ctx, summary.Manifest.ContainerName)
-	if err != nil {
+	if err := l.ensureCurrentRunning(ctx, summary); err != nil {
 		return nil, err
 	}
-	if shouldStartForAttach(status) {
-		if err := l.EnsureStarted(ctx, summary); err != nil {
-			return nil, err
+
+	return l.driver.ExecCommand(summary.Manifest.ContainerName, openCodeSessionCommand()), nil
+}
+
+// ensureCurrentRunning makes sure the workspace container is running and built
+// from the current image before we exec into it. The common hot path (already
+// running and current) avoids the image build that EnsureStarted performs.
+func (l Lifecycle) ensureCurrentRunning(ctx context.Context, summary Summary) error {
+	status, err := l.driver.ContainerStatus(ctx, summary.Manifest.ContainerName)
+	if err != nil {
+		return err
+	}
+	if status == runtime.StatusRunning {
+		if stale, serr := l.containerImageStale(ctx, summary.Manifest); serr == nil && !stale {
+			return nil
 		}
 	}
 
-	return l.driver.AttachCommand(summary.Manifest.ContainerName), nil
+	return l.EnsureStarted(ctx, summary)
+}
+
+// containerImageStale reports whether the container was created from a different
+// image than the one currently tagged for the workspace, meaning it should be
+// recreated. Missing IDs are treated as not stale to avoid spurious recreation.
+func (l Lifecycle) containerImageStale(ctx context.Context, manifest Manifest) (bool, error) {
+	containerImage, err := l.driver.ContainerImageID(ctx, manifest.ContainerName)
+	if err != nil {
+		return false, err
+	}
+	currentImage, err := l.driver.ImageID(ctx, manifest.ImageName)
+	if err != nil {
+		return false, err
+	}
+	if containerImage == "" || currentImage == "" {
+		return false, nil
+	}
+
+	return containerImage != currentImage, nil
 }
 
 func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error) {
@@ -251,8 +301,13 @@ func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error)
 		return nil, err
 	}
 
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return AttachResultMsg{Err: err}
+	return tea.ExecProcess(cmd, func(execErr error) tea.Msg {
+		// Use a fresh context: the caller's ctx is already cancelled by the time
+		// the attached process exits.
+		bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status, _ := l.driver.ContainerStatus(bg, summary.Manifest.ContainerName)
+		return AttachResultMsg{Err: execErr, StillRunning: status == runtime.StatusRunning}
 	}), nil
 }
 
@@ -277,12 +332,24 @@ func (l Lifecycle) Shell(ctx context.Context, summary Summary) (tea.Cmd, error) 
 	}), nil
 }
 
-func shouldStartForAttach(status string) bool {
-	return status != runtime.StatusRunning
+// openCodeServeCommand is the container's main process: a persistent, headless
+// OpenCode server. It keeps the container alive, runs the agent (so work
+// continues while no client is attached), and loads the status-reporter plugin
+// so the dashboard reflects activity server-side. Each workspace container is
+// network-isolated, so binding 127.0.0.1:4096 is private to that container.
+func openCodeServeCommand() []string {
+	return []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "4096"}
 }
 
-func interactiveOpenCodeCommand() []string {
-	return []string{"/usr/local/bin/opencode-manager-entrypoint"}
+// openCodeSessionCommand runs a TUI client that attaches to the container's
+// OpenCode server over HTTP. Because the client is a separate process from the
+// server, Ctrl-C exits only the client and the server keeps running in the
+// background; re-attaching reconnects to the same live session. The client draws
+// directly to the real terminal, so there is no multiplexer or nested-terminal
+// issue. The wrapper script waits for the server and picks --continue when a
+// session already exists.
+func openCodeSessionCommand() []string {
+	return []string{"/usr/local/bin/opencode-manager-attach"}
 }
 
 // TokenUsage is a synthesis of OpenCode token usage for a workspace, as
@@ -372,8 +439,20 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 	}
 }
 
+// baseImageRevision is bumped whenever the managed base image's build recipe
+// changes (independently of the user's baseImage config) so existing cached base
+// images are invalidated and rebuilt. Bump this when editing the base
+// Containerfile (e.g. adding packages, the attach wrapper, or the OpenCode
+// install method).
+const baseImageRevision = 6
+
 func managedBaseImageName(image ImageConfig) (string, error) {
-	data, err := json.Marshal(image)
+	payload := struct {
+		Rev   int         `json:"rev"`
+		Image ImageConfig `json:"image"`
+	}{Rev: baseImageRevision, Image: image}
+
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("encode base image definition: %w", err)
 	}
