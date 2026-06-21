@@ -1,11 +1,11 @@
 - [x] Same UX than k9s
 - [x] add a minimal cli with list and attach for tmux automation
 - [ ] Create a function to create a new workspace by copying an existing one
-- [ ] Rename the project opencode-manager
+- [x] Rename the project opencode-manager
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [ ] Add a npm packaging + github CI to publish it. This package install what is needed to
 - [ ] Add a config.yaml edition part in the TUI
 - [x] Add 's' shortcut to get a shell in a workspace container
 - [x] Add 'd' for describe a workspace and you get the number of used token in addition to the started date, ...
-- [ ] agents, AGENT.md, commands, ... must be links to thoses defined in the template
-- [ ] Trap the alert or wait for interraction in every session and show it in the central dashboard
+- [x] agents, AGENT.md, commands, ... must be links to thoses defined in the template
+- [x] Trap the alert or wait for interraction in every session and show it in the central dashboard

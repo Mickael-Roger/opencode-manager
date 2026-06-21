@@ -23,6 +23,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := workspace.SeedStatusPlugin(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to seed status plugin: %v\n", err)
+		os.Exit(1)
+	}
+
 	if len(os.Args) > 1 {
 		if err := runCLI(cfg, os.Args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)

@@ -259,8 +259,15 @@ func (d CLIDriver) RemoveImage(ctx context.Context, imageName string) error {
 	return d.runAllowMissing(ctx, []string{"rmi", imageName}, "image")
 }
 
+// detachKeys makes the attach client treat Ctrl-C as the detach sequence. In a
+// TTY session Ctrl-C would otherwise reach opencode and exiting it stops the
+// container's main process, killing the workspace. Intercepting Ctrl-C at the
+// attach client detaches instead, leaving opencode running in the background;
+// re-attaching reconnects to the same session.
+const detachKeys = "ctrl-c"
+
 func (d CLIDriver) AttachCommand(name string) *exec.Cmd {
-	return exec.Command(d.binary, "attach", name)
+	return exec.Command(d.binary, "attach", "--detach-keys", detachKeys, name)
 }
 
 // ExecCommand runs a command inside an already-running container with an

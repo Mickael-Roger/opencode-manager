@@ -168,6 +168,27 @@ type tokenUsageMsg struct {
 	err   error
 }
 
+// tickMsg drives periodic refresh of container/activity statuses so the
+// dashboard reflects opencode activity without any user interaction.
+type tickMsg time.Time
+
+const refreshInterval = 2 * time.Second
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+// bellCmd rings the terminal bell. It writes to stderr so it does not corrupt
+// the alt-screen buffer rendered on stdout.
+func bellCmd() tea.Cmd {
+	return func() tea.Msg {
+		fmt.Fprint(os.Stderr, "\a")
+		return nil
+	}
+}
+
 func Run(cfg config.Config) error {
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
 		return errors.New("opencode-manager must be run from an interactive terminal")
@@ -213,7 +234,7 @@ func newModel(cfg config.Config) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadWorkspaces, m.checkRuntime, m.ensureBaseImage)
+	return tea.Batch(m.loadWorkspaces, m.checkRuntime, m.ensureBaseImage, tickCmd())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -242,10 +263,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.runtimeError = ""
 		}
 	case statusListMsg:
-		m.statuses = make(map[string]workspace.Status, len(msg.statuses))
+		next := make(map[string]workspace.Status, len(msg.statuses))
+		ring := false
 		for _, status := range msg.statuses {
-			m.statuses[status.Workspace.Manifest.Name] = status
+			name := status.Workspace.Manifest.Name
+			// Ring the bell when a workspace newly starts needing approval.
+			if status.Activity == workspace.ActivityApproval {
+				if prev, ok := m.statuses[name]; !ok || prev.Activity != workspace.ActivityApproval {
+					ring = true
+				}
+			}
+			next[name] = status
 		}
+		m.statuses = next
+		if ring {
+			return m, bellCmd()
+		}
+	case tickMsg:
+		return m, tea.Batch(m.loadStatuses, tickCmd())
 	case lifecycleActionMsg:
 		if msg.err != nil {
 			m.message = fmt.Sprintf("%s failed for %s: %v", msg.action, msg.name, msg.err)
@@ -275,10 +310,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("%s session started for %s.", msg.noun, msg.name)
 		return m, msg.cmd
 	case workspace.AttachResultMsg:
-		if msg.Err != nil {
+		switch {
+		case msg.StillRunning:
+			// Detached via Ctrl-C; the attach client exits non-zero but the
+			// container keeps running, so this is not a failure.
+			m.message = "Detached (Ctrl-C). Container still running in the background."
+		case msg.Err != nil:
 			m.message = fmt.Sprintf("Attach session failed: %v", msg.Err)
-		} else {
-			m.message = "Attach session closed."
+		default:
+			m.message = "Attach session closed; container stopped."
 		}
 		return m, m.loadStatuses
 	case workspace.ShellResultMsg:
@@ -746,6 +786,7 @@ func (m model) renderInfo() string {
 		{"Runtime", m.runtimeStatus()},
 		{"Root", m.cfg.WorkspaceRoot},
 		{"Workspaces", fmt.Sprintf("%d", len(m.workspaces))},
+		{"Attention", m.attentionSummary()},
 		{"Rev", appVersion},
 	}
 
@@ -759,10 +800,44 @@ func (m model) renderInfo() string {
 	lines := make([]string, len(rows))
 	for i, row := range rows {
 		key := infoKeyStyle.Render(fit(row[0]+":", keyWidth+1))
-		lines[i] = key + " " + infoValStyle.Render(row[1])
+		valStyle := infoValStyle
+		if row[0] == "Attention" {
+			valStyle = lipgloss.NewStyle().Foreground(m.attentionColor())
+		}
+		lines[i] = key + " " + valStyle.Render(row[1])
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// attentionSummary describes how many running workspaces need the user: those
+// blocked on a permission prompt and those finished and waiting for input.
+func (m model) attentionSummary() string {
+	approval, waiting := m.attentionCounts()
+	if approval == 0 && waiting == 0 {
+		return "all clear"
+	}
+
+	parts := make([]string, 0, 2)
+	if approval > 0 {
+		parts = append(parts, fmt.Sprintf("%d need approval", approval))
+	}
+	if waiting > 0 {
+		parts = append(parts, fmt.Sprintf("%d waiting", waiting))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (m model) attentionColor() lipgloss.Color {
+	approval, waiting := m.attentionCounts()
+	switch {
+	case approval > 0:
+		return colStopped
+	case waiting > 0:
+		return colStarting
+	default:
+		return colMuted
+	}
 }
 
 func (m model) renderMenu() string {
@@ -800,7 +875,7 @@ func (m model) renderTable(width, height int) string {
 	visible := m.visibleWorkspaces()
 
 	widths := columnWidths(contentWidth)
-	headers := []string{"NAME↑", "STATUS", "RUNTIME", "CONTAINER", "IMAGE"}
+	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "CONTAINER", "IMAGE"}
 	headerCells := make([]string, len(headers))
 	for i, h := range headers {
 		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
@@ -840,6 +915,7 @@ func (m model) renderTable(width, height int) string {
 func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, selected bool) string {
 	name := ws.Manifest.Name
 	statusText, statusColor := m.workspaceStatus(ws)
+	activityText, activityColor := m.workspaceActivity(ws)
 	rt := ws.Manifest.Runtime
 	container := ws.Manifest.ContainerName
 	image := ws.Manifest.ImageName
@@ -848,9 +924,10 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 		cells := []string{
 			fit(name, widths[0]),
 			fit(statusText, widths[1]),
-			fit(rt, widths[2]),
-			fit(container, widths[3]),
-			fit(image, widths[4]),
+			fit(activityText, widths[2]),
+			fit(rt, widths[3]),
+			fit(container, widths[4]),
+			fit(image, widths[5]),
 		}
 		return cursorStyle.Render(" " + strings.Join(cells, "  ") + " ")
 	}
@@ -858,9 +935,10 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 	cells := []string{
 		bodyStyle.Render(fit(name, widths[0])),
 		lipgloss.NewStyle().Foreground(statusColor).Render(fit(statusText, widths[1])),
-		mutedStyle.Render(fit(rt, widths[2])),
-		mutedStyle.Render(fit(container, widths[3])),
-		mutedStyle.Render(fit(image, widths[4])),
+		lipgloss.NewStyle().Foreground(activityColor).Render(fit(activityText, widths[2])),
+		mutedStyle.Render(fit(rt, widths[3])),
+		mutedStyle.Render(fit(container, widths[4])),
+		mutedStyle.Render(fit(image, widths[5])),
 	}
 	return " " + strings.Join(cells, "  ") + " "
 }
@@ -989,6 +1067,7 @@ type describeField struct {
 func (m model) describeFields(selected workspace.Summary) []describeField {
 	manifest := selected.Manifest
 	statusText, statusColor := m.workspaceStatus(selected)
+	activityText, activityColor := m.workspaceActivity(selected)
 
 	modules := "none"
 	if len(manifest.Modules) > 0 {
@@ -1002,6 +1081,7 @@ func (m model) describeFields(selected workspace.Summary) []describeField {
 	fields := []describeField{
 		{key: "Name", value: manifest.Name},
 		{key: "Status", value: statusText, color: statusColor},
+		{key: "Activity", value: activityText, color: activityColor},
 		{key: "Runtime", value: manifest.Runtime},
 		{key: "Image", value: manifest.ImageName},
 		{key: "Container", value: manifest.ContainerName},
@@ -1290,6 +1370,54 @@ func (m model) workspaceStatus(ws workspace.Summary) (string, lipgloss.Color) {
 	}
 }
 
+// workspaceActivity returns the display text and color for what opencode is
+// doing inside a workspace. It only applies to a running container; otherwise
+// the lifecycle STATUS column already conveys that the workspace is asleep.
+func (m model) workspaceActivity(ws workspace.Summary) (string, lipgloss.Color) {
+	status, ok := m.statuses[ws.Manifest.Name]
+	if !ok {
+		return "—", colMuted
+	}
+
+	switch status.Activity {
+	case workspace.ActivityNew:
+		return "unused", colTitle
+	case workspace.ActivityWorking:
+		return "working", colRunning
+	case workspace.ActivityWaiting:
+		return "waiting", colStarting
+	case workspace.ActivityApproval:
+		return "approval", colStopped
+	case workspace.ActivityError:
+		return "error", colError
+	case workspace.ActivityAsleep:
+		return "asleep", colMuted
+	default:
+		if status.Container == runtime.StatusRunning {
+			return "starting", colMuted
+		}
+		return "—", colMuted
+	}
+}
+
+// attentionCounts returns how many running workspaces are blocked on a
+// permission prompt (approval) and how many have finished and are waiting for
+// human input (waiting).
+func (m model) attentionCounts() (approval, waiting int) {
+	for _, status := range m.statuses {
+		if status.Container != runtime.StatusRunning {
+			continue
+		}
+		switch status.Activity {
+		case workspace.ActivityApproval:
+			approval++
+		case workspace.ActivityWaiting:
+			waiting++
+		}
+	}
+	return approval, waiting
+}
+
 func (m *model) requestDelete() {
 	if len(m.visibleWorkspaces()) == 0 {
 		m.message = "No workspace selected."
@@ -1397,18 +1525,19 @@ func (m *model) clampSelection() {
 	m.workspacePos = clamp(m.workspacePos, 0, len(visible)-1)
 }
 
-// columnWidths splits the available content width across the five columns,
-// keeping STATUS and RUNTIME fixed and sharing the rest.
+// columnWidths splits the available content width across the six columns,
+// keeping STATUS, ACTIVITY, and RUNTIME fixed and sharing the rest.
 func columnWidths(contentWidth int) []int {
-	const gaps = 8 // four 2-space separators
+	const gaps = 10 // five 2-space separators
 	avail := contentWidth - gaps
 	if avail < 20 {
 		avail = 20
 	}
 
 	wStatus := 8
+	wActivity := 9
 	wRuntime := 7
-	rest := avail - wStatus - wRuntime
+	rest := avail - wStatus - wActivity - wRuntime
 	if rest < 12 {
 		rest = 12
 	}
@@ -1417,7 +1546,7 @@ func columnWidths(contentWidth int) []int {
 	wContainer := max(8, rest*35/100)
 	wImage := max(6, rest-wName-wContainer)
 
-	return []int{wName, wStatus, wRuntime, wContainer, wImage}
+	return []int{wName, wStatus, wActivity, wRuntime, wContainer, wImage}
 }
 
 // fit truncates or right-pads s to exactly w display columns.

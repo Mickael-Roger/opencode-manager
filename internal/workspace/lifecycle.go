@@ -25,11 +25,18 @@ type Lifecycle struct {
 type Status struct {
 	Workspace Summary
 	Container string
+	Activity  Activity
+	Pending   int // sessions currently blocked on a permission prompt
 	Error     string
 }
 
 type AttachResultMsg struct {
 	Err error
+	// StillRunning reports whether the container is still up after the attach
+	// command returned. Detaching (Ctrl-C) exits the attach client non-zero but
+	// leaves opencode running, so this distinguishes a detach from a real
+	// failure or a clean exit that stopped the container.
+	StillRunning bool
 }
 
 type ShellResultMsg struct {
@@ -72,6 +79,7 @@ func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status 
 		if err != nil {
 			status.Error = err.Error()
 		}
+		status.Activity, status.Pending = readActivity(ws.Manifest.HomeDir, containerStatus == runtime.StatusRunning)
 		statuses = append(statuses, status)
 	}
 
@@ -251,8 +259,13 @@ func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error)
 		return nil, err
 	}
 
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return AttachResultMsg{Err: err}
+	return tea.ExecProcess(cmd, func(execErr error) tea.Msg {
+		// Use a fresh context: the caller's ctx is already cancelled by the time
+		// the attached process exits.
+		bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status, _ := l.driver.ContainerStatus(bg, summary.Manifest.ContainerName)
+		return AttachResultMsg{Err: execErr, StillRunning: status == runtime.StatusRunning}
 	}), nil
 }
 
