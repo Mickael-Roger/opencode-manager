@@ -55,8 +55,8 @@ Each workspace has:
 - A name.
 - A dedicated directory under the configured workspace root.
 - A dedicated home directory.
-- A generated or preconfigured `home/.config/opencode/opencode.json`.
-- Generated or preconfigured OpenCode commands, skills, agents, and plugins.
+- A global `opencode.json` mounted read-only at `home/.config/opencode/opencode.json`.
+- Globally shared OpenCode commands, skills, agents, and plugins, mounted read-only.
 - Selected module configuration.
 - A generated image.
 - A long-lived container.
@@ -118,23 +118,44 @@ Generated workspace images always include `brew`, `npx`, `uvx`, `git`, `ripgrep`
 
 When the TUI starts, it ensures the managed base image exists and shows `Creating the base image...` while the image is being built.
 
-### OpenCode Preconfiguration
+### Global OpenCode Templates
 
-New workspaces copy preconfigured OpenCode files from:
+OpenCode configuration is shared across all workspaces from the global config
+directory:
 
 ```text
-~/.config/opencode-manager/opencode/
+~/.config/opencode-manager/
+├── AGENTS.md
+├── opencode.json
+├── agents/
+├── commands/
+├── plugins/
+└── skills/
 ```
 
-Supported entries are copied into the workspace at `home/.config/opencode/`:
+These entries are **mounted read-only** into every workspace container at
+`/home/debian/.config/opencode/`. Editing a file on the host propagates live to
+all running workspaces — no copy is made and no recreation is needed. Adding or
+removing a template takes effect the next time a workspace container is
+(re)created.
 
-- `opencode.json`
-- `agent/`
-- `commands/`
-- `plugins/`
-- `skills/`
+On startup, `opencode-manager` creates any missing entries (so the mounts always
+have a source):
 
-Missing entries are ignored. If `opencode.json` is absent, the workspace starts with a default `{}` file.
+- `AGENTS.md` and the `agents/`, `commands/`, `plugins/`, `skills/` directories
+  are created empty.
+- `opencode.json`, which OpenCode requires to be non-empty, is seeded with a
+  minimal valid config:
+
+  ```json
+  {
+    "$schema": "https://opencode.ai/config.json"
+  }
+  ```
+
+Existing files are never overwritten, so your edits are preserved. Per-project
+overrides are still possible via an `opencode.json` in the workspace project
+directory.
 
 ## Security Principle
 

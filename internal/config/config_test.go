@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,6 +48,70 @@ func TestLoadMergesConfigWithDefaults(t *testing.T) {
 	}
 	if len(cfg.BaseImage.Commands) != 1 || cfg.BaseImage.Commands[0] != "update-ca-certificates" {
 		t.Fatalf("BaseImage.Commands = %#v, want update-ca-certificates", cfg.BaseImage.Commands)
+	}
+}
+
+func TestEnsureGlobalConfigCreatesTemplates(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	if err := EnsureGlobalConfig(); err != nil {
+		t.Fatalf("EnsureGlobalConfig returned error: %v", err)
+	}
+
+	dir := filepath.Join(configHome, "opencode-manager")
+
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("AGENTS.md = %q, want empty", string(agents))
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "opencode.json"))
+	if err != nil {
+		t.Fatalf("read opencode.json: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("opencode.json must not be empty")
+	}
+	if !json.Valid(data) {
+		t.Fatalf("opencode.json is not valid JSON: %q", string(data))
+	}
+
+	for _, name := range GlobalTemplateDirs {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("stat template dir %q: %v", name, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("template %q should be a directory", name)
+		}
+	}
+}
+
+func TestEnsureGlobalConfigPreservesExistingFiles(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	dir := filepath.Join(configHome, "opencode-manager")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create global dir: %v", err)
+	}
+	custom := "{\"model\":\"custom/model\"}\n"
+	writeFile(t, filepath.Join(dir, "opencode.json"), []byte(custom))
+
+	if err := EnsureGlobalConfig(); err != nil {
+		t.Fatalf("EnsureGlobalConfig returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "opencode.json"))
+	if err != nil {
+		t.Fatalf("read opencode.json: %v", err)
+	}
+	if string(got) != custom {
+		t.Fatalf("opencode.json = %q, want preserved %q", string(got), custom)
 	}
 }
 

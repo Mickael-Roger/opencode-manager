@@ -91,16 +91,24 @@ func TestCreateWorkspaceWritesLayoutAndManifest(t *testing.T) {
 		ManifestFile,
 		"home",
 		filepath.Join("home", "workspace"),
-		filepath.Join("home", ".config", "opencode", "opencode.json"),
-		filepath.Join("home", ".config", "opencode", "agent"),
-		filepath.Join("home", ".config", "opencode", "commands"),
-		filepath.Join("home", ".config", "opencode", "plugins"),
-		filepath.Join("home", ".config", "opencode", "skills"),
+		filepath.Join("home", ".config", "opencode"),
 	}
 
 	for _, path := range paths {
 		if _, err := os.Stat(filepath.Join(result.Path, path)); err != nil {
 			t.Fatalf("expected workspace path %q: %v", path, err)
+		}
+	}
+
+	// The OpenCode templates are mounted read-only from the global config
+	// directory at container creation, not materialized in the workspace.
+	for _, path := range []string{
+		filepath.Join("home", ".config", "opencode", "opencode.json"),
+		filepath.Join("home", ".config", "opencode", "agents"),
+		filepath.Join("home", ".config", "opencode", "skills"),
+	} {
+		if _, err := os.Stat(filepath.Join(result.Path, path)); !os.IsNotExist(err) {
+			t.Fatalf("template path %q should not be materialized in workspace", path)
 		}
 	}
 
@@ -129,123 +137,6 @@ func TestCreateWorkspaceWritesLayoutAndManifest(t *testing.T) {
 	}
 	if len(workspaces) != 1 || workspaces[0].Manifest.Name != "Demo Workspace" {
 		t.Fatalf("workspaces = %#v, want created workspace", workspaces)
-	}
-}
-
-func TestCreateWorkspaceCopiesOpenCodePreconfiguration(t *testing.T) {
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	preconfigDir := filepath.Join(configHome, "opencode-manager", "opencode")
-	seedFiles := map[string]string{
-		"opencode.json":                                 "{\"model\":\"test/model\"}\n",
-		filepath.Join("agent", "reviewer.md"):           "review instructions\n",
-		filepath.Join("commands", "ship.md"):            "ship command\n",
-		filepath.Join("plugins", "local-plugin.js"):     "export default {}\n",
-		filepath.Join("skills", "debug", "SKILL.md"):    "debug skill\n",
-		filepath.Join("skills", "debug", "script.sh"):   "#!/bin/sh\n",
-		filepath.Join("skills", "debug", "assets", "x"): "asset\n",
-	}
-	for name, content := range seedFiles {
-		path := filepath.Join(preconfigDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("create preconfiguration directory: %v", err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write preconfiguration file: %v", err)
-		}
-	}
-
-	registry := NewRegistry(testConfig(t))
-	result, err := registry.Create("Configured Workspace")
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
-	targetDir := filepath.Join(result.Path, "home", ".config", "opencode")
-	for name, want := range seedFiles {
-		got, err := os.ReadFile(filepath.Join(targetDir, name))
-		if err != nil {
-			t.Fatalf("read copied file %q: %v", name, err)
-		}
-		if string(got) != want {
-			t.Fatalf("copied file %q = %q, want %q", name, string(got), want)
-		}
-	}
-}
-
-func TestCreateWorkspaceSkipsMissingOpenCodePreconfiguration(t *testing.T) {
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	registry := NewRegistry(testConfig(t))
-	result, err := registry.Create("Plain Workspace")
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
-	targetDir := filepath.Join(result.Path, "home", ".config", "opencode")
-	got, err := os.ReadFile(filepath.Join(targetDir, "opencode.json"))
-	if err != nil {
-		t.Fatalf("read default opencode.json: %v", err)
-	}
-	if string(got) != "{}\n" {
-		t.Fatalf("default opencode.json = %q, want {}", string(got))
-	}
-
-	if _, err := os.Stat(filepath.Join(configHome, "opencode-manager")); !os.IsNotExist(err) {
-		t.Fatalf("host preconfiguration directory should not be created: %v", err)
-	}
-	for _, name := range []string{"agent", "commands", "plugins", "skills"} {
-		if _, err := os.Stat(filepath.Join(targetDir, name)); err != nil {
-			t.Fatalf("expected default workspace directory %q: %v", name, err)
-		}
-	}
-}
-
-func TestCreateWorkspaceCopiesPartialOpenCodePreconfiguration(t *testing.T) {
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-
-	preconfigDir := filepath.Join(configHome, "opencode-manager", "opencode")
-	seedFiles := map[string]string{
-		"opencode.json":                      "{\"model\":\"partial/model\"}\n",
-		filepath.Join("commands", "test.md"): "test command\n",
-	}
-	for name, content := range seedFiles {
-		path := filepath.Join(preconfigDir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("create preconfiguration directory: %v", err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write preconfiguration file: %v", err)
-		}
-	}
-
-	registry := NewRegistry(testConfig(t))
-	result, err := registry.Create("Partial Workspace")
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
-	targetDir := filepath.Join(result.Path, "home", ".config", "opencode")
-	for name, want := range seedFiles {
-		got, err := os.ReadFile(filepath.Join(targetDir, name))
-		if err != nil {
-			t.Fatalf("read copied file %q: %v", name, err)
-		}
-		if string(got) != want {
-			t.Fatalf("copied file %q = %q, want %q", name, string(got), want)
-		}
-	}
-	for _, name := range []string{"agent", "plugins", "skills"} {
-		entries, err := os.ReadDir(filepath.Join(targetDir, name))
-		if err != nil {
-			t.Fatalf("read default directory %q: %v", name, err)
-		}
-		if len(entries) != 0 {
-			t.Fatalf("default directory %q entries = %d, want empty", name, len(entries))
-		}
 	}
 }
 

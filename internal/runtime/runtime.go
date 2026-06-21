@@ -58,7 +58,16 @@ type ContainerSpec struct {
 	UID       int
 	GID       int
 	Env       map[string]string
+	Mounts    []Mount
 	Command   []string
+}
+
+// Mount is an additional bind mount layered on top of the workspace home
+// directory, e.g. the read-only global OpenCode templates.
+type Mount struct {
+	Source   string
+	Target   string
+	ReadOnly bool
 }
 
 type CLIDriver struct {
@@ -189,6 +198,13 @@ func (d CLIDriver) CreateContainer(ctx context.Context, spec ContainerSpec) erro
 		return fmt.Errorf("container command is required")
 	}
 
+	return d.run(ctx, createArgs(spec)...)
+}
+
+// createArgs builds the runtime CLI arguments for creating a workspace
+// container. The workspace home directory is mounted read-write, and any extra
+// spec.Mounts (e.g. the global OpenCode templates) are layered on top.
+func createArgs(spec ContainerSpec) []string {
 	args := []string{
 		"create",
 		"--interactive",
@@ -201,6 +217,14 @@ func (d CLIDriver) CreateContainer(ctx context.Context, spec ContainerSpec) erro
 		"--volume", spec.HomeDir + ":/home/debian",
 	}
 
+	for _, mount := range spec.Mounts {
+		volume := mount.Source + ":" + mount.Target
+		if mount.ReadOnly {
+			volume += ":ro"
+		}
+		args = append(args, "--volume", volume)
+	}
+
 	for key, value := range spec.Env {
 		args = append(args, "--env", key+"="+value)
 	}
@@ -208,7 +232,7 @@ func (d CLIDriver) CreateContainer(ctx context.Context, spec ContainerSpec) erro
 	args = append(args, spec.ImageName)
 	args = append(args, spec.Command...)
 
-	return d.run(ctx, args...)
+	return args
 }
 
 func (d CLIDriver) StartContainer(ctx context.Context, name string) error {
