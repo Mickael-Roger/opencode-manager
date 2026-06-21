@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+
+const supportedPlatforms = new Set(["darwin", "linux"]);
+const supportedArchitectures = new Set(["x64", "arm64"]);
+
+if (!supportedPlatforms.has(process.platform) || !supportedArchitectures.has(process.arch)) {
+  console.error(`opencode-manager does not ship a binary for ${process.platform}/${process.arch}.`);
+  process.exit(1);
+}
+
+const binary = path.join(__dirname, "..", "dist", `opencode-manager-${process.platform}-${process.arch}`);
+const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit" });
+
+if (result.error) {
+  console.error(`failed to run opencode-manager: ${result.error.message}`);
+  process.exit(1);
+}
+
+process.exit(result.status ?? 1);
