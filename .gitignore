@@ -1,1 +1,6 @@
-bin/
+# Local Go build artifacts. NOTE: do not ignore bin/ or dist/ — npm pack honors
+# .gitignore, and both are part of the published package (bin/ holds the Node
+# launcher, dist/ holds the per-platform binaries fetched in CI).
+
+# Stray binary from `go build` without -o.
+/opencode-manager
