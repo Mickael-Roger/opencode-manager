@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -176,6 +177,9 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// Logging is configured from this very config, so it may not be wired
+			// up yet on the first load; these messages surface on later reloads.
+			slog.Debug("config file not found, using defaults", "path", path)
 			return cfg, cfg.Validate()
 		}
 
@@ -186,6 +190,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
+	slog.Debug("loaded config", "path", path, "runtime", cfg.Runtime, "logLevel", cfg.LogLevel, "workspaceRoot", cfg.WorkspaceRoot)
 	return cfg, cfg.Validate()
 }
 

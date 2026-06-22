@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,14 +92,17 @@ func (d CLIDriver) Name() string {
 
 func (d CLIDriver) Available(ctx context.Context) error {
 	if _, err := exec.LookPath(d.binary); err != nil {
+		slog.Debug("runtime executable not found", "runtime", d.binary, "error", err)
 		return fmt.Errorf("%s executable not found: %w", d.binary, err)
 	}
 
 	cmd := exec.CommandContext(ctx, d.binary, "version")
 	if output, err := cmd.CombinedOutput(); err != nil {
+		slog.Debug("runtime not available", "runtime", d.binary, "error", err, "output", strings.TrimSpace(string(output)))
 		return fmt.Errorf("%s is not available: %w: %s", d.binary, err, string(output))
 	}
 
+	slog.Debug("runtime available", "runtime", d.binary)
 	return nil
 }
 
@@ -115,8 +119,11 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 		return err
 	}
 	if exists {
+		slog.Debug("base image already exists, skipping build", "image", spec.ImageName)
 		return nil
 	}
+
+	slog.Info("building base image", "image", spec.ImageName, "from", spec.FromImage, "packages", spec.Packages)
 
 	dir, err := os.MkdirTemp("", "opencode-manager-base-image-*")
 	if err != nil {
@@ -129,7 +136,12 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 		return fmt.Errorf("write base Containerfile: %w", err)
 	}
 
-	return d.run(ctx, "build", "-t", spec.ImageName, "-f", containerfile, dir)
+	if err := d.run(ctx, "build", "-t", spec.ImageName, "-f", containerfile, dir); err != nil {
+		return err
+	}
+
+	slog.Info("base image built", "image", spec.ImageName)
+	return nil
 }
 
 func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
@@ -142,6 +154,8 @@ func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
 	if spec.UID <= 0 || spec.GID <= 0 {
 		return fmt.Errorf("valid uid and gid are required")
 	}
+
+	slog.Info("building workspace image", "image", spec.ImageName, "base", spec.BaseImage, "uid", spec.UID, "gid", spec.GID)
 
 	dir, err := os.MkdirTemp("", "opencode-manager-image-*")
 	if err != nil {
@@ -162,7 +176,12 @@ func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
 		"-f", containerfile,
 		dir,
 	}
-	return d.run(ctx, args...)
+	if err := d.run(ctx, args...); err != nil {
+		return err
+	}
+
+	slog.Info("workspace image built", "image", spec.ImageName)
+	return nil
 }
 
 func (d CLIDriver) ContainerStatus(ctx context.Context, name string) (string, error) {
@@ -174,6 +193,7 @@ func (d CLIDriver) ContainerStatus(ctx context.Context, name string) (string, er
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if isMissingResourceOutput(output) {
+			slog.Debug("container status", "container", name, "status", StatusMissing)
 			return StatusMissing, nil
 		}
 
@@ -185,6 +205,7 @@ func (d CLIDriver) ContainerStatus(ctx context.Context, name string) (string, er
 		return StatusUnknown, nil
 	}
 
+	slog.Debug("container status", "container", name, "status", status)
 	return status, nil
 }
 
@@ -335,10 +356,13 @@ func (d CLIDriver) ExecOutputAs(ctx context.Context, name, user string, command 
 	args = append(args, command...)
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 
+	slog.Debug("running container exec", "runtime", d.binary, "container", name, "user", user, "command", command)
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		slog.Debug("container exec failed", "runtime", d.binary, "container", name, "command", command, "error", err, "stderr", strings.TrimSpace(stderr.String()))
 		return nil, fmt.Errorf("%s exec %s: %w: %s", d.binary, name, err, strings.TrimSpace(stderr.String()))
 	}
 
@@ -346,26 +370,33 @@ func (d CLIDriver) ExecOutputAs(ctx context.Context, name, user string, command 
 }
 
 func (d CLIDriver) run(ctx context.Context, args ...string) error {
+	slog.Debug("running runtime command", "runtime", d.binary, "args", args)
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		slog.Debug("runtime command failed", "runtime", d.binary, "args", args, "error", err, "output", strings.TrimSpace(string(output)))
 		return fmt.Errorf("%s %s: %w: %s", d.binary, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 
+	slog.Debug("runtime command succeeded", "runtime", d.binary, "args", args)
 	return nil
 }
 
 func (d CLIDriver) runAllowMissing(ctx context.Context, args []string, resource string) error {
+	slog.Debug("running runtime command", "runtime", d.binary, "args", args)
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if isMissingResourceOutput(output) {
+			slog.Debug("runtime resource already missing, ignoring", "runtime", d.binary, "resource", resource, "args", args)
 			return nil
 		}
 
+		slog.Debug("runtime command failed", "runtime", d.binary, "args", args, "error", err, "output", strings.TrimSpace(string(output)))
 		return fmt.Errorf("remove %s: %s %s: %w: %s", resource, d.binary, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 
+	slog.Debug("runtime command succeeded", "runtime", d.binary, "args", args)
 	return nil
 }
 

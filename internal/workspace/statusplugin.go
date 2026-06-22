@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -71,6 +72,7 @@ func SeedStatusPlugin() error {
 		return fmt.Errorf("write status plugin %q: %w", path, err)
 	}
 
+	slog.Debug("seeded status plugin", "path", path)
 	return nil
 }
 
@@ -102,6 +104,7 @@ func readActivity(homeDir string, running bool) (Activity, int) {
 
 	var report statusReport
 	if err := json.Unmarshal(data, &report); err != nil {
+		slog.Warn("malformed workspace status file", "homeDir", homeDir, "error", err)
 		return ActivityUnknown, 0
 	}
 
