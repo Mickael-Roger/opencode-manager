@@ -100,6 +100,7 @@ Example:
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
+logLevel: warning
 baseImage:
   name: debian:stable-slim
   packages:
@@ -116,6 +117,11 @@ moduleDirs:
 Set `useLocalOpenCodeAuth: true` to mount the host file
 `~/.local/share/opencode/auth.json` read-write into the same path in each
 workspace container. The default `false` keeps auth isolated from the host.
+
+`logLevel` controls how much is written to the log file. It must be one of
+`debug`, `info`, `warning` (default), or `error`. Logs are appended to
+`~/.local/share/opencode-manager/logs/opencode-manager.log` rather than printed
+to the terminal, so they never interfere with the TUI.
 
 Generated workspace images always include `brew`, `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Add project-specific extras with `baseImage.packages` and `baseImage.commands`.
 
