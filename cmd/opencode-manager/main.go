@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/mickael-menu/opencode-manager/internal/config"
+	"github.com/mickael-menu/opencode-manager/internal/logging"
 	"github.com/mickael-menu/opencode-manager/internal/tui"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
@@ -18,18 +20,35 @@ func main() {
 		os.Exit(1)
 	}
 
+	logDir, err := config.LogDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve log directory: %v\n", err)
+		os.Exit(1)
+	}
+	closeLog, err := logging.Init(logDir, cfg.LogLevel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logging: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeLog()
+
+	slog.Info("starting opencode-manager", "logLevel", cfg.LogLevel, "runtime", cfg.Runtime)
+
 	if err := config.EnsureGlobalConfig(); err != nil {
+		slog.Error("failed to prepare global config", "error", err)
 		fmt.Fprintf(os.Stderr, "failed to prepare global config: %v\n", err)
 		os.Exit(1)
 	}
 
 	if err := workspace.SeedStatusPlugin(); err != nil {
+		slog.Error("failed to seed status plugin", "error", err)
 		fmt.Fprintf(os.Stderr, "failed to seed status plugin: %v\n", err)
 		os.Exit(1)
 	}
 
 	if len(os.Args) > 1 {
 		if err := runCLI(cfg, os.Args[1:]); err != nil {
+			slog.Error("CLI command failed", "args", os.Args[1:], "error", err)
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
@@ -37,6 +56,7 @@ func main() {
 	}
 
 	if err := tui.Run(cfg); err != nil {
+		slog.Error("failed to run TUI", "error", err)
 		fmt.Fprintf(os.Stderr, "failed to run TUI: %v\n", err)
 		os.Exit(1)
 	}

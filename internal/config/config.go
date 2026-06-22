@@ -14,10 +14,18 @@ const (
 	RuntimePodman = "podman"
 )
 
+const (
+	LogLevelDebug   = "debug"
+	LogLevelInfo    = "info"
+	LogLevelWarning = "warning"
+	LogLevelError   = "error"
+)
+
 type Config struct {
 	WorkspaceRoot        string          `yaml:"workspaceRoot"`
 	Runtime              string          `yaml:"runtime"`
 	UseLocalOpenCodeAuth bool            `yaml:"useLocalOpenCodeAuth"`
+	LogLevel             string          `yaml:"logLevel"`
 	BaseImage            BaseImageConfig `yaml:"baseImage"`
 	ModuleDirs           []string        `yaml:"moduleDirs"`
 }
@@ -48,6 +56,28 @@ func GlobalDir() (string, error) {
 	}
 
 	return filepath.Join(dir, "opencode-manager"), nil
+}
+
+// DataDir returns the opencode-manager data directory
+// (~/.local/share/opencode-manager). It holds workspaces and logs.
+func DataDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find user home directory: %w", err)
+	}
+
+	return filepath.Join(homeDir, ".local", "share", "opencode-manager"), nil
+}
+
+// LogDir returns the directory where log files are stored
+// (~/.local/share/opencode-manager/logs).
+func LogDir() (string, error) {
+	dataDir, err := DataDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(dataDir, "logs"), nil
 }
 
 // GlobalTemplateDirs are the OpenCode template subdirectories created in the
@@ -114,16 +144,15 @@ func Default() (Config, error) {
 		return Config{}, err
 	}
 
-	homeDir, err := os.UserHomeDir()
+	dataDir, err := DataDir()
 	if err != nil {
-		return Config{}, fmt.Errorf("find user home directory: %w", err)
+		return Config{}, err
 	}
-
-	dataDir := filepath.Join(homeDir, ".local", "share", "opencode-manager")
 
 	return Config{
 		WorkspaceRoot: dataDir,
 		Runtime:       RuntimeDocker,
+		LogLevel:      LogLevelWarning,
 		BaseImage: BaseImageConfig{
 			Name: "debian:stable-slim",
 		},
@@ -167,6 +196,12 @@ func (c Config) Validate() error {
 
 	if c.Runtime != RuntimeDocker && c.Runtime != RuntimePodman {
 		return fmt.Errorf("runtime must be %q or %q", RuntimeDocker, RuntimePodman)
+	}
+
+	switch c.LogLevel {
+	case LogLevelDebug, LogLevelInfo, LogLevelWarning, LogLevelError:
+	default:
+		return fmt.Errorf("logLevel must be one of %q, %q, %q, %q", LogLevelDebug, LogLevelInfo, LogLevelWarning, LogLevelError)
 	}
 
 	if c.BaseImage.Name == "" {

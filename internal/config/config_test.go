@@ -24,6 +24,34 @@ func TestLoadUsesDefaultsWhenConfigDoesNotExist(t *testing.T) {
 	if cfg.UseLocalOpenCodeAuth {
 		t.Fatal("UseLocalOpenCodeAuth should default to false")
 	}
+
+	if cfg.LogLevel != LogLevelWarning {
+		t.Fatalf("LogLevel = %q, want %q", cfg.LogLevel, LogLevelWarning)
+	}
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("logLevel: verbose\n"))
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject an invalid logLevel")
+	}
+}
+
+func TestLoadAcceptsValidLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("logLevel: debug\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.LogLevel != LogLevelDebug {
+		t.Fatalf("LogLevel = %q, want %q", cfg.LogLevel, LogLevelDebug)
+	}
 }
 
 func TestLoadMergesConfigWithDefaults(t *testing.T) {
