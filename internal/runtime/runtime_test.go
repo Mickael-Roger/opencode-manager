@@ -95,7 +95,7 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		"npm",
 		"kubectl",
 		"RUN update-ca-certificates",
-		"useradd -m -s /bin/bash linuxbrew",
+		"groupadd -r linuxbrew && useradd -r -g linuxbrew -m -s /bin/bash linuxbrew",
 		"su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
 		"su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'",

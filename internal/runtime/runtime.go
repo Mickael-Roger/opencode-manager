@@ -486,7 +486,11 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 		b.WriteString(command)
 		b.WriteString("\n")
 	}
-	b.WriteString("RUN useradd -m -s /bin/bash linuxbrew && mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin && chown -R linuxbrew:linuxbrew /home/linuxbrew\n")
+	// Create linuxbrew as a system account (UID/GID < 1000). Without an explicit
+	// id, useradd grabs UID 1000, which collides with the host user the workspace
+	// image installs at UID 1000: getent then resolves UID 1000 to linuxbrew, the
+	// `debian` user is never created, and the pod runs as linuxbrew instead.
+	b.WriteString("RUN groupadd -r linuxbrew && useradd -r -g linuxbrew -m -s /bin/bash linuxbrew && mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin && chown -R linuxbrew:linuxbrew /home/linuxbrew\n")
 	b.WriteString("RUN su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew && /home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	b.WriteString("RUN git --version && rg --version && jq --version && npx --version && uvx --version && su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	// Install OpenCode from npm rather than the curl|bash installer: the
