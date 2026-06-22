@@ -22,6 +22,37 @@ const (
 	StatusUnknown = "unknown"
 )
 
+// attachScriptName is the file name of the attach wrapper, both within the build
+// context and at /usr/local/bin inside the image.
+const attachScriptName = "opencode-manager-attach"
+
+// attachScript is the attach wrapper copied into the base image. The container's
+// main process is a persistent `opencode serve`, and attaching runs a TUI client
+// (`opencode attach`) against it over HTTP. Ctrl-C then exits only the client;
+// the server keeps running in the background. The wrapper waits for the server to
+// be listening, then attaches to the last session if one exists (asking the
+// server over HTTP, so no second opencode process is spawned), otherwise starts a
+// fresh session.
+//
+// It is shipped as a build-context file copied with COPY rather than written from
+// a heredoc: the buildah builder used by Podman does not support heredocs
+// (`<<'EOF'`) in Containerfiles (a BuildKit-only feature), and parses the script
+// body as further Containerfile instructions.
+const attachScript = `#!/bin/sh
+url="http://127.0.0.1:4096"
+dir="/home/debian/workspace"
+i=0
+while [ "$i" -lt 150 ]; do
+  curl -sf -o /dev/null "$url/session" && break
+  i=$((i+1)); sleep 0.2
+done
+count=$(curl -sf "$url/session" | jq 'length' 2>/dev/null || echo 0)
+if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+  exec opencode attach "$url" --dir "$dir" -c
+fi
+exec opencode attach "$url" --dir "$dir"
+`
+
 type Driver interface {
 	Name() string
 	Available(context.Context) error
@@ -134,6 +165,11 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 	containerfile := filepath.Join(dir, "Containerfile")
 	if err := os.WriteFile(containerfile, []byte(renderBaseContainerfile(spec)), 0o600); err != nil {
 		return fmt.Errorf("write base Containerfile: %w", err)
+	}
+
+	attachPath := filepath.Join(dir, attachScriptName)
+	if err := os.WriteFile(attachPath, []byte(attachScript), 0o755); err != nil {
+		return fmt.Errorf("write attach script: %w", err)
 	}
 
 	if err := d.run(ctx, "build", "-t", spec.ImageName, "-f", containerfile, dir); err != nil {
@@ -447,28 +483,11 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	// for tokscale below.
 	b.WriteString("RUN npm install -g opencode-ai && which opencode && opencode --version\n")
 	b.WriteString("RUN npm install -g tokscale@latest && which tokscale\n")
-	// Attach wrapper: the container's main process is a persistent `opencode
-	// serve`, and attaching runs a TUI client (`opencode attach`) against it over
-	// HTTP. Ctrl-C then exits only the client; the server keeps running in the
-	// background. The wrapper waits for the server to be listening, then attaches
-	// to the last session if one exists (asking the server over HTTP, so no
-	// second opencode process is spawned), otherwise starts a fresh session.
-	b.WriteString("RUN cat > /usr/local/bin/opencode-manager-attach <<'EOF'\n")
-	b.WriteString("#!/bin/sh\n")
-	b.WriteString("url=\"http://127.0.0.1:4096\"\n")
-	b.WriteString("dir=\"/home/debian/workspace\"\n")
-	b.WriteString("i=0\n")
-	b.WriteString("while [ \"$i\" -lt 150 ]; do\n")
-	b.WriteString("  curl -sf -o /dev/null \"$url/session\" && break\n")
-	b.WriteString("  i=$((i+1)); sleep 0.2\n")
-	b.WriteString("done\n")
-	b.WriteString("count=$(curl -sf \"$url/session\" | jq 'length' 2>/dev/null || echo 0)\n")
-	b.WriteString("if [ \"${count:-0}\" -gt 0 ] 2>/dev/null; then\n")
-	b.WriteString("  exec opencode attach \"$url\" --dir \"$dir\" -c\n")
-	b.WriteString("fi\n")
-	b.WriteString("exec opencode attach \"$url\" --dir \"$dir\"\n")
-	b.WriteString("EOF\n")
-	b.WriteString("RUN chmod 0755 /usr/local/bin/opencode-manager-attach\n")
+	// Attach wrapper: copied from the build context (see attachScript) rather than
+	// written via a heredoc, which the buildah builder used by Podman does not
+	// support in Containerfiles.
+	b.WriteString("COPY " + attachScriptName + " /usr/local/bin/" + attachScriptName + "\n")
+	b.WriteString("RUN chmod 0755 /usr/local/bin/" + attachScriptName + "\n")
 	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
 
 	return b.String()

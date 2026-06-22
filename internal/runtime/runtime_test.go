@@ -75,13 +75,23 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
 		"su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'",
 		"npm install -g opencode-ai && which opencode && opencode --version",
-		"/usr/local/bin/opencode-manager-attach",
-		"exec opencode attach \"$url\" --dir \"$dir\" -c",
+		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
+		"RUN chmod 0755 /usr/local/bin/opencode-manager-attach",
 		"ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("base Containerfile missing %q:\n%s", want, content)
 		}
+	}
+
+	// The base image must not use heredocs: the buildah builder used by Podman
+	// parses the heredoc body as further Containerfile instructions and fails.
+	if strings.Contains(content, "<<") {
+		t.Fatalf("base Containerfile must not use heredocs (unsupported by Podman/buildah):\n%s", content)
+	}
+
+	if !strings.Contains(attachScript, "exec opencode attach \"$url\" --dir \"$dir\" -c") {
+		t.Fatalf("attach script missing attach-to-last-session command:\n%s", attachScript)
 	}
 
 	packages := strings.Index(content, "apt-get update && apt-get install")
