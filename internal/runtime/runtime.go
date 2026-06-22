@@ -173,8 +173,7 @@ func (d CLIDriver) ContainerStatus(ctx context.Context, name string) (string, er
 	cmd := exec.CommandContext(ctx, d.binary, "inspect", "-f", "{{.State.Status}}", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		text := strings.ToLower(string(output))
-		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+		if isMissingResourceOutput(output) {
 			return StatusMissing, nil
 		}
 
@@ -272,8 +271,7 @@ func (d CLIDriver) ContainerImageID(ctx context.Context, name string) (string, e
 	cmd := exec.CommandContext(ctx, d.binary, "inspect", "-f", "{{.Image}}", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		text := strings.ToLower(string(output))
-		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+		if isMissingResourceOutput(output) {
 			return "", nil
 		}
 
@@ -293,8 +291,7 @@ func (d CLIDriver) ImageID(ctx context.Context, imageName string) (string, error
 	cmd := exec.CommandContext(ctx, d.binary, "image", "inspect", "-f", "{{.Id}}", imageName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		text := strings.ToLower(string(output))
-		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+		if isMissingResourceOutput(output) {
 			return "", nil
 		}
 
@@ -362,8 +359,7 @@ func (d CLIDriver) runAllowMissing(ctx context.Context, args []string, resource 
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		text := strings.ToLower(string(output))
-		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+		if isMissingResourceOutput(output) {
 			return nil
 		}
 
@@ -377,8 +373,7 @@ func (d CLIDriver) imageExists(ctx context.Context, imageName string) (bool, err
 	cmd := exec.CommandContext(ctx, d.binary, "image", "inspect", imageName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		text := strings.ToLower(string(output))
-		if strings.Contains(text, "no such") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") {
+		if isMissingResourceOutput(output) {
 			return false, nil
 		}
 
@@ -386,6 +381,14 @@ func (d CLIDriver) imageExists(ctx context.Context, imageName string) (bool, err
 	}
 
 	return true, nil
+}
+
+func isMissingResourceOutput(output []byte) bool {
+	text := strings.ToLower(string(output))
+	return strings.Contains(text, "no such") ||
+		strings.Contains(text, "not found") ||
+		strings.Contains(text, "does not exist") ||
+		strings.Contains(text, "image not known")
 }
 
 func renderBaseContainerfile(spec BaseBuildSpec) string {

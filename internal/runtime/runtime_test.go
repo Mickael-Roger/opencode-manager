@@ -114,3 +114,11 @@ func TestRenderWorkspaceContainerfileUsesCachedBaseAndHostUIDGIDArgs(t *testing.
 		}
 	}
 }
+
+func TestIsMissingResourceOutputRecognizesPodmanMissingImage(t *testing.T) {
+	output := []byte("[]\nError: opencode-manager/base:abc123: image not known")
+
+	if !isMissingResourceOutput(output) {
+		t.Fatalf("expected Podman missing image output to be recognized")
+	}
+}
