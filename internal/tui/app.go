@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -217,6 +218,8 @@ func Run(cfg config.Config) error {
 		return errors.New("opencode-manager must be run from an interactive terminal")
 	}
 
+	slog.Info("starting TUI", "runtime", cfg.Runtime)
+
 	program := tea.NewProgram(
 		newModel(cfg),
 		tea.WithInput(os.Stdin),
@@ -240,6 +243,7 @@ func newModel(cfg config.Config) model {
 	lifecycle, err := workspace.NewLifecycle(cfg)
 	lifecycleErr := ""
 	if err != nil {
+		slog.Error("failed to initialize workspace lifecycle", "error", err)
 		lifecycleErr = err.Error()
 	}
 
@@ -270,6 +274,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateKey(msg)
 	case workspaceListMsg:
 		if msg.err != nil {
+			slog.Error("failed to load workspaces", "error", msg.err)
 			m.loadError = msg.err.Error()
 			m.workspaces = nil
 			return m, nil
@@ -282,6 +287,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runtimeStatusMsg:
 		m.runtimeName = msg.name
 		if msg.err != nil {
+			slog.Warn("container runtime unavailable", "runtime", msg.name, "error", msg.err)
 			m.runtimeError = msg.err.Error()
 		} else {
 			m.runtimeError = ""
@@ -322,38 +328,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.loadStatuses, tickCmd())
 	case lifecycleActionMsg:
 		if msg.err != nil {
+			slog.Error("lifecycle action failed", "action", msg.action, "workspace", msg.name, "error", msg.err)
 			m.message = fmt.Sprintf("%s failed for %s: %v", msg.action, msg.name, msg.err)
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
+		slog.Info("lifecycle action completed", "action", msg.action, "workspace", msg.name)
 		m.message = fmt.Sprintf("%s completed for %s.", msg.action, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case provisionWorkspaceMsg:
 		if msg.err != nil {
+			slog.Error("workspace provisioning failed", "workspace", msg.name, "error", msg.err)
 			m.message = fmt.Sprintf("Create runtime provisioning failed for %s: %v", msg.name, msg.err)
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
+		slog.Info("workspace provisioned", "workspace", msg.name)
 		m.message = fmt.Sprintf("Created workspace %s and provisioned its image/container.", msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case updateActionMsg:
 		if msg.err != nil {
+			slog.Error("OpenCode update failed", "workspace", msg.name, "error", msg.err)
 			m.message = fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err)
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
+		slog.Info("OpenCode updated", "workspace", msg.name, "version", msg.version)
 		m.message = fmt.Sprintf("OpenCode updated to %s in %s.", msg.version, msg.name)
 		delete(m.versions, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case baseImageReadyMsg:
 		if msg.err != nil {
+			slog.Error("base image creation failed", "error", msg.err)
 			m.message = fmt.Sprintf("Base image creation failed: %v", msg.err)
 			return m, nil
 		}
+		slog.Info("base image ready")
 		m.message = "Base image ready. Press : for commands, / to filter, ? for help."
 		return m, nil
 	case attachReadyMsg:
 		if msg.err != nil {
+			slog.Error("session start failed", "kind", msg.noun, "workspace", msg.name, "error", msg.err)
 			m.message = fmt.Sprintf("%s failed for %s: %v", msg.noun, msg.name, msg.err)
 			return m, m.loadStatuses
 		}
+		slog.Info("session started", "kind", msg.noun, "workspace", msg.name)
 		m.message = fmt.Sprintf("%s session started for %s.", msg.noun, msg.name)
 		return m, msg.cmd
 	case workspace.AttachResultMsg:
@@ -361,23 +377,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.StillRunning:
 			// Detached via Ctrl-C; the attach client exits non-zero but the
 			// container keeps running, so this is not a failure.
+			slog.Debug("detached from workspace, container still running")
 			m.message = "Detached (Ctrl-C). Container still running in the background."
 		case msg.Err != nil:
+			slog.Error("attach session failed", "error", msg.Err)
 			m.message = fmt.Sprintf("Attach session failed: %v", msg.Err)
 		default:
+			slog.Debug("attach session closed, container stopped")
 			m.message = "Attach session closed; container stopped."
 		}
 		return m, m.loadStatuses
 	case workspace.ShellResultMsg:
 		if msg.Err != nil {
+			slog.Error("shell session failed", "error", msg.Err)
 			m.message = fmt.Sprintf("Shell session failed: %v", msg.Err)
 		} else {
+			slog.Debug("shell session closed")
 			m.message = "Shell session closed."
 		}
 		return m, m.loadStatuses
 	case tokenUsageMsg:
 		state := tokenState{loaded: true}
 		if msg.err != nil {
+			slog.Warn("failed to read token usage", "workspace", msg.name, "error", msg.err)
 			state.err = msg.err.Error()
 		} else {
 			state.usage = msg.usage
@@ -592,6 +614,7 @@ func (m model) createWorkspace(name string) (tea.Model, tea.Cmd) {
 
 	result, err := m.registry.Create(name)
 	if err != nil {
+		slog.Error("failed to create workspace", "name", name, "error", err)
 		m.message = fmt.Sprintf("Create failed: %v", err)
 		return m, nil
 	}

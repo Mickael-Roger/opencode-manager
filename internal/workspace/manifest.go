@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -72,6 +73,7 @@ func SaveManifest(path string, manifest Manifest) error {
 		return fmt.Errorf("write manifest %q: %w", path, err)
 	}
 
+	slog.Debug("saved workspace manifest", "name", manifest.Name, "path", path)
 	return nil
 }
 

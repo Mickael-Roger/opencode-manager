@@ -3,6 +3,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -67,6 +68,7 @@ func (r Registry) List() ([]Summary, error) {
 		return strings.ToLower(workspaces[i].Manifest.Name) < strings.ToLower(workspaces[j].Manifest.Name)
 	})
 
+	slog.Debug("listed workspaces", "count", len(workspaces))
 	return workspaces, nil
 }
 
@@ -97,6 +99,8 @@ func (r Registry) NewManifest(name string) (Manifest, error) {
 }
 
 func (r Registry) Create(name string) (CreateResult, error) {
+	slog.Info("creating workspace", "name", name, "slug", SafeName(name))
+
 	manifest, err := r.NewManifest(name)
 	if err != nil {
 		return CreateResult{}, err
@@ -112,6 +116,7 @@ func (r Registry) Create(name string) (CreateResult, error) {
 		return CreateResult{}, err
 	}
 
+	slog.Info("workspace created", "name", name, "container", manifest.ContainerName, "path", workspacePath)
 	return CreateResult{Manifest: manifest, Path: workspacePath}, nil
 }
 
@@ -146,6 +151,7 @@ func (r Registry) Delete(summary Summary) error {
 		return fmt.Errorf("delete workspace directory %q: %w", workspacePath, err)
 	}
 
+	slog.Debug("removed workspace directory", "workspace", summary.Manifest.Name, "path", workspacePath)
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +55,7 @@ func NewLifecycle(cfg config.Config) (Lifecycle, error) {
 }
 
 func (l Lifecycle) EnsureBaseImage(ctx context.Context) error {
+	slog.Debug("ensuring base image is available")
 	if err := l.driver.Available(ctx); err != nil {
 		return err
 	}
@@ -88,17 +90,24 @@ func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status 
 }
 
 func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
+	name := summary.Manifest.ContainerName
+	slog.Info("ensuring workspace is started", "workspace", summary.Manifest.Name, "container", name)
+
 	status, spec, err := l.provision(ctx, summary)
 	if err != nil {
 		return err
 	}
 
 	if status != runtime.StatusRunning {
-		if err := l.driver.StartContainer(ctx, summary.Manifest.ContainerName); err != nil {
+		if err := l.driver.StartContainer(ctx, name); err != nil {
+			slog.Warn("starting container failed, recreating", "workspace", summary.Manifest.Name, "container", name, "error", err)
 			if recreateErr := l.recreateAndStart(ctx, summary, spec); recreateErr != nil {
 				return fmt.Errorf("start failed: %w; recreate failed: %v", err, recreateErr)
 			}
 		}
+		slog.Info("workspace container started", "workspace", summary.Manifest.Name, "container", name)
+	} else {
+		slog.Debug("workspace container already running", "workspace", summary.Manifest.Name, "container", name)
 	}
 
 	return nil
@@ -173,6 +182,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	// image and run command.
 	if status != runtime.StatusMissing {
 		if stale, serr := l.containerImageStale(ctx, manifest); serr == nil && stale {
+			slog.Warn("container image is stale, recreating", "workspace", manifest.Name, "container", manifest.ContainerName)
 			if err := l.driver.RemoveContainer(ctx, manifest.ContainerName); err != nil {
 				return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 			}
@@ -181,6 +191,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	}
 
 	if status == runtime.StatusMissing {
+		slog.Info("creating workspace container", "workspace", manifest.Name, "container", manifest.ContainerName, "image", manifest.ImageName)
 		if err := l.driver.CreateContainer(ctx, spec); err != nil {
 			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 		}
@@ -272,18 +283,22 @@ func (l Lifecycle) recreateAndStart(ctx context.Context, summary Summary, spec r
 }
 
 func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
-	status, err := l.driver.ContainerStatus(ctx, summary.Manifest.ContainerName)
+	name := summary.Manifest.ContainerName
+	slog.Info("stopping workspace", "workspace", summary.Manifest.Name, "container", name)
+
+	status, err := l.driver.ContainerStatus(ctx, name)
 	if err != nil {
 		return err
 	}
 	if status == runtime.StatusMissing {
-		return fmt.Errorf("container %s does not exist", summary.Manifest.ContainerName)
+		return fmt.Errorf("container %s does not exist", name)
 	}
 	if status != runtime.StatusRunning {
+		slog.Debug("workspace container not running, nothing to stop", "workspace", summary.Manifest.Name, "container", name, "status", status)
 		return nil
 	}
 
-	return l.driver.StopContainer(ctx, summary.Manifest.ContainerName)
+	return l.driver.StopContainer(ctx, name)
 }
 
 // UpdateOpenCode upgrades OpenCode to the latest npm release inside the
@@ -298,6 +313,7 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 // package survives and the persistent `opencode serve` process reloads it.
 func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string, error) {
 	name := summary.Manifest.ContainerName
+	slog.Info("updating OpenCode in workspace", "workspace", summary.Manifest.Name, "container", name)
 
 	// The container must be running to exec the upgrade into it.
 	if err := l.EnsureStarted(ctx, summary); err != nil {
@@ -313,6 +329,7 @@ func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string,
 		return "", err
 	}
 
+	slog.Debug("restarting container after OpenCode update", "workspace", summary.Manifest.Name, "container", name, "version", version)
 	if err := l.driver.StopContainer(ctx, name); err != nil {
 		return "", fmt.Errorf("restart after update: stop container: %w", err)
 	}
@@ -320,6 +337,7 @@ func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string,
 		return "", fmt.Errorf("restart after update: start container: %w", err)
 	}
 
+	slog.Info("OpenCode updated in workspace", "workspace", summary.Manifest.Name, "container", name, "version", version)
 	return version, nil
 }
 
@@ -349,6 +367,8 @@ func (l Lifecycle) openCodeVersion(ctx context.Context, containerName string) (s
 }
 
 func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {
+	slog.Info("deleting workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName, "image", summary.Manifest.ImageName)
+
 	if err := l.driver.RemoveContainer(ctx, summary.Manifest.ContainerName); err != nil {
 		return err
 	}
@@ -359,10 +379,12 @@ func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {
 		return err
 	}
 
+	slog.Info("workspace deleted", "workspace", summary.Manifest.Name)
 	return nil
 }
 
 func (l Lifecycle) AttachCommand(ctx context.Context, summary Summary) (*exec.Cmd, error) {
+	slog.Info("attaching to workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
 	if err := l.ensureCurrentRunning(ctx, summary); err != nil {
 		return nil, err
 	}
@@ -403,7 +425,11 @@ func (l Lifecycle) containerImageStale(ctx context.Context, manifest Manifest) (
 		return false, nil
 	}
 
-	return containerImage != currentImage, nil
+	stale := containerImage != currentImage
+	if stale {
+		slog.Debug("container image differs from current workspace image", "workspace", manifest.Name, "containerImage", containerImage, "currentImage", currentImage)
+	}
+	return stale, nil
 }
 
 func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error) {
@@ -425,6 +451,7 @@ func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error)
 // ShellCommand ensures the workspace container is running and returns a command
 // that opens an interactive shell inside it.
 func (l Lifecycle) ShellCommand(ctx context.Context, summary Summary) (*exec.Cmd, error) {
+	slog.Info("opening shell in workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
 	if err := l.EnsureStarted(ctx, summary); err != nil {
 		return nil, err
 	}
