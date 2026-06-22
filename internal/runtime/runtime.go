@@ -256,13 +256,21 @@ func (d CLIDriver) CreateContainer(ctx context.Context, spec ContainerSpec) erro
 		return fmt.Errorf("container command is required")
 	}
 
-	return d.run(ctx, createArgs(spec)...)
+	return d.run(ctx, createArgs(d.binary, spec)...)
 }
 
 // createArgs builds the runtime CLI arguments for creating a workspace
 // container. The workspace home directory is mounted read-write, and any extra
 // spec.Mounts (e.g. the global OpenCode templates) are layered on top.
-func createArgs(spec ContainerSpec) []string {
+//
+// The binary selects the user-namespace strategy. Under rootless Podman the
+// invoking host user maps to container root, so a `--user UID:GID` process
+// (a sub-uid) cannot write to the bind-mounted home, which is owned by the host
+// UID. `--userns=keep-id` maps the host UID/GID 1:1 into the container so the
+// process owns its home. Docker's default namespace already preserves the
+// numeric bind-mount ownership for `--user`, and it does not support keep-id,
+// so the flag is Podman-only.
+func createArgs(binary string, spec ContainerSpec) []string {
 	args := []string{
 		"create",
 		"--interactive",
@@ -273,6 +281,10 @@ func createArgs(spec ContainerSpec) []string {
 		"--env", "HOME=/home/debian",
 		"--env", "TERM=xterm-256color",
 		"--volume", spec.HomeDir + ":/home/debian",
+	}
+
+	if binary == "podman" {
+		args = append(args, "--userns", "keep-id")
 	}
 
 	for _, mount := range spec.Mounts {

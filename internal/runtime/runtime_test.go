@@ -23,7 +23,7 @@ func TestDriverName(t *testing.T) {
 }
 
 func TestCreateArgsIncludesReadOnlyMounts(t *testing.T) {
-	args := createArgs(ContainerSpec{
+	spec := ContainerSpec{
 		Name:      "opencode-manager-demo",
 		ImageName: "opencode-manager/demo:latest",
 		HomeDir:   "/data/demo/home",
@@ -34,7 +34,9 @@ func TestCreateArgsIncludesReadOnlyMounts(t *testing.T) {
 			{Source: "/cfg/skills", Target: "/home/debian/.config/opencode/skills", ReadOnly: true},
 		},
 		Command: []string{"opencode"},
-	})
+	}
+
+	args := createArgs("podman", spec)
 
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
@@ -49,6 +51,29 @@ func TestCreateArgsIncludesReadOnlyMounts(t *testing.T) {
 
 	if args[len(args)-1] != "opencode" || args[len(args)-2] != "opencode-manager/demo:latest" {
 		t.Fatalf("expected image then command at end of args, got: %v", args)
+	}
+}
+
+func TestCreateArgsUserNamespace(t *testing.T) {
+	spec := ContainerSpec{
+		Name:      "opencode-manager-demo",
+		ImageName: "opencode-manager/demo:latest",
+		HomeDir:   "/data/demo/home",
+		UID:       501,
+		GID:       20,
+		Command:   []string{"opencode"},
+	}
+
+	// Rootless Podman maps the host user to container root, so the workspace
+	// process needs keep-id to own its bind-mounted home.
+	if podman := strings.Join(createArgs("podman", spec), " "); !strings.Contains(podman, "--userns keep-id") {
+		t.Fatalf("podman create args missing --userns keep-id:\n%s", podman)
+	}
+
+	// Docker preserves numeric bind-mount ownership for --user and does not
+	// support keep-id, so the flag must not be passed.
+	if docker := strings.Join(createArgs("docker", spec), " "); strings.Contains(docker, "keep-id") {
+		t.Fatalf("docker create args must not include keep-id:\n%s", docker)
 	}
 }
 
