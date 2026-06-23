@@ -12,13 +12,22 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
 
-// editEntry is one row in the module editor: a catalog module plus whether it is
-// currently installed in the workspace and whether it is selected to be present
-// after applying.
+// editEntry is one row in the module editor. A singleton module has a single
+// toggle row. A multi-instance module has one row per installed/pending entry
+// plus an "add" action row (isAdd) that starts the prompt flow for a new entry.
 type editEntry struct {
-	mod       module.Module
+	mod module.Module
+	// id is the instance identity (module name for singletons, "name:keyvalue"
+	// for multi-instance entries). Empty on add rows.
+	id string
+	// label is what the row shows: the instance key value, or the module name.
+	label string
+	// isAdd marks the action row that creates a new instance of a multi module.
+	isAdd     bool
 	installed bool
 	selected  bool
+	// values holds the prompt values collected for a pending add.
+	values map[string]string
 }
 
 // editApplyMsg reports the result of applying module add/remove operations.
@@ -51,20 +60,29 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	installed := map[string]bool{}
-	for _, mod := range selected.Manifest.Modules {
-		installed[mod.Name] = true
+	installedByMod := map[string][]workspace.ModuleInstance{}
+	for _, inst := range selected.Manifest.Modules {
+		installedByMod[inst.Name] = append(installedByMod[inst.Name], inst)
 	}
 
 	entries := make([]editEntry, 0, len(catalog))
 	for _, mod := range catalog {
-		entries = append(entries, editEntry{mod: mod, installed: installed[mod.Name], selected: installed[mod.Name]})
+		insts := installedByMod[mod.Name]
+		if !mod.Multi() {
+			installed := len(insts) > 0
+			entries = append(entries, editEntry{mod: mod, id: mod.Name, label: mod.Name, installed: installed, selected: installed})
+			continue
+		}
+		// Multi-instance: one toggle row per installed entry, then an add row.
+		for _, inst := range insts {
+			entries = append(entries, editEntry{mod: mod, id: inst.InstanceID(), label: inst.Value(mod.Key), installed: true, selected: true})
+		}
+		entries = append(entries, editEntry{mod: mod, isAdd: true, label: mod.Name})
 	}
 
 	m.editMode = true
 	m.editEntries = entries
 	m.editPos = 0
-	m.editValues = map[string]map[string]string{}
 	m.catalogErr = ""
 	m.message = "Edit modules — space toggles, a applies, esc cancels."
 	return m, nil
@@ -77,7 +95,6 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		m.editMode = false
 		m.editEntries = nil
-		m.editValues = nil
 		m.message = "Edit cancelled."
 	case "up", "k":
 		if m.editPos > 0 {
@@ -105,29 +122,43 @@ func (m model) toggleEditEntry() (tea.Model, tea.Cmd) {
 	}
 
 	entry := m.editEntries[m.editPos]
+
+	// The add row always starts a fresh prompt flow for a new instance.
+	if entry.isAdd {
+		return m.startEditPrompt(entry.mod, m.editPos)
+	}
+
 	if entry.selected {
 		entry.selected = false
 		m.editEntries[m.editPos] = entry
-		delete(m.editValues, entry.mod.Name)
 		return m, nil
 	}
 
-	// Turning a not-yet-installed module on: collect its prompt values first.
-	if !entry.installed && len(entry.mod.Prompts) > 0 {
-		m.editPrompting = true
-		m.editPromptMod = entry.mod
-		m.editPromptIdx = 0
-		m.editPromptVals = map[string]string{}
-		m.editPromptInput = entry.mod.Prompts[0].Default
-		m.message = ""
-		return m, nil
+	// Turning a not-yet-installed entry on: collect prompt values first, unless
+	// they were already collected (re-selecting a pending add).
+	if !entry.installed && entry.values == nil && len(entry.mod.Prompts) > 0 {
+		return m.startEditPrompt(entry.mod, m.editPos)
 	}
 
 	entry.selected = true
 	m.editEntries[m.editPos] = entry
-	if _, ok := m.editValues[entry.mod.Name]; !ok {
-		m.editValues[entry.mod.Name] = map[string]string{}
+	return m, nil
+}
+
+// startEditPrompt opens the prompt flow for the module triggered from the given
+// row. row is the editEntries index recorded so finishEditPrompt knows where to
+// place the result (the singleton row itself, or the multi module's add row).
+func (m model) startEditPrompt(mod module.Module, row int) (tea.Model, tea.Cmd) {
+	m.editPrompting = true
+	m.editPromptMod = mod
+	m.editPromptRow = row
+	m.editPromptIdx = 0
+	m.editPromptVals = map[string]string{}
+	m.editPromptInput = ""
+	if len(mod.Prompts) > 0 {
+		m.editPromptInput = mod.Prompts[0].Default
 	}
+	m.message = ""
 	return m, nil
 }
 
@@ -179,15 +210,42 @@ func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// finishEditPrompt records the collected values and marks the module selected.
+// finishEditPrompt records the collected values. For a singleton it marks the
+// triggering row selected; for a multi-instance module it inserts a new pending
+// entry above the add row (or re-selects a matching existing row).
 func (m *model) finishEditPrompt() {
-	name := m.editPromptMod.Name
-	m.editValues[name] = m.editPromptVals
-	for i := range m.editEntries {
-		if m.editEntries[i].mod.Name == name {
-			m.editEntries[i].selected = true
+	mod := m.editPromptMod
+	vals := m.editPromptVals
+
+	if mod.Multi() {
+		id := mod.InstanceID(vals)
+		for i := range m.editEntries {
+			if !m.editEntries[i].isAdd && m.editEntries[i].id == id {
+				m.editEntries[i].selected = true
+				m.editEntries[i].values = vals
+				m.finishPromptReset(mod.Name)
+				return
+			}
 		}
+		newEntry := editEntry{mod: mod, id: id, label: vals[mod.Key], selected: true, values: vals}
+		idx := m.editPromptRow
+		if idx < 0 || idx > len(m.editEntries) {
+			idx = len(m.editEntries)
+		}
+		m.editEntries = append(m.editEntries[:idx], append([]editEntry{newEntry}, m.editEntries[idx:]...)...)
+		m.editPos = idx
+		m.finishPromptReset(mod.Name)
+		return
 	}
+
+	if i := m.editPromptRow; i >= 0 && i < len(m.editEntries) {
+		m.editEntries[i].selected = true
+		m.editEntries[i].values = vals
+	}
+	m.finishPromptReset(mod.Name)
+}
+
+func (m *model) finishPromptReset(name string) {
 	m.editPrompting = false
 	m.editPromptVals = nil
 	m.editPromptInput = ""
@@ -209,11 +267,14 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 	var adds []addOp
 	var removes []string
 	for _, e := range m.editEntries {
+		if e.isAdd {
+			continue
+		}
 		switch {
 		case e.selected && !e.installed:
-			adds = append(adds, addOp{mod: e.mod, vals: m.editValues[e.mod.Name]})
+			adds = append(adds, addOp{mod: e.mod, vals: e.values})
 		case !e.selected && e.installed:
-			removes = append(removes, e.mod.Name)
+			removes = append(removes, e.id)
 		}
 	}
 
@@ -284,24 +345,33 @@ func (m model) renderEditPage(width, height int) string {
 }
 
 func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int) string {
-	box := "[ ]"
-	if e.selected {
-		box = "[x]"
-	}
+	var text string
+	if e.isAdd {
+		text = "[+] " + e.mod.Name + " — add entry…"
+	} else {
+		box := "[ ]"
+		if e.selected {
+			box = "[x]"
+		}
 
-	marker := ""
-	switch {
-	case e.selected && !e.installed:
-		marker = " (will install)"
-	case !e.selected && e.installed:
-		marker = " (will remove)"
-	case e.installed:
-		marker = " (installed)"
-	}
+		marker := ""
+		switch {
+		case e.selected && !e.installed:
+			marker = " (will install)"
+		case !e.selected && e.installed:
+			marker = " (will remove)"
+		case e.installed:
+			marker = " (installed)"
+		}
 
-	text := box + " " + e.mod.Name + marker
-	if e.mod.Description != "" {
-		text += " — " + e.mod.Description
+		name := e.label
+		if e.mod.Multi() {
+			name = e.mod.Name + " (" + e.label + ")"
+		}
+		text = box + " " + name + marker
+		if !e.mod.Multi() && e.mod.Description != "" {
+			text += " — " + e.mod.Description
+		}
 	}
 	line := fit(text, contentWidth)
 

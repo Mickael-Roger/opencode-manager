@@ -1,8 +1,0 @@
-name: github
-version: 1
-description: Configure a GitHub token (GH_TOKEN/GITHUB_TOKEN) and git HTTPS credentials.
-prompts:
-  - name: token
-    label: GitHub token
-    type: secret
-    required: true

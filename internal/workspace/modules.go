@@ -86,7 +86,7 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 	}
 
 	manifest := summary.Manifest
-	manifest.Modules = upsertModule(manifest.Modules, mod.Name, mod.Version, values)
+	manifest.Modules = upsertModule(manifest.Modules, mod.InstanceID(values), mod.Name, mod.Version, values)
 	manifest.UpdatedAt = time.Now().UTC()
 	if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
 		return err
@@ -104,15 +104,19 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 }
 
 // RemoveModule runs a module's uninstall script and drops it from the manifest.
-func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, name string) error {
-	slog.Info("removing module from workspace", "workspace", summary.Manifest.Name, "module", name)
+// id is the instance identity (ModuleInstance.InstanceID): the module name for a
+// singleton, or "name:keyvalue" for one entry of a multi-instance module.
+func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string) error {
+	slog.Info("removing module from workspace", "workspace", summary.Manifest.Name, "module", id)
 	if err := l.EnsureStarted(ctx, summary); err != nil {
 		return err
 	}
 
+	modName := id
 	values := map[string]string{}
 	for _, m := range summary.Manifest.Modules {
-		if m.Name == name {
+		if m.InstanceID() == id {
+			modName = m.Name
 			values = valuesFromInstance(m)
 		}
 	}
@@ -120,12 +124,12 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, name strin
 	homeDir := summary.Manifest.HomeDir
 	before := envHash(homeDir)
 
-	if err := l.runModuleScript(ctx, summary, name, module.UninstallScript, "uninstall", values); err != nil {
+	if err := l.runModuleScript(ctx, summary, modName, module.UninstallScript, "uninstall", values); err != nil {
 		return err
 	}
 
 	manifest := summary.Manifest
-	manifest.Modules = removeModule(manifest.Modules, name)
+	manifest.Modules = removeModule(manifest.Modules, id)
 	manifest.UpdatedAt = time.Now().UTC()
 	if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
 		return err
@@ -138,7 +142,7 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, name strin
 		l.bounceServer(ctx, manifest.ContainerName)
 	}
 
-	slog.Info("module removed", "workspace", manifest.Name, "module", name)
+	slog.Info("module removed", "workspace", manifest.Name, "module", id)
 	return nil
 }
 
@@ -158,7 +162,7 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 
 	changed := false
 	for _, m := range manifest.Modules {
-		if v, ok := installed[m.Name]; ok && v == m.Version {
+		if v, ok := installed[m.InstanceID()]; ok && v == m.Version {
 			continue
 		}
 		slog.Info("reconciling module", "workspace", manifest.Name, "module", m.Name)
@@ -223,6 +227,7 @@ func (l Lifecycle) bounceServer(ctx context.Context, containerName string) {
 }
 
 type markerEntry struct {
+	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Version int    `json:"version"`
 }
@@ -241,7 +246,11 @@ func (l Lifecycle) readMarker(ctx context.Context, containerName string) map[str
 		return result
 	}
 	for _, e := range entries {
-		result[e.Name] = e.Version
+		id := e.ID
+		if id == "" {
+			id = e.Name
+		}
+		result[id] = e.Version
 	}
 	return result
 }
@@ -249,7 +258,7 @@ func (l Lifecycle) readMarker(ctx context.Context, containerName string) map[str
 func (l Lifecycle) writeMarker(ctx context.Context, containerName string, mods []ModuleInstance) error {
 	entries := make([]markerEntry, 0, len(mods))
 	for _, m := range mods {
-		entries = append(entries, markerEntry{Name: m.Name, Version: m.Version})
+		entries = append(entries, markerEntry{ID: m.InstanceID(), Name: m.Name, Version: m.Version})
 	}
 	data, err := json.Marshal(entries)
 	if err != nil {
@@ -284,25 +293,27 @@ func envHash(homeDir string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func upsertModule(mods []ModuleInstance, name string, version int, values map[string]string) []ModuleInstance {
+func upsertModule(mods []ModuleInstance, id, name string, version int, values map[string]string) []ModuleInstance {
 	vals := make(map[string]any, len(values))
 	for key, value := range values {
 		vals[key] = value
 	}
 	for i := range mods {
-		if mods[i].Name == name {
+		if mods[i].InstanceID() == id {
+			mods[i].ID = id
+			mods[i].Name = name
 			mods[i].Version = version
 			mods[i].Values = vals
 			return mods
 		}
 	}
-	return append(mods, ModuleInstance{Name: name, Version: version, Values: vals})
+	return append(mods, ModuleInstance{Name: name, ID: id, Version: version, Values: vals})
 }
 
-func removeModule(mods []ModuleInstance, name string) []ModuleInstance {
+func removeModule(mods []ModuleInstance, id string) []ModuleInstance {
 	out := make([]ModuleInstance, 0, len(mods))
 	for _, m := range mods {
-		if m.Name != name {
+		if m.InstanceID() != id {
 			out = append(out, m)
 		}
 	}

@@ -31,14 +31,14 @@ func TestEnvHashChangesWithContent(t *testing.T) {
 
 func TestUpsertAndRemoveModule(t *testing.T) {
 	var mods []ModuleInstance
-	mods = upsertModule(mods, "aws", 1, map[string]string{"profile": "prod"})
-	mods = upsertModule(mods, "git", 1, nil)
+	mods = upsertModule(mods, "aws", "aws", 1, map[string]string{"profile": "prod"})
+	mods = upsertModule(mods, "git", "git", 1, nil)
 	if len(mods) != 2 {
 		t.Fatalf("expected 2 modules, got %d", len(mods))
 	}
 
 	// Upsert existing updates version/values in place.
-	mods = upsertModule(mods, "aws", 2, map[string]string{"profile": "dev"})
+	mods = upsertModule(mods, "aws", "aws", 2, map[string]string{"profile": "dev"})
 	if len(mods) != 2 {
 		t.Fatalf("upsert should not append duplicate, got %d", len(mods))
 	}
@@ -51,6 +51,40 @@ func TestUpsertAndRemoveModule(t *testing.T) {
 	mods = removeModule(mods, "aws")
 	if len(mods) != 1 || mods[0].Name != "git" {
 		t.Fatalf("removeModule did not drop aws: %+v", mods)
+	}
+}
+
+// TestMultiInstanceModule verifies that several entries of the same module
+// (distinguished by instance ID) coexist and are upserted/removed independently.
+func TestMultiInstanceModule(t *testing.T) {
+	var mods []ModuleInstance
+	mods = upsertModule(mods, "ssh:github.com", "ssh", 1, map[string]string{"host": "github.com"})
+	mods = upsertModule(mods, "ssh:gitlab.com", "ssh", 1, map[string]string{"host": "gitlab.com"})
+	if len(mods) != 2 {
+		t.Fatalf("expected 2 ssh instances, got %d: %+v", len(mods), mods)
+	}
+
+	// Re-upserting one instance updates it in place without touching the other.
+	mods = upsertModule(mods, "ssh:github.com", "ssh", 1, map[string]string{"host": "github.com", "user": "git"})
+	if len(mods) != 2 {
+		t.Fatalf("upsert of existing instance should not append, got %d", len(mods))
+	}
+
+	// Removing one instance leaves the other.
+	mods = removeModule(mods, "ssh:github.com")
+	if len(mods) != 1 || mods[0].InstanceID() != "ssh:gitlab.com" {
+		t.Fatalf("removeModule did not target the right instance: %+v", mods)
+	}
+}
+
+// TestInstanceIDFallback verifies a manifest entry with no ID (written before
+// multi-instance support) reports its name as identity.
+func TestInstanceIDFallback(t *testing.T) {
+	if got := (ModuleInstance{Name: "git"}).InstanceID(); got != "git" {
+		t.Fatalf("InstanceID fallback = %q, want git", got)
+	}
+	if got := (ModuleInstance{Name: "ssh", ID: "ssh:github.com"}).InstanceID(); got != "ssh:github.com" {
+		t.Fatalf("InstanceID = %q, want ssh:github.com", got)
 	}
 }
 

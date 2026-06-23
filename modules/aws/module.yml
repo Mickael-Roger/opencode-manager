@@ -1,6 +1,7 @@
 name: aws
 version: 1
 description: Install the AWS CLI and write an isolated named profile + credentials.
+key: profile
 prompts:
   - name: profile
     label: AWS profile name

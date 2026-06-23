@@ -10,7 +10,7 @@ fs.mkdirSync(managerDir, { mode: 0o700, recursive: true });
 fs.mkdirSync(modulesDir, { mode: 0o700, recursive: true });
 
 ensureConfig();
-copyMissingEntries(path.join(packageRoot, "modules"), modulesDir);
+syncModules(path.join(packageRoot, "modules"), modulesDir);
 
 function userConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
@@ -45,31 +45,24 @@ function ensureConfig() {
   fs.writeFileSync(configPath, config, { mode: 0o600 });
 }
 
-function copyMissingEntries(source, destination) {
+// syncModules copies every module directory from the package's modules/ into
+// the user config, overwriting built-in modules so updates take effect.
+// User-authored modules with different names are left untouched.
+function syncModules(source, destination) {
   if (!fs.existsSync(source)) {
     return;
   }
 
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    if (entry.name === ".gitkeep") {
+    if (!entry.isDirectory()) {
       continue;
     }
 
     const sourcePath = path.join(source, entry.name);
     const destinationPath = path.join(destination, entry.name);
 
-    if (fs.existsSync(destinationPath)) {
-      continue;
-    }
-
-    if (entry.isDirectory()) {
-      fs.cpSync(sourcePath, destinationPath, { recursive: true, mode: fs.constants.COPYFILE_EXCL });
-      continue;
-    }
-
-    if (entry.isFile()) {
-      fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
-    }
+    fs.rmSync(destinationPath, { recursive: true, force: true });
+    fs.cpSync(sourcePath, destinationPath, { recursive: true });
   }
 }
 
