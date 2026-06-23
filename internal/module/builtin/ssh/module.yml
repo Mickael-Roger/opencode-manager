@@ -1,0 +1,18 @@
+name: ssh
+version: 1
+description: Add an SSH key and host alias (written to ~/.ssh) for this workspace.
+prompts:
+  - name: host
+    label: Host alias (e.g. github.com)
+    type: string
+    required: true
+  - name: hostname
+    label: Hostname (defaults to the alias)
+    type: string
+  - name: user
+    label: SSH user
+    type: string
+    default: git
+  - name: private_key
+    label: Private key, raw or base64 (optional)
+    type: secret

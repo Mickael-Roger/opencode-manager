@@ -156,12 +156,12 @@ func (r Registry) Delete(summary Summary) error {
 }
 
 func (r Registry) createLayout(workspacePath string) error {
-	// The global OpenCode templates (opencode.json, AGENTS.md, agents/,
-	// commands/, plugins/, skills/) are mounted read-only from
-	// ~/.config/opencode-manager at container creation, so they are not
-	// materialized here. Only the writable home layout is created;
-	// .config/opencode remains read-write for OpenCode's own state
-	// (e.g. auth credentials) under the read-only template mounts.
+	// opencode.json and AGENTS.md are mounted read-only from
+	// ~/.config/opencode-manager at container creation. The OpenCode asset
+	// directories (agents/, commands/, plugins/, skills/) are seeded into the
+	// home by ensureWorkspaceOpenCodeAssets during provisioning so they are
+	// writable by module install scripts; they are not materialized here. Only
+	// the writable home layout is created.
 	dirs := []string{
 		"home",
 		filepath.Join("home", "workspace"),

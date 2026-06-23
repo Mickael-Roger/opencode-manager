@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mickael-menu/opencode-manager/internal/config"
+	"github.com/mickael-menu/opencode-manager/internal/module"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
@@ -47,6 +48,18 @@ type model struct {
 	showDescribe  bool
 	tokens        map[string]tokenState
 	versions      map[string]versionState
+
+	// module edit flow (see edit.go)
+	editMode        bool
+	editEntries     []editEntry
+	editPos         int
+	editValues      map[string]map[string]string // module name -> collected prompt values
+	catalogErr      string
+	editPrompting   bool
+	editPromptMod   module.Module
+	editPromptIdx   int
+	editPromptInput string
+	editPromptVals  map[string]string
 }
 
 // versionState caches the OpenCode version reported by a running workspace
@@ -354,6 +367,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("OpenCode updated to %s in %s.", msg.version, msg.name)
 		delete(m.versions, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
+	case editApplyMsg:
+		if msg.err != nil {
+			slog.Error("module edit failed", "workspace", msg.name, "error", msg.err)
+			m.message = fmt.Sprintf("Module edit failed for %s: %v", msg.name, msg.err)
+			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
+		}
+		slog.Info("module edit completed", "workspace", msg.name, "summary", msg.summary)
+		m.message = fmt.Sprintf("Modules updated for %s: %s.", msg.name, msg.summary)
+		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case baseImageReadyMsg:
 		if msg.err != nil {
 			slog.Error("base image creation failed", "error", msg.err)
@@ -430,6 +452,12 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.filterMode {
 		return m.updateFilter(msg)
+	}
+	if m.editPrompting {
+		return m.updateEditPrompt(msg)
+	}
+	if m.editMode {
+		return m.updateEdit(msg)
 	}
 	if m.showDescribe {
 		switch msg.String() {
@@ -811,7 +839,7 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 		m.dialogFocus = 0
 		m.message = "Enter a workspace name. Press Enter to create, Esc to cancel."
 	case "edit":
-		m.message = m.workspaceActionMessage("Edit")
+		return m.editSelected()
 	case "update":
 		return m.updateSelected()
 	default:
@@ -852,14 +880,20 @@ func (m model) View() string {
 	bodyHeight = max(3, bodyHeight)
 
 	var body string
-	if m.showDescribe {
+	switch {
+	case m.editMode:
+		body = m.renderEditPage(width, bodyHeight)
+	case m.showDescribe:
 		body = m.renderDescribePage(width, bodyHeight)
-	} else {
+	default:
 		body = m.renderTable(width, bodyHeight)
 	}
 
 	view := lipgloss.JoinVertical(lipgloss.Left, header, body, crumbs, prompt)
 
+	if m.editPrompting {
+		view = overlayCentered(view, m.renderEditPrompt(), width, height)
+	}
 	if m.createMode {
 		view = overlayCentered(view, m.renderCreatePrompt(), width, height)
 	}
@@ -1089,6 +1123,9 @@ func (m model) renderCrumbs() string {
 	crumbs := crumbStyle.Render("workspaces")
 	if m.showDescribe {
 		crumbs += " " + crumbStyle.Render("describe")
+	}
+	if m.editMode {
+		crumbs += " " + crumbStyle.Render("edit")
 	}
 	if m.filter != "" {
 		crumbs += " " + filterStyle.Render("/"+m.filter)
@@ -1591,15 +1628,6 @@ func (m model) workspaceVersion(ws workspace.Summary) string {
 func (m model) isRunning(name string) bool {
 	status, ok := m.statuses[name]
 	return ok && status.Container == runtime.StatusRunning
-}
-
-func (m model) workspaceActionMessage(action string) string {
-	name := m.selectedWorkspaceName()
-	if name == "" {
-		return fmt.Sprintf("%s requires a selected workspace.", action)
-	}
-
-	return fmt.Sprintf("%s selected for %s. This action is not wired yet.", action, name)
 }
 
 func (m model) visibleWorkspaces() []workspace.Summary {

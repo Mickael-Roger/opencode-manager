@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -25,6 +26,10 @@ const (
 // attachScriptName is the file name of the attach wrapper, both within the build
 // context and at /usr/local/bin inside the image.
 const attachScriptName = "opencode-manager-attach"
+
+// EntrypointPath is the supervisor entrypoint inside the image; it is the
+// container's main process (see entrypointScript).
+const EntrypointPath = "/usr/local/bin/" + entrypointScriptName
 
 // attachScript is the attach wrapper copied into the base image. The container's
 // main process is a persistent `opencode serve`, and attaching runs a TUI client
@@ -53,6 +58,42 @@ fi
 exec opencode attach "$url" --dir "$dir"
 `
 
+// entrypointScriptName is the file name of the supervisor entrypoint, both in
+// the build context and at /usr/local/bin inside the image.
+const entrypointScriptName = "opencode-manager-entrypoint"
+
+// entrypointScript is the container's main process (PID 1). It sources the
+// per-workspace ~/.env before launching the OpenCode server so module-provided
+// environment variables reach the server process (and every tool it spawns).
+//
+// The server runs as a background child; killing only that child (for example
+// `pkill -f 'opencode serve'`, which the manager does after a module edits
+// ~/.env) makes the loop re-source ~/.env and relaunch the server, so an env
+// change needs only a cheap in-place server bounce, not a container recreate.
+// A SIGTERM from `docker stop` is trapped and forwarded to the child so the
+// container still stops cleanly.
+//
+// Like the attach wrapper it is shipped as a COPYed build-context file rather
+// than a heredoc, which the buildah builder used by Podman does not support.
+const entrypointScript = `#!/bin/sh
+child=""
+shutdown() {
+  [ -n "$child" ] && kill -TERM "$child" 2>/dev/null
+  exit 0
+}
+trap shutdown TERM INT
+while true; do
+  set -a
+  [ -f "$HOME/.env" ] && . "$HOME/.env"
+  set +a
+  opencode serve --hostname 127.0.0.1 --port 4096 &
+  child=$!
+  wait "$child"
+  child=""
+  sleep 0.5
+done
+`
+
 type Driver interface {
 	Name() string
 	Available(context.Context) error
@@ -69,6 +110,20 @@ type Driver interface {
 	ExecCommand(string, []string) *exec.Cmd
 	ExecOutput(context.Context, string, []string) ([]byte, error)
 	ExecOutputAs(context.Context, string, string, []string) ([]byte, error)
+	Exec(context.Context, ExecSpec) ([]byte, error)
+}
+
+// ExecSpec runs a command inside a running container as a specific user and
+// with extra environment variables. It is used to run module install/uninstall
+// scripts (as the workspace user, which has passwordless sudo) with their
+// prompt values passed as OCM_* variables.
+type ExecSpec struct {
+	Container string
+	// User is the container user to run as ("" keeps the container's default
+	// user, "0" runs as root). Module scripts run as the default workspace user.
+	User string
+	Env  map[string]string
+	Args []string
 }
 
 type BaseBuildSpec struct {
@@ -170,6 +225,11 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 	attachPath := filepath.Join(dir, attachScriptName)
 	if err := os.WriteFile(attachPath, []byte(attachScript), 0o755); err != nil {
 		return fmt.Errorf("write attach script: %w", err)
+	}
+
+	entrypointPath := filepath.Join(dir, entrypointScriptName)
+	if err := os.WriteFile(entrypointPath, []byte(entrypointScript), 0o755); err != nil {
+		return fmt.Errorf("write entrypoint script: %w", err)
 	}
 
 	if err := d.run(ctx, "build", "-t", spec.ImageName, "-f", containerfile, dir); err != nil {
@@ -417,6 +477,45 @@ func (d CLIDriver) ExecOutputAs(ctx context.Context, name, user string, command 
 	return stdout.Bytes(), nil
 }
 
+// Exec runs a command inside a running container as the requested user with
+// extra environment variables and returns its combined output. Module scripts
+// run through here; their output is surfaced to the user on failure.
+func (d CLIDriver) Exec(ctx context.Context, spec ExecSpec) ([]byte, error) {
+	if spec.Container == "" {
+		return nil, fmt.Errorf("container name is required")
+	}
+	if len(spec.Args) == 0 {
+		return nil, fmt.Errorf("exec command is required")
+	}
+
+	args := []string{"exec"}
+	if spec.User != "" {
+		args = append(args, "--user", spec.User)
+	}
+	// Sort env keys so the command line is deterministic (eases logging/testing).
+	keys := make([]string, 0, len(spec.Env))
+	for key := range spec.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, "--env", key+"="+spec.Env[key])
+	}
+	args = append(args, spec.Container)
+	args = append(args, spec.Args...)
+
+	slog.Debug("running container exec", "runtime", d.binary, "container", spec.Container, "user", spec.User, "args", spec.Args)
+
+	cmd := exec.CommandContext(ctx, d.binary, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Debug("container exec failed", "runtime", d.binary, "container", spec.Container, "args", spec.Args, "error", err, "output", strings.TrimSpace(string(output)))
+		return output, fmt.Errorf("%s exec %s: %w: %s", d.binary, spec.Container, err, strings.TrimSpace(string(output)))
+	}
+
+	return output, nil
+}
+
 func (d CLIDriver) run(ctx context.Context, args ...string) error {
 	slog.Debug("running runtime command", "runtime", d.binary, "args", args)
 	cmd := exec.CommandContext(ctx, d.binary, args...)
@@ -499,11 +598,20 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	// for tokscale below.
 	b.WriteString("RUN npm install -g opencode-ai && which opencode && opencode --version\n")
 	b.WriteString("RUN npm install -g tokscale@latest && which tokscale\n")
-	// Attach wrapper: copied from the build context (see attachScript) rather than
-	// written via a heredoc, which the buildah builder used by Podman does not
-	// support in Containerfiles.
+	// Attach wrapper and supervisor entrypoint: copied from the build context
+	// (see attachScript/entrypointScript) rather than written via a heredoc,
+	// which the buildah builder used by Podman does not support in Containerfiles.
 	b.WriteString("COPY " + attachScriptName + " /usr/local/bin/" + attachScriptName + "\n")
-	b.WriteString("RUN chmod 0755 /usr/local/bin/" + attachScriptName + "\n")
+	b.WriteString("COPY " + entrypointScriptName + " /usr/local/bin/" + entrypointScriptName + "\n")
+	b.WriteString("RUN chmod 0755 /usr/local/bin/" + attachScriptName + " /usr/local/bin/" + entrypointScriptName + "\n")
+	// Passwordless sudo for the sudo group: module install scripts run as the
+	// unprivileged workspace user (so files they write into the bind-mounted home
+	// keep host ownership) but need root to install system packages. The
+	// workspace user is added to the sudo group in the workspace image layer.
+	b.WriteString("RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager\n")
+	// Source the per-workspace ~/.env from interactive shells (the `s`/shell
+	// action) so they see module-provided variables, mirroring the server.
+	b.WriteString("RUN echo '[ -f \"$HOME/.env\" ] && . \"$HOME/.env\"' >> /etc/bash.bashrc\n")
 	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
 
 	return b.String()
@@ -518,7 +626,10 @@ func renderWorkspaceContainerfile(spec BuildSpec) string {
 	b.WriteString("ARG GID\n\n")
 	b.WriteString("RUN set -eux; ")
 	b.WriteString("if getent group ${GID}; then group_name=$(getent group ${GID} | cut -d: -f1); else groupadd -g ${GID} debian && group_name=debian; fi; ")
-	b.WriteString("if getent passwd ${UID}; then user_name=$(getent passwd ${UID} | cut -d: -f1); usermod -d /home/debian -s /bin/bash ${user_name}; else useradd -m -u ${UID} -g ${GID} -s /bin/bash debian; fi; ")
+	b.WriteString("if getent passwd ${UID}; then user_name=$(getent passwd ${UID} | cut -d: -f1); usermod -d /home/debian -s /bin/bash ${user_name}; else useradd -m -u ${UID} -g ${GID} -s /bin/bash debian; user_name=debian; fi; ")
+	// Add the workspace user to the sudo group so module install scripts can use
+	// passwordless sudo (configured in the base image) for system packages.
+	b.WriteString("usermod -aG sudo ${user_name}; ")
 	b.WriteString("mkdir -p /home/debian/workspace && chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew\n")
 	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
 	b.WriteString("WORKDIR /home/debian/workspace\n")

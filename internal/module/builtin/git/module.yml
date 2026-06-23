@@ -1,0 +1,12 @@
+name: git
+version: 1
+description: Configure the git identity (user.name / user.email) for this workspace.
+prompts:
+  - name: name
+    label: Git user name
+    type: string
+    required: true
+  - name: email
+    label: Git email
+    type: string
+    required: true

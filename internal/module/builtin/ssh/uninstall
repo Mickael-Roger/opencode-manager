@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+
+rm -f "$HOME/.ssh/id_$OCM_HOST" "$HOME/.ssh/config.d/$OCM_HOST.conf"
+
+echo "ssh host '$OCM_HOST' removed"

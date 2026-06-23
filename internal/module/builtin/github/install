@@ -1,0 +1,21 @@
+#!/bin/sh
+# Exports GH_TOKEN/GITHUB_TOKEN via ~/.env (read by the gh CLI and many tools)
+# and configures git to authenticate to github.com over HTTPS with the token.
+set -e
+
+set_env() {
+  touch "$HOME/.env"
+  tmp="$(mktemp)"
+  grep -v "^export $1=" "$HOME/.env" > "$tmp" 2>/dev/null || true
+  printf 'export %s="%s"\n' "$1" "$2" >> "$tmp"
+  mv "$tmp" "$HOME/.env"
+}
+
+set_env GH_TOKEN "$OCM_TOKEN"
+set_env GITHUB_TOKEN "$OCM_TOKEN"
+
+git config --global credential.helper store
+printf 'https://x-access-token:%s@github.com\n' "$OCM_TOKEN" > "$HOME/.git-credentials"
+chmod 600 "$HOME/.git-credentials"
+
+echo "github token configured"

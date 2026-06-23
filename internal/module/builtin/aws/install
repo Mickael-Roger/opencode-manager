@@ -1,0 +1,21 @@
+#!/bin/sh
+# Installs the AWS CLI (system package, needs sudo) and writes an isolated
+# profile via `aws configure set`, which is idempotent and edits the INI files
+# correctly so reconcile can re-run this safely.
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+if ! command -v aws >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends awscli
+fi
+
+mkdir -p "$HOME/.aws"
+chmod 700 "$HOME/.aws"
+
+[ -n "$OCM_REGION" ] && aws configure set region "$OCM_REGION" --profile "$OCM_PROFILE"
+[ -n "$OCM_ACCESS_KEY" ] && aws configure set aws_access_key_id "$OCM_ACCESS_KEY" --profile "$OCM_PROFILE"
+[ -n "$OCM_SECRET_KEY" ] && aws configure set aws_secret_access_key "$OCM_SECRET_KEY" --profile "$OCM_PROFILE"
+
+echo "aws profile '$OCM_PROFILE' configured"

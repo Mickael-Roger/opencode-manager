@@ -1,0 +1,44 @@
+#!/bin/sh
+# Writes an SSH key and a per-host config snippet under ~/.ssh. Idempotent: the
+# key and snippet are overwritten, and the Include line is added at most once.
+set -e
+
+: "${OCM_HOSTNAME:=$OCM_HOST}"
+: "${OCM_USER:=git}"
+
+mkdir -p "$HOME/.ssh/config.d"
+chmod 700 "$HOME/.ssh" "$HOME/.ssh/config.d"
+
+if [ -n "$OCM_PRIVATE_KEY" ]; then
+  keyfile="$HOME/.ssh/id_$OCM_HOST"
+  if printf '%s' "$OCM_PRIVATE_KEY" | base64 -d >/dev/null 2>&1; then
+    printf '%s' "$OCM_PRIVATE_KEY" | base64 -d > "$keyfile"
+  else
+    printf '%s\n' "$OCM_PRIVATE_KEY" > "$keyfile"
+  fi
+  chmod 600 "$keyfile"
+fi
+
+cfg="$HOME/.ssh/config"
+touch "$cfg"
+chmod 600 "$cfg"
+if ! grep -q 'Include config.d/\*.conf' "$cfg"; then
+  tmp="$(mktemp)"
+  printf 'Include config.d/*.conf\n\n' > "$tmp"
+  cat "$cfg" >> "$tmp"
+  mv "$tmp" "$cfg"
+  chmod 600 "$cfg"
+fi
+
+snip="$HOME/.ssh/config.d/$OCM_HOST.conf"
+{
+  printf 'Host %s\n' "$OCM_HOST"
+  printf '    HostName %s\n' "$OCM_HOSTNAME"
+  printf '    User %s\n' "$OCM_USER"
+  if [ -f "$HOME/.ssh/id_$OCM_HOST" ]; then
+    printf '    IdentityFile ~/.ssh/id_%s\n' "$OCM_HOST"
+  fi
+} > "$snip"
+chmod 600 "$snip"
+
+echo "ssh host '$OCM_HOST' configured"

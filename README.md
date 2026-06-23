@@ -68,21 +68,45 @@ At the workspace root, only `workspace.yaml` and `home/` should be created. Envi
 
 ## Module Model
 
-Modules are responsible for adding capabilities to a workspace.
+Modules add capabilities to a workspace. A module is a self-contained directory
+with a thin declarative `module.yml` and two executables that do all the work:
 
-A module can provide:
+```text
+modules/aws/
+  module.yml      # name, version, description, and the prompts to collect
+  install         # executable: install packages, write files, export env vars
+  uninstall       # executable: undo what install did
+```
 
-- Debian packages for the workspace image.
-- Environment variables.
-- Files written into the workspace home directory.
-- OpenCode config fragments.
-- OpenCode commands.
-- OpenCode skills.
-- OpenCode agents and plugins.
-- TUI prompts for required values.
-- Executable hooks for discovery, validation, generation, and updates.
+`module.yml` only declares metadata and the values to ask the user for:
 
-Example modules include `ssh`, `git`, `aws`, `kubernetes`, `github`, and `opencode`.
+```yaml
+name: aws
+version: 1
+description: Install the AWS CLI and write an isolated profile + credentials.
+prompts:
+  - { name: profile, label: AWS profile name, type: string, required: true }
+  - { name: region,  label: Default region, type: string, default: eu-west-3 }
+  - { name: secret_key, label: Secret access key, type: secret }
+```
+
+Everything else — installing packages (the scripts run as the workspace user and
+may use passwordless `sudo`), writing config files into the home directory, and
+exporting environment variables — is the `install` script's job. Prompt values
+are passed to the scripts as `OCM_*` environment variables (e.g. `OCM_PROFILE`).
+To export an environment variable, append `export VAR=value` to `~/.env`; a
+supervisor process sources it so the variable reaches the OpenCode server.
+
+Modules are a **runtime layer**, not an image layer: adding or removing a module
+on a running workspace just runs its `install`/`uninstall` inside the live
+container — no image rebuild and (usually) no restart. Edit a workspace's modules
+from the dashboard with `e`.
+
+The whole module directory is bind-mounted read-only into every workspace at
+`/opt/opencode-manager/modules`. Built-in modules (`git`, `ssh`, `aws`,
+`github`, `kubectl`, and a `hello` example) ship with opencode-manager and are
+extracted into your module directory at startup; drop your own module
+subdirectories alongside them.
 
 ## Configuration
 

@@ -1,0 +1,4 @@
+name: kubectl
+version: 1
+description: Install the kubectl CLI from the official Kubernetes apt repository.
+prompts: []

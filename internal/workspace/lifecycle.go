@@ -110,6 +110,14 @@ func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
 		slog.Debug("workspace container already running", "workspace", summary.Manifest.Name, "container", name)
 	}
 
+	// Converge module state: a freshly (re)created container has lost its
+	// writable layer, so reinstall any selected modules. This is a cheap no-op
+	// (one marker read) when nothing changed. A failure here is logged but does
+	// not prevent the container from being usable.
+	if err := l.reconcile(ctx, summary); err != nil {
+		slog.Warn("module reconcile failed", "workspace", summary.Manifest.Name, "container", name, "error", err)
+	}
+
 	return nil
 }
 
@@ -151,10 +159,19 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 
+	// Seed the workspace's OpenCode asset directories (and the manager status
+	// plugin) into the bind-mounted home so they are writable by module scripts.
+	if err := ensureWorkspaceOpenCodeAssets(manifest.HomeDir); err != nil {
+		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+
 	mounts, err := openCodeMounts(l.cfg.UseLocalOpenCodeAuth)
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
+	// Mount the host module directory read-only so module install/uninstall
+	// scripts are runnable inside the container.
+	mounts = append(mounts, moduleMounts(l.cfg)...)
 	if l.cfg.UseLocalOpenCodeAuth {
 		if err := os.MkdirAll(filepath.Join(manifest.HomeDir, ".local", "share", "opencode"), 0o700); err != nil {
 			return runtime.StatusUnknown, runtime.ContainerSpec{}, fmt.Errorf("create workspace OpenCode data directory: %w", err)
@@ -210,19 +227,24 @@ const openCodeConfigDir = openCodeHomeDir + "/.config/opencode"
 
 const openCodeAuthRelPath = ".local/share/opencode/auth.json"
 
-// globalTemplateMounts returns the read-only bind mounts that expose the global
+// openCodeMounts returns the read-only bind mounts that expose the global
 // OpenCode templates (~/.config/opencode-manager) inside the workspace at
-// /home/debian/.config/opencode. Editing a host template propagates live to
-// every workspace; adding or removing a template takes effect on the next
-// container (re)creation.
+// /home/debian/.config/opencode. Only the single-file templates (AGENTS.md and
+// opencode.json) are mounted live; editing one propagates to every workspace.
+//
+// The asset directories (agents/, commands/, plugins/, skills/) are NOT mounted:
+// they are seeded into the workspace home so module install scripts can write
+// OpenCode commands/skills/agents/plugins into them (see
+// ensureWorkspaceOpenCodeAssets). They are then workspace-owned, writable, and
+// persist across container recreation via the bind-mounted home.
 func openCodeMounts(useLocalAuth bool) ([]runtime.Mount, error) {
 	dir, err := config.GlobalDir()
 	if err != nil {
 		return nil, err
 	}
 
-	names := append([]string{"AGENTS.md", "opencode.json"}, config.GlobalTemplateDirs...)
-	mounts := make([]runtime.Mount, 0, len(names))
+	names := []string{"AGENTS.md", "opencode.json"}
+	mounts := make([]runtime.Mount, 0, len(names)+1)
 	for _, name := range names {
 		mounts = append(mounts, runtime.Mount{
 			Source:   filepath.Join(dir, name),
@@ -246,6 +268,71 @@ func openCodeMounts(useLocalAuth bool) ([]runtime.Mount, error) {
 	}
 
 	return mounts, nil
+}
+
+// ensureWorkspaceOpenCodeAssets seeds the OpenCode asset directories (agents/,
+// commands/, plugins/, skills/) into the workspace home from the global
+// templates the first time, and always refreshes the manager-owned status
+// plugin. Existing directories are left intact so workspace-level edits and
+// module-written assets are preserved.
+func ensureWorkspaceOpenCodeAssets(homeDir string) error {
+	globalDir, err := config.GlobalDir()
+	if err != nil {
+		return err
+	}
+
+	base := filepath.Join(homeDir, ".config", "opencode")
+	for _, name := range config.GlobalTemplateDirs {
+		dst := filepath.Join(base, name)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("check workspace OpenCode asset directory %q: %w", dst, err)
+		}
+		if err := os.MkdirAll(dst, 0o700); err != nil {
+			return fmt.Errorf("create workspace OpenCode asset directory %q: %w", dst, err)
+		}
+		if err := copyDirContents(filepath.Join(globalDir, name), dst); err != nil {
+			return fmt.Errorf("seed workspace OpenCode asset directory %q: %w", dst, err)
+		}
+	}
+
+	return EnsureWorkspaceStatusPlugin(base)
+}
+
+// copyDirContents recursively copies the contents of src into dst. A missing
+// src is treated as empty.
+func copyDirContents(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read directory %q: %w", src, err)
+	}
+
+	for _, entry := range entries {
+		s := filepath.Join(src, entry.Name())
+		d := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				return err
+			}
+			if err := copyDirContents(s, d); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(s)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(d, data, 0o600); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func localOpenCodeAuthPath() (string, error) {
@@ -470,13 +557,17 @@ func (l Lifecycle) Shell(ctx context.Context, summary Summary) (tea.Cmd, error) 
 	}), nil
 }
 
-// openCodeServeCommand is the container's main process: a persistent, headless
-// OpenCode server. It keeps the container alive, runs the agent (so work
-// continues while no client is attached), and loads the status-reporter plugin
-// so the dashboard reflects activity server-side. Each workspace container is
-// network-isolated, so binding 127.0.0.1:4096 is private to that container.
+// openCodeServeCommand is the container's main process: the supervisor
+// entrypoint, which sources the per-workspace ~/.env and then runs a persistent,
+// headless OpenCode server. The server keeps the container alive, runs the agent
+// (so work continues while no client is attached), and loads the status-reporter
+// plugin so the dashboard reflects activity server-side. Each workspace container
+// is network-isolated, so binding 127.0.0.1:4096 is private to that container.
+// Sourcing ~/.env lets module-provided environment variables reach the server
+// and the tools it spawns; bouncing only the server child reloads them without
+// recreating the container.
 func openCodeServeCommand() []string {
-	return []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "4096"}
+	return []string{runtime.EntrypointPath}
 }
 
 // openCodeSessionCommand runs a TUI client that attaches to the container's
@@ -582,7 +673,11 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 // images are invalidated and rebuilt. Bump this when editing the base
 // Containerfile (e.g. adding packages, the attach wrapper, or the OpenCode
 // install method).
-const baseImageRevision = 6
+//
+// Revision 7: added the supervisor entrypoint (sources ~/.env, reloadable
+// server), passwordless sudo for the sudo group, and the interactive-shell env
+// hook, for the module system.
+const baseImageRevision = 7
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {

@@ -76,6 +76,26 @@ func SeedStatusPlugin() error {
 	return nil
 }
 
+// EnsureWorkspaceStatusPlugin writes the manager-owned status-reporter plugin
+// into a workspace's OpenCode plugins directory, overwriting any previous copy
+// so the shipped version is always current. It is used now that the asset
+// directories are workspace-owned rather than mounted read-only from the global
+// templates (the manager owns and versions this plugin).
+func EnsureWorkspaceStatusPlugin(configDir string) error {
+	pluginsDir := filepath.Join(configDir, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		return fmt.Errorf("create workspace plugins directory %q: %w", pluginsDir, err)
+	}
+
+	path := filepath.Join(pluginsDir, statusPluginName)
+	if err := os.WriteFile(path, []byte(statusPluginJS), 0o600); err != nil {
+		return fmt.Errorf("write workspace status plugin %q: %w", path, err)
+	}
+
+	slog.Debug("ensured workspace status plugin", "path", path)
+	return nil
+}
+
 // readActivity reads and interprets the status file written by the plugin under
 // the host-side workspace home directory. The status file is created the first
 // time opencode boots in a workspace and persists afterwards, so its absence is
