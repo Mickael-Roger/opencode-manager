@@ -127,32 +127,64 @@ func TestCatalogFirstRootWins(t *testing.T) {
 	}
 }
 
-func TestEnvVarName(t *testing.T) {
-	if got := EnvVarName("access_key"); got != "OCM_ACCESS_KEY" {
-		t.Fatalf("EnvVarName = %q, want OCM_ACCESS_KEY", got)
+func TestMultiInstanceModule(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "ssh", `name: ssh
+version: 1
+key: host
+prompts:
+  - { name: host, label: Host, type: string, required: true }
+`)
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !mod.Multi() {
+		t.Fatal("expected multi-instance module")
+	}
+	if got := mod.InstanceID(map[string]string{"host": "github.com"}); got != "ssh:github.com" {
+		t.Fatalf("InstanceID = %q, want ssh:github.com", got)
 	}
 }
 
-// TestBuiltinsSeedAndLoad verifies every shipped built-in module extracts with
-// an executable install/uninstall and a valid module.yml.
-func TestBuiltinsSeedAndLoad(t *testing.T) {
-	dest := t.TempDir()
-	if err := SeedBuiltins(dest); err != nil {
-		t.Fatalf("SeedBuiltins: %v", err)
+func TestSingletonInstanceID(t *testing.T) {
+	mod := Module{Name: "git"}
+	if mod.Multi() {
+		t.Fatal("module without key should be singleton")
 	}
+	if got := mod.InstanceID(nil); got != "git" {
+		t.Fatalf("InstanceID = %q, want git", got)
+	}
+}
 
-	mods, err := Catalog([]string{dest})
-	if err != nil {
-		t.Fatalf("Catalog over seeded built-ins: %v", err)
+func TestLoadRejectsKeyWithoutPrompt(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "k", `name: k
+version: 1
+key: missing
+prompts:
+  - { name: host, label: Host, type: string, required: true }
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error for key not matching a prompt")
 	}
+}
 
-	found := map[string]bool{}
-	for _, m := range mods {
-		found[m.Name] = true
+func TestLoadRejectsKeyOnOptionalPrompt(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "k", `name: k
+version: 1
+key: host
+prompts:
+  - { name: host, label: Host, type: string }
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error for key prompt that is not required")
 	}
-	for _, want := range []string{"hello", "git", "aws", "github", "kubectl", "ssh"} {
-		if !found[want] {
-			t.Errorf("built-in module %q missing from catalog %v", want, found)
-		}
+}
+
+func TestEnvVarName(t *testing.T) {
+	if got := EnvVarName("access_key"); got != "OCM_ACCESS_KEY" {
+		t.Fatalf("EnvVarName = %q, want OCM_ACCESS_KEY", got)
 	}
 }

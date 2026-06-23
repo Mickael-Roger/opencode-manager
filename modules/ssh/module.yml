@@ -1,6 +1,7 @@
 name: ssh
 version: 1
 description: Add an SSH key and host alias (written to ~/.ssh) for this workspace.
+key: host
 prompts:
   - name: host
     label: Host alias (e.g. github.com)

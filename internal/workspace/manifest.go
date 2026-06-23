@@ -32,9 +32,29 @@ type ImageConfig struct {
 }
 
 type ModuleInstance struct {
-	Name    string         `yaml:"name"`
+	Name string `yaml:"name"`
+	// ID is the instance identity. For singleton modules it equals Name; for
+	// multi-instance modules it is "name:keyvalue", letting several entries of
+	// the same module coexist and be removed independently. Empty in manifests
+	// written before multi-instance support, where it falls back to Name.
+	ID      string         `yaml:"id,omitempty"`
 	Version int            `yaml:"version"`
 	Values  map[string]any `yaml:"values,omitempty"`
+}
+
+// InstanceID returns the stable identity of this installed instance, falling
+// back to the module name for singletons and pre-multi-instance manifests.
+func (mi ModuleInstance) InstanceID() string {
+	if mi.ID != "" {
+		return mi.ID
+	}
+	return mi.Name
+}
+
+// Value returns a named prompt value as a string, e.g. the key prompt used to
+// label a multi-instance entry.
+func (mi ModuleInstance) Value(name string) string {
+	return valueToString(mi.Values[name])
 }
 
 func LoadManifest(path string) (Manifest, error) {

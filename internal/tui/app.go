@@ -53,10 +53,10 @@ type model struct {
 	editMode        bool
 	editEntries     []editEntry
 	editPos         int
-	editValues      map[string]map[string]string // module name -> collected prompt values
 	catalogErr      string
 	editPrompting   bool
 	editPromptMod   module.Module
+	editPromptRow   int // editEntries index that triggered the prompt flow
 	editPromptIdx   int
 	editPromptInput string
 	editPromptVals  map[string]string
@@ -1218,7 +1218,7 @@ func (m model) describeFields(selected workspace.Summary) []describeField {
 	if len(manifest.Modules) > 0 {
 		names := make([]string, 0, len(manifest.Modules))
 		for _, mod := range manifest.Modules {
-			names = append(names, mod.Name)
+			names = append(names, mod.InstanceID())
 		}
 		modules = strings.Join(names, ", ")
 	}

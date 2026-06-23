@@ -1,9 +1,0 @@
-name: hello
-version: 1
-description: Example module — writes a greeting file and exports HELLO_NAME.
-prompts:
-  - name: name
-    label: Your name
-    type: string
-    required: true
-    default: world

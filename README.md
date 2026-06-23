@@ -103,10 +103,10 @@ container — no image rebuild and (usually) no restart. Edit a workspace's modu
 from the dashboard with `e`.
 
 The whole module directory is bind-mounted read-only into every workspace at
-`/opt/opencode-manager/modules`. Built-in modules (`git`, `ssh`, `aws`,
-`github`, `kubectl`, and a `hello` example) ship with opencode-manager and are
-extracted into your module directory at startup; drop your own module
-subdirectories alongside them.
+`/opt/opencode-manager/modules`. Built-in modules (`aws`, `git`, and `ssh`)
+ship in the top-level `modules/` directory and are installed into your module
+directory by the npm postinstall script; drop your own module subdirectories
+alongside them.
 
 ## Configuration
 

@@ -1,7 +1,0 @@
-#!/bin/sh
-set -e
-
-sudo apt-get remove -y kubectl 2>/dev/null || true
-sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/keyrings/kubernetes-apt-keyring.gpg 2>/dev/null || true
-
-echo "kubectl removed"

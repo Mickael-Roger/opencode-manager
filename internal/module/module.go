@@ -41,8 +41,29 @@ type Module struct {
 	Version     int
 	Description string
 	Prompts     []Prompt
+	// Key, when set, names the prompt whose value identifies one instance of a
+	// multi-instance module. Such a module can be installed several times in the
+	// same workspace (e.g. one ssh module per host), each entry added and removed
+	// independently. When empty the module is a singleton.
+	Key string
 	// Dir is the module's directory on the host.
 	Dir string
+}
+
+// Multi reports whether the module can be installed as multiple independent
+// instances, distinguished by the value of its Key prompt.
+func (m Module) Multi() bool { return m.Key != "" }
+
+// InstanceID returns the manifest/marker identity for an installation of this
+// module with the given prompt values. Singleton modules use their name, so a
+// second install replaces the first; multi-instance modules append the key
+// prompt value, so each distinct key is a separate, independently removable
+// entry.
+func (m Module) InstanceID(values map[string]string) string {
+	if m.Key == "" {
+		return m.Name
+	}
+	return m.Name + ":" + values[m.Key]
 }
 
 // Prompt is a value the manager collects from the user before installing a
@@ -66,6 +87,7 @@ type definition struct {
 	Name        string   `yaml:"name"`
 	Version     int      `yaml:"version"`
 	Description string   `yaml:"description"`
+	Key         string   `yaml:"key"`
 	Prompts     []Prompt `yaml:"prompts"`
 }
 
@@ -87,6 +109,7 @@ func Load(dir string) (Module, error) {
 		Version:     def.Version,
 		Description: def.Description,
 		Prompts:     def.Prompts,
+		Key:         def.Key,
 		Dir:         dir,
 	}
 
@@ -136,6 +159,27 @@ func (m Module) validate() error {
 
 		if (p.Type == PromptSelect || p.Type == PromptMultiSelect) && len(p.Options) == 0 {
 			return fmt.Errorf("prompt %q of type %q requires options", p.Name, p.Type)
+		}
+	}
+
+	// A multi-instance key must name a required prompt: its value identifies the
+	// instance, so it has to exist and never be empty.
+	if m.Key != "" {
+		var key *Prompt
+		for i := range m.Prompts {
+			if m.Prompts[i].Name == m.Key {
+				key = &m.Prompts[i]
+				break
+			}
+		}
+		if key == nil {
+			return fmt.Errorf("key %q does not match any prompt", m.Key)
+		}
+		if !key.Required {
+			return fmt.Errorf("key prompt %q must be required", m.Key)
+		}
+		if key.Secret() {
+			return fmt.Errorf("key prompt %q must not be a secret", m.Key)
 		}
 	}
 
