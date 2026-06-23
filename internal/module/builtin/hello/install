@@ -1,0 +1,18 @@
+#!/bin/sh
+# Example module: writes a greeting file into the workspace home and exports an
+# environment variable for the OpenCode server via ~/.env. Idempotent so it can
+# be re-run on every container recreation (reconcile).
+set -e
+
+: "${OCM_NAME:=world}"
+
+printf 'Hello, %s!\n' "$OCM_NAME" > "$HOME/hello.txt"
+
+# Idempotently set an export in ~/.env (replace any existing line for the key).
+touch "$HOME/.env"
+tmp="$(mktemp)"
+grep -v '^export HELLO_NAME=' "$HOME/.env" > "$tmp" 2>/dev/null || true
+printf 'export HELLO_NAME="%s"\n' "$OCM_NAME" >> "$tmp"
+mv "$tmp" "$HOME/.env"
+
+echo "hello module installed for $OCM_NAME"

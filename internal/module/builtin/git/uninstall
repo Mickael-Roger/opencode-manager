@@ -1,0 +1,6 @@
+#!/bin/sh
+
+git config --global --unset user.name 2>/dev/null || true
+git config --global --unset user.email 2>/dev/null || true
+
+echo "git identity removed"

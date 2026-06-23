@@ -11,7 +11,7 @@ import (
 
 func TestOpenCodeServeCommand(t *testing.T) {
 	got := openCodeServeCommand()
-	want := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "4096"}
+	want := []string{runtime.EntrypointPath}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("openCodeServeCommand = %#v, want %#v", got, want)
 	}

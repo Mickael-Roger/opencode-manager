@@ -1,0 +1,13 @@
+#!/bin/sh
+# Blanks the credentials for the profile. The AWS CLI has no "remove profile"
+# command, so the (now empty) profile entries are left in ~/.aws.
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+if command -v aws >/dev/null 2>&1; then
+  aws configure set aws_access_key_id "" --profile "$OCM_PROFILE" 2>/dev/null || true
+  aws configure set aws_secret_access_key "" --profile "$OCM_PROFILE" 2>/dev/null || true
+fi
+
+echo "aws profile '$OCM_PROFILE' credentials cleared"

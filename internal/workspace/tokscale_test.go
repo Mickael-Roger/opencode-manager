@@ -39,6 +39,9 @@ func (f *fakeDriver) ExecOutput(_ context.Context, _ string, args []string) ([]b
 func (f *fakeDriver) ExecOutputAs(ctx context.Context, name, _ string, args []string) ([]byte, error) {
 	return f.ExecOutput(ctx, name, args)
 }
+func (f *fakeDriver) Exec(ctx context.Context, spec runtime.ExecSpec) ([]byte, error) {
+	return f.ExecOutput(ctx, spec.Container, spec.Args)
+}
 
 func contains(args []string, want string) bool {
 	for _, a := range args {

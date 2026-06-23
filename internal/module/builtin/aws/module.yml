@@ -1,0 +1,19 @@
+name: aws
+version: 1
+description: Install the AWS CLI and write an isolated named profile + credentials.
+prompts:
+  - name: profile
+    label: AWS profile name
+    type: string
+    required: true
+    default: default
+  - name: region
+    label: Default region
+    type: string
+    default: eu-west-3
+  - name: access_key
+    label: Access key ID
+    type: string
+  - name: secret_key
+    label: Secret access key
+    type: secret

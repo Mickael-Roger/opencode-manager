@@ -9,6 +9,7 @@ import (
 
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/logging"
+	"github.com/mickael-menu/opencode-manager/internal/module"
 	"github.com/mickael-menu/opencode-manager/internal/tui"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
@@ -44,6 +45,16 @@ func main() {
 		slog.Error("failed to seed status plugin", "error", err)
 		fmt.Fprintf(os.Stderr, "failed to seed status plugin: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Extract the built-in modules into the primary module directory so they are
+	// available in the catalog and bind-mounted into workspace containers.
+	if len(cfg.ModuleDirs) > 0 {
+		if err := module.SeedBuiltins(cfg.ModuleDirs[0]); err != nil {
+			slog.Error("failed to seed built-in modules", "error", err)
+			fmt.Fprintf(os.Stderr, "failed to seed built-in modules: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if len(os.Args) > 1 {

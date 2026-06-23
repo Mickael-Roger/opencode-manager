@@ -396,12 +396,14 @@ Status as of 2026-06-20:
 - Added a live per-workspace OpenCode activity status to the central dashboard. A manager-owned OpenCode plugin (`opencode-manager-status.js`, embedded and seeded into the global `plugins/` template directory, mounted read-only into every workspace) listens to the OpenCode event bus and writes an aggregate status file to `home/.local/state/opencode-manager/status.json`. Because the workspace home is bind-mounted, the manager reads that file directly from the host with no exec or network call. The plugin maps events to states (`message`/`tool` → working, `permission.asked` → needs-approval, `session.idle` → idle, `session.error` → error) and heartbeats every 10s so a stale file means OpenCode is no longer running. The TUI now polls statuses every 2s on a ticker, shows an `ACTIVITY` column (unused / working / waiting / approval / error / asleep), adds the activity to the describe page, surfaces an `Attention` summary in the header (`N need approval, M waiting`), and rings the terminal bell when a workspace newly transitions into the approval state. A workspace that has never been used shows `unused`: the status file is created the first time OpenCode boots in a workspace and persists afterwards, so its absence (with the container stopped) is a reliable "never used" signal read from the host.
 - Made detaching from a workspace non-destructive and robust. Previously the container's main process *was* OpenCode (attached via `docker attach`), so Ctrl-C reached OpenCode and exiting it stopped the container, and the shared-TTY attach left the terminal in a flaky state across runs ("read escape sequence", stalled relaunches). This is solved with a **client/server split** using OpenCode's native `serve`/`attach` commands. The container's main process is a persistent headless server (`opencode serve --hostname 127.0.0.1 --port 4096`); attaching runs a fresh TUI **client** against it (`docker exec -it … /usr/local/bin/opencode-manager-attach`, which calls `opencode attach http://127.0.0.1:4096 --dir /home/debian/workspace [-c]`). Because the client is a separate process from the server, **Ctrl-C exits only the client** and the server keeps running in the background — no multiplexer, no key remapping, and the client draws directly to the real terminal so glyphs/UTF-8 render natively (earlier `tmux`/`screen`/`dtach` approaches each broke on nesting, redraw, or glyph mangling). The status-reporter plugin loads in the **server**, so the activity dashboard reflects work even with no client attached, and re-attaching reconnects to the same live session. Each workspace container is network-isolated, so binding `127.0.0.1:4096` is private to it (no host port published). The attach wrapper waits for the server to be listening, then asks it over HTTP whether a session exists to decide `--continue` vs a fresh session. OpenCode is installed from npm (`opencode-ai`). Because the container command and base image changed, the base image revision is bumped (forcing a one-time rebuild) and a container created from an outdated image is automatically recreated on next start (detected by comparing the container's image ID to the workspace image's current ID).
 
+- Implemented the module system as an **executable-based runtime layer** (rather than the declarative/hook design originally sketched below). A module is a self-contained directory `modules/<name>/` holding a thin `module.yml` (metadata + the prompts to collect) and `install`/`uninstall` executables that do all the work — install packages (`sudo` is available, passwordless), write files into the bind-mounted home, and export environment variables. Built-in modules (`hello`, `git`, `aws`, `github`, `kubectl`, `ssh`) are embedded in the binary and extracted to the primary module directory at startup; users can drop their own module subdirectories alongside them. The whole module directory is bind-mounted read-only into every workspace container at `/opt/opencode-manager/modules`. Adding/removing a module on a running workspace simply execs the module's `install`/`uninstall` inside the live container as the workspace user, with prompt values passed as `OCM_*` environment variables — no image rebuild, no container recreate. Environment variables are persisted to `~/.env` (in the bind-mounted home) and sourced by a supervisor entrypoint, so they survive recreation; when a module changes `~/.env`, the manager bounces only the OpenCode server process in place (idle-guarded) so the new variables take effect without recreating the container. A per-container `installed` marker (in the writable layer, wiped on recreate) drives a reconcile step in `EnsureStarted` that re-runs install scripts to converge a freshly recreated container back to the manifest. Module selection is editable from the dashboard with `e` (the module editor: toggle modules, fill prompts, apply). The OpenCode asset directories (`agents/`, `commands/`, `plugins/`, `skills/`) are now seeded into the workspace home (writable) instead of mounted read-only, so module install scripts can contribute OpenCode commands/skills/agents/plugins; `opencode.json` and `AGENTS.md` remain live read-only mounts.
+
 Current limitations:
 
-- Module loading and hooks are not implemented yet.
 - OpenCode client/server mode is intentionally not used.
 - Created containers are not started automatically by `create`; attach with `a` or `:attach` when ready to enter the workspace.
-- Module selection is not part of the create flow yet.
+- Host-side discovery (reading host SSH/AWS/kube config to pre-fill module prompts) is not implemented; module values come from TUI prompts.
+- Only the first configured `moduleDir` is mounted/used; secrets in prompt values are stored in plaintext in `workspace.yaml`.
 
 Security review notes before implementing container lifecycle actions:
 
@@ -433,26 +435,30 @@ Security review notes before implementing container lifecycle actions:
 
 ### Phase 3: Module System
 
-- [ ] Load declarative `module.yaml` files.
-- [ ] Render module templates.
-- [ ] Execute module hooks with JSON input/output.
-- [ ] Add module prompts to the TUI creation flow.
-- [ ] Store selected module values in workspace state.
+Implemented as an executable-based runtime layer (see the progress note above);
+the declarative/hook items below were superseded by `install`/`uninstall`
+executables.
+
+- [x] Load `module.yml` definitions (metadata + prompts).
+- [x] Run module `install`/`uninstall` executables inside the container.
+- [x] Add module prompts to the TUI edit flow.
+- [x] Store selected module values in workspace state (manifest).
+- [x] Bind-mount the module directory read-only into every workspace.
+- [x] Reconcile module state after container recreation.
 
 ### Phase 4: Built-In Modules
 
-- [ ] Implement `base`.
-- [ ] Implement `opencode`.
-- [ ] Implement `git`.
-- [ ] Implement `ssh`.
-- [ ] Implement one cloud module, preferably `aws`.
-- [ ] Implement `kubernetes`.
+- [x] Implement `git`.
+- [x] Implement `ssh`.
+- [x] Implement `aws`.
+- [x] Implement `github`.
+- [x] Implement `kubectl`.
+- [x] Implement `hello` (example).
 
 ### Phase 5: Update And Edit Flows
 
-- [ ] Edit workspace module values.
-- [ ] Re-run module application.
-- [ ] Rebuild workspace image when needed.
+- [x] Edit workspace module values (the `e` module editor: add/remove modules).
+- [x] Re-run module application (reconcile + live add/remove).
 - [x] Update OpenCode inside an existing workspace.
 - [x] Show workspace status and runtime health in the main TUI.
 

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -147,6 +148,53 @@ func TestRenderWorkspaceContainerfileUsesCachedBaseAndHostUIDGIDArgs(t *testing.
 		if !strings.Contains(content, want) {
 			t.Fatalf("workspace Containerfile missing %q:\n%s", want, content)
 		}
+	}
+}
+
+func TestRenderBaseContainerfileModuleSupport(t *testing.T) {
+	content := renderBaseContainerfile(BaseBuildSpec{
+		ImageName: "opencode-manager/base:test",
+		FromImage: "debian:stable-slim",
+	})
+
+	for _, want := range []string{
+		"COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint",
+		"chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint",
+		"%sudo ALL=(ALL) NOPASSWD:ALL",
+		"/etc/sudoers.d/opencode-manager",
+		"/etc/bash.bashrc",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("base Containerfile missing %q:\n%s", want, content)
+		}
+	}
+
+	// The supervisor entrypoint must source ~/.env and run the OpenCode server.
+	if !strings.Contains(entrypointScript, ". \"$HOME/.env\"") || !strings.Contains(entrypointScript, "opencode serve") {
+		t.Fatalf("entrypoint script missing env sourcing or server launch:\n%s", entrypointScript)
+	}
+}
+
+func TestRenderWorkspaceContainerfileAddsSudoGroup(t *testing.T) {
+	content := renderWorkspaceContainerfile(BuildSpec{
+		ImageName: "test:latest",
+		BaseImage: "opencode-manager/base:abc123",
+		UID:       501,
+		GID:       20,
+	})
+	if !strings.Contains(content, "usermod -aG sudo ${user_name}") {
+		t.Fatalf("workspace Containerfile missing sudo group membership:\n%s", content)
+	}
+}
+
+func TestExecBuildsUserAndEnvArgs(t *testing.T) {
+	// Exec runs the binary, so just confirm it validates inputs.
+	d := CLIDriver{binary: "docker"}
+	if _, err := d.Exec(context.Background(), ExecSpec{Container: "", Args: []string{"x"}}); err == nil {
+		t.Fatal("expected error for missing container")
+	}
+	if _, err := d.Exec(context.Background(), ExecSpec{Container: "c"}); err == nil {
+		t.Fatal("expected error for missing args")
 	}
 }
 

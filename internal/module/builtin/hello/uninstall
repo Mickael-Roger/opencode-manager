@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+rm -f "$HOME/hello.txt"
+
+if [ -f "$HOME/.env" ]; then
+  tmp="$(mktemp)"
+  grep -v '^export HELLO_NAME=' "$HOME/.env" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$HOME/.env"
+fi
+
+echo "hello module removed"

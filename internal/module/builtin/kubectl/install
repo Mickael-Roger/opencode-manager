@@ -1,0 +1,23 @@
+#!/bin/sh
+# Installs kubectl from pkgs.k8s.io. Idempotent: exits early if already present.
+set -e
+
+if command -v kubectl >/dev/null 2>&1; then
+  echo "kubectl already installed"
+  exit 0
+fi
+
+KVER=v1.30
+
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends ca-certificates curl gnupg
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/${KVER}/deb/Release.key" \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KVER}/deb/ /" \
+  | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends kubectl
+
+kubectl version --client
+echo "kubectl installed"
