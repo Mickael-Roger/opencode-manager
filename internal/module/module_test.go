@@ -25,6 +25,14 @@ func writeModule(t *testing.T, root, name, manifest string) string {
 	return dir
 }
 
+// writeExecutable adds an executable script named name to an existing module dir.
+func writeExecutable(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
 func TestLoadValidModule(t *testing.T) {
 	root := t.TempDir()
 	dir := writeModule(t, root, "aws", `name: aws
@@ -104,6 +112,90 @@ prompts:
 `)
 	if _, err := Load(dir); err == nil {
 		t.Fatal("expected error for select prompt without options")
+	}
+}
+
+func TestLoadSelectWithOptionsCommand(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "k8s", `name: k8s
+version: 1
+prompts:
+  - { name: contexts, label: Contexts, type: multiselect, required: true, optionsCommand: list }
+`)
+	writeExecutable(t, dir, "list")
+
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !mod.Prompts[0].DynamicOptions() {
+		t.Fatal("expected prompt to report dynamic options")
+	}
+}
+
+func TestLoadRejectsOptionsCommandOnNonSelect(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "bad", `name: bad
+version: 1
+prompts:
+  - { name: x, label: X, type: string, optionsCommand: list }
+`)
+	writeExecutable(t, dir, "list")
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error for optionsCommand on a non-select prompt")
+	}
+}
+
+func TestLoadRejectsMissingOptionsCommand(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "k8s", `name: k8s
+version: 1
+prompts:
+  - { name: contexts, label: Contexts, type: multiselect, required: true, optionsCommand: list }
+`)
+	// No "list" script written -> must fail.
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error for missing optionsCommand script")
+	}
+}
+
+func TestLoadResolveHook(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "k8s", `name: k8s
+version: 1
+prompts:
+  - { name: contexts, label: Contexts, type: multiselect, required: true, optionsCommand: list }
+`)
+	writeExecutable(t, dir, "list")
+
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load without resolve: %v", err)
+	}
+	if mod.HasResolveHook() {
+		t.Fatal("did not expect a resolve hook")
+	}
+
+	writeExecutable(t, dir, ResolveScript)
+	mod, err = Load(dir)
+	if err != nil {
+		t.Fatalf("Load with resolve: %v", err)
+	}
+	if !mod.HasResolveHook() {
+		t.Fatal("expected a resolve hook")
+	}
+}
+
+func TestLoadRejectsNonExecutableResolveHook(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "git", `name: git
+version: 1
+`)
+	if err := os.WriteFile(filepath.Join(dir, ResolveScript), []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatalf("write resolve: %v", err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error for non-executable resolve hook")
 	}
 }
 

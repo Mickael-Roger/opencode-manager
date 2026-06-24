@@ -1,0 +1,32 @@
+#!/bin/sh
+# Runs inside the workspace container. Installs kubectl (if missing) and writes
+# the kubeconfig produced by the host resolve hook ($OCM_KUBECONFIG, base64) to
+# ~/.kube/config. Idempotent: kubectl install is guarded and the config is
+# overwritten, so reconcile can re-run this safely.
+set -e
+
+if ! command -v kubectl >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) karch=arm64 ;;
+    *) karch=amd64 ;;
+  esac
+  ver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+  curl -fsSL "https://dl.k8s.io/release/${ver}/bin/linux/${karch}/kubectl" -o /tmp/kubectl
+  sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+  rm -f /tmp/kubectl
+fi
+
+mkdir -p "$HOME/.kube"
+chmod 700 "$HOME/.kube"
+
+if [ -n "$OCM_KUBECONFIG" ]; then
+  printf '%s' "$OCM_KUBECONFIG" | base64 -d >"$HOME/.kube/config"
+  chmod 600 "$HOME/.kube/config"
+  echo "kubernetes config written for contexts: ${OCM_CONTEXTS:-<none>}"
+else
+  echo "kubernetes: no contexts resolved (nothing written)"
+fi

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Removes only this profile from ~/.osc/config.json, leaving other profiles and
+# the octl binary in place (matching how other modules leave system tools).
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+cfg="$HOME/.osc/config.json"
+[ -f "$cfg" ] || exit 0
+
+tmp="$(mktemp)"
+jq --arg p "$OCM_PROFILE" 'del(.[$p])' "$cfg" >"$tmp"
+mv "$tmp" "$cfg"
+chmod 600 "$cfg"
+
+echo "outscale profile '$OCM_PROFILE' removed"

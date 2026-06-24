@@ -1,0 +1,8 @@
+#!/bin/sh
+# Removes the workspace kubeconfig. kubectl itself is left installed, matching
+# how other modules leave system packages in place.
+set -e
+
+rm -f "$HOME/.kube/config"
+
+echo "kubernetes kubeconfig removed"

@@ -3,6 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -154,12 +157,64 @@ func (m model) startEditPrompt(mod module.Module, row int) (tea.Model, tea.Cmd) 
 	m.editPromptRow = row
 	m.editPromptIdx = 0
 	m.editPromptVals = map[string]string{}
-	m.editPromptInput = ""
-	if len(mod.Prompts) > 0 {
-		m.editPromptInput = mod.Prompts[0].Default
-	}
 	m.message = ""
+	m.prepareEditPrompt()
 	return m, nil
+}
+
+// prepareEditPrompt initializes the input state for the prompt at the current
+// index: a text field for string/secret/bool prompts, or a loaded option list
+// (static or host-sourced) for select/multiselect prompts.
+func (m *model) prepareEditPrompt() {
+	prompts := m.editPromptMod.Prompts
+	m.editPromptInput = ""
+	m.editPromptOptions = nil
+	m.editPromptChosen = nil
+	m.editPromptCursor = 0
+	if m.editPromptIdx >= len(prompts) {
+		return
+	}
+	cur := prompts[m.editPromptIdx]
+	if cur.Type == module.PromptSelect || cur.Type == module.PromptMultiSelect {
+		opts, err := loadPromptOptions(m.editPromptMod, cur)
+		if err != nil {
+			m.message = fmt.Sprintf("Failed to load options for %s: %v", cur.Label, err)
+		}
+		m.editPromptOptions = opts
+		m.editPromptChosen = make([]bool, len(opts))
+		return
+	}
+	m.editPromptInput = cur.Default
+}
+
+// loadPromptOptions returns the choices for a select/multiselect prompt, from
+// the static Options list or by running the prompt's host-side optionsCommand.
+func loadPromptOptions(mod module.Module, p module.Prompt) ([]string, error) {
+	if !p.DynamicOptions() {
+		return append([]string(nil), p.Options...), nil
+	}
+	return runHostOptions(mod, p.OptionsCommand)
+}
+
+// runHostOptions executes a module's optionsCommand on the host and returns its
+// stdout as one option per non-empty line.
+func runHostOptions(mod module.Module, command string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(mod.Dir, command))
+	cmd.Dir = mod.Dir
+	cmd.Env = os.Environ()
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var opts []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			opts = append(opts, line)
+		}
+	}
+	return opts, nil
 }
 
 func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -170,15 +225,15 @@ func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	cur := prompts[m.editPromptIdx]
 
+	if cur.Type == module.PromptSelect || cur.Type == module.PromptMultiSelect {
+		return m.updateEditPromptSelect(msg, cur)
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc":
-		m.editPrompting = false
-		m.editPromptVals = nil
-		m.editPromptInput = ""
-		m.message = "Module selection cancelled."
-		return m, nil
+		return m.cancelEditPrompt()
 	case "enter":
 		val := strings.TrimSpace(m.editPromptInput)
 		if val == "" && cur.Default != "" {
@@ -188,15 +243,7 @@ func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("%s is required.", cur.Label)
 			return m, nil
 		}
-		m.editPromptVals[cur.Name] = val
-		m.editPromptIdx++
-		if m.editPromptIdx >= len(prompts) {
-			m.finishEditPrompt()
-			return m, nil
-		}
-		m.editPromptInput = prompts[m.editPromptIdx].Default
-		m.message = ""
-		return m, nil
+		return m.commitEditPromptValue(cur, val)
 	case "backspace", "ctrl+h":
 		if len(m.editPromptInput) > 0 {
 			m.editPromptInput = m.editPromptInput[:len(m.editPromptInput)-1]
@@ -208,6 +255,79 @@ func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+// updateEditPromptSelect handles key input for select/multiselect prompts:
+// move the cursor, toggle choices, and confirm.
+func (m model) updateEditPromptSelect(msg tea.KeyMsg, cur module.Prompt) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		return m.cancelEditPrompt()
+	case "up", "k":
+		if m.editPromptCursor > 0 {
+			m.editPromptCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if m.editPromptCursor < len(m.editPromptOptions)-1 {
+			m.editPromptCursor++
+		}
+		return m, nil
+	case " ", "x":
+		if m.editPromptCursor < len(m.editPromptChosen) {
+			if cur.Type == module.PromptSelect {
+				// Single select: choosing one clears the rest.
+				for i := range m.editPromptChosen {
+					m.editPromptChosen[i] = false
+				}
+			}
+			m.editPromptChosen[m.editPromptCursor] = !m.editPromptChosen[m.editPromptCursor]
+		}
+		return m, nil
+	case "enter":
+		var chosen []string
+		for i, ok := range m.editPromptChosen {
+			if ok {
+				chosen = append(chosen, m.editPromptOptions[i])
+			}
+		}
+		if cur.Required && len(chosen) == 0 {
+			if len(m.editPromptOptions) == 0 {
+				m.message = fmt.Sprintf("No options available for %s.", cur.Label)
+			} else {
+				m.message = fmt.Sprintf("Select at least one %s (space to toggle).", cur.Label)
+			}
+			return m, nil
+		}
+		return m.commitEditPromptValue(cur, strings.Join(chosen, ","))
+	}
+	return m, nil
+}
+
+// commitEditPromptValue stores the value for the current prompt and advances to
+// the next one, finishing the flow when the last prompt is answered.
+func (m model) commitEditPromptValue(cur module.Prompt, val string) (tea.Model, tea.Cmd) {
+	m.editPromptVals[cur.Name] = val
+	m.editPromptIdx++
+	m.message = ""
+	if m.editPromptIdx >= len(m.editPromptMod.Prompts) {
+		m.finishEditPrompt()
+		return m, nil
+	}
+	m.prepareEditPrompt()
+	return m, nil
+}
+
+func (m model) cancelEditPrompt() (tea.Model, tea.Cmd) {
+	m.editPrompting = false
+	m.editPromptVals = nil
+	m.editPromptInput = ""
+	m.editPromptOptions = nil
+	m.editPromptChosen = nil
+	m.message = "Module selection cancelled."
+	return m, nil
 }
 
 // finishEditPrompt records the collected values. For a singleton it marks the
@@ -249,6 +369,8 @@ func (m *model) finishPromptReset(name string) {
 	m.editPrompting = false
 	m.editPromptVals = nil
 	m.editPromptInput = ""
+	m.editPromptOptions = nil
+	m.editPromptChosen = nil
 	m.message = "Module " + name + " ready. Press a to apply."
 }
 
@@ -388,6 +510,10 @@ func (m model) renderEditPrompt() string {
 	}
 	cur := prompts[m.editPromptIdx]
 
+	if cur.Type == module.PromptSelect || cur.Type == module.PromptMultiSelect {
+		return m.renderEditPromptSelect(cur)
+	}
+
 	display := m.editPromptInput
 	if cur.Secret() {
 		display = strings.Repeat("•", len([]rune(m.editPromptInput)))
@@ -420,6 +546,44 @@ func (m model) renderEditPrompt() string {
 		lines = append(lines, mutedStyle.Render("(required)"))
 	}
 	lines = append(lines, "", field, "", mutedStyle.Render("Enter to continue, Esc to cancel."))
+
+	return k9sDialog("Module value", strings.Join(lines, "\n"), colBorder)
+}
+
+// renderEditPromptSelect renders the option list for a select/multiselect
+// prompt, with the cursor highlighted and chosen options checked.
+func (m model) renderEditPromptSelect(cur module.Prompt) string {
+	lines := []string{
+		dialogText.Render(fmt.Sprintf("%s  (%d/%d)", m.editPromptMod.Name, m.editPromptIdx+1, len(m.editPromptMod.Prompts))),
+		"",
+		dialogLabel.Render(cur.Label),
+	}
+	if cur.Required {
+		lines = append(lines, mutedStyle.Render("(required)"))
+	}
+	lines = append(lines, "")
+
+	if len(m.editPromptOptions) == 0 {
+		lines = append(lines, mutedStyle.Render("No options available."))
+	}
+	for i, opt := range m.editPromptOptions {
+		box := "[ ]"
+		if i < len(m.editPromptChosen) && m.editPromptChosen[i] {
+			box = "[x]"
+		}
+		row := box + " " + opt
+		if i == m.editPromptCursor {
+			lines = append(lines, cursorStyle.Render(row))
+		} else {
+			lines = append(lines, bodyStyle.Render(row))
+		}
+	}
+
+	hint := "↑/↓ move · space toggle · Enter confirm · Esc cancel"
+	if cur.Type == module.PromptSelect {
+		hint = "↑/↓ move · space select · Enter confirm · Esc cancel"
+	}
+	lines = append(lines, "", mutedStyle.Render(hint))
 
 	return k9sDialog("Module value", strings.Join(lines, "\n"), colBorder)
 }

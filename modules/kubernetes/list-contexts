@@ -1,0 +1,8 @@
+#!/bin/sh
+# Host-side optionsCommand: list the kube contexts available on the host. These
+# are the same contexts kubectx would show, since both read ~/.kube/config (and
+# any paths in $KUBECONFIG). Prints one context name per line; stays silent and
+# exits 0 when kubectl is unavailable or no config exists, so the selector just
+# shows "No options available".
+command -v kubectl >/dev/null 2>&1 || exit 0
+kubectl config get-contexts -o name 2>/dev/null || true

@@ -60,6 +60,10 @@ type model struct {
 	editPromptIdx   int
 	editPromptInput string
 	editPromptVals  map[string]string
+	// selector state for select/multiselect prompts (the active prompt's choices)
+	editPromptOptions []string
+	editPromptChosen  []bool
+	editPromptCursor  int
 }
 
 // versionState caches the OpenCode version reported by a running workspace

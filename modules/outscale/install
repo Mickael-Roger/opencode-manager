@@ -1,0 +1,44 @@
+#!/bin/sh
+# Installs octl (the Outscale CLI) from its GitHub release and writes an isolated
+# named profile into ~/.osc/config.json — the JSON file octl reads, keyed by
+# profile name. Idempotent and instance-scoped by $OCM_PROFILE: re-running edits
+# only that profile (via jq), so reconcile is safe and multiple profiles coexist.
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+if ! command -v octl >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) asset=octl_Linux_arm64 ;;
+    *) asset=octl_Linux_x86_64 ;;
+  esac
+  curl -fsSL -o /tmp/octl "https://github.com/outscale/octl/releases/latest/download/${asset}"
+  sudo install -m 0755 /tmp/octl /usr/local/bin/octl
+  rm -f /tmp/octl
+fi
+
+cfg="$HOME/.osc/config.json"
+mkdir -p "$HOME/.osc"
+chmod 700 "$HOME/.osc"
+[ -f "$cfg" ] || echo '{}' >"$cfg"
+
+# set_field merges one credential field into this profile, preserving the other
+# profiles and any fields not provided this run.
+set_field() {
+  [ -n "$2" ] || return 0
+  tmp="$(mktemp)"
+  jq --arg p "$OCM_PROFILE" --arg k "$1" --arg v "$2" \
+    '.[$p] = ((.[$p] // {}) + {($k): $v})' "$cfg" >"$tmp"
+  mv "$tmp" "$cfg"
+}
+
+set_field access_key "$OCM_ACCESS_KEY"
+set_field secret_key "$OCM_SECRET_KEY"
+set_field region "$OCM_REGION"
+chmod 600 "$cfg"
+
+echo "outscale profile '$OCM_PROFILE' configured"
