@@ -1,0 +1,20 @@
+name: outscale
+version: 1
+description: Install octl (the Outscale CLI) and write an isolated named AK/SK profile to ~/.osc/config.json.
+key: profile
+prompts:
+  - name: profile
+    label: Outscale profile name
+    type: string
+    required: true
+    default: default
+  - name: region
+    label: Region
+    type: string
+    default: eu-west-2
+  - name: access_key
+    label: Access key (AK)
+    type: string
+  - name: secret_key
+    label: Secret key (SK)
+    type: secret

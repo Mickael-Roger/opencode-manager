@@ -20,11 +20,22 @@ import (
 const ManifestFile = "module.yml"
 
 // InstallScript and UninstallScript are the executables every module must
-// provide, relative to the module directory.
+// provide, relative to the module directory. They run inside the workspace
+// container as the workspace user.
 const (
 	InstallScript   = "install"
 	UninstallScript = "uninstall"
 )
+
+// ResolveScript is an optional host-side hook, relative to the module
+// directory. When present, the manager runs it ON THE HOST before the container
+// install script, passing the collected prompt values as OCM_* environment
+// variables. It prints additional "key=value" lines that are merged into the
+// values handed to the install script (but not persisted to the manifest). This
+// lets a module derive container input from host-only state — e.g. reading
+// ~/.kube/config to extract the selected contexts. Unlike install/uninstall it
+// runs with full host access, so it is opt-in per module by simply existing.
+const ResolveScript = "resolve"
 
 // Prompt types.
 const (
@@ -75,8 +86,18 @@ type Prompt struct {
 	Type     string   `yaml:"type"`
 	Required bool     `yaml:"required"`
 	Options  []string `yaml:"options"`
-	Default  string   `yaml:"default"`
+	// OptionsCommand names an executable, relative to the module directory, that
+	// the manager runs ON THE HOST to populate a select/multiselect prompt's
+	// choices (one option per stdout line). It is an alternative to a static
+	// Options list — useful when the choices depend on host state, e.g. listing
+	// the user's kube contexts.
+	OptionsCommand string `yaml:"optionsCommand"`
+	Default        string `yaml:"default"`
 }
+
+// DynamicOptions reports whether this prompt sources its choices from a
+// host-side command instead of a static Options list.
+func (p Prompt) DynamicOptions() bool { return p.OptionsCommand != "" }
 
 // Secret reports whether the prompt holds a sensitive value that the UI should
 // mask. Such values are still stored in plaintext in the workspace manifest.
@@ -89,6 +110,11 @@ type definition struct {
 	Description string   `yaml:"description"`
 	Key         string   `yaml:"key"`
 	Prompts     []Prompt `yaml:"prompts"`
+}
+
+// HasResolveHook reports whether the module ships a host-side resolve script.
+func (m Module) HasResolveHook() bool {
+	return checkExecutable(filepath.Join(m.Dir, ResolveScript)) == nil
 }
 
 // Load reads and validates the module in dir.
@@ -157,8 +183,18 @@ func (m Module) validate() error {
 			return fmt.Errorf("prompt %q has unknown type %q", p.Name, p.Type)
 		}
 
-		if (p.Type == PromptSelect || p.Type == PromptMultiSelect) && len(p.Options) == 0 {
-			return fmt.Errorf("prompt %q of type %q requires options", p.Name, p.Type)
+		if p.Type == PromptSelect || p.Type == PromptMultiSelect {
+			if len(p.Options) == 0 && p.OptionsCommand == "" {
+				return fmt.Errorf("prompt %q of type %q requires options or an optionsCommand", p.Name, p.Type)
+			}
+		} else if p.OptionsCommand != "" {
+			return fmt.Errorf("prompt %q has optionsCommand but is not a select/multiselect", p.Name)
+		}
+
+		if p.OptionsCommand != "" {
+			if err := checkExecutable(filepath.Join(m.Dir, p.OptionsCommand)); err != nil {
+				return fmt.Errorf("prompt %q optionsCommand: %w", p.Name, err)
+			}
 		}
 	}
 
@@ -190,7 +226,21 @@ func (m Module) validate() error {
 		return err
 	}
 
+	// The resolve hook is optional, but if a file by that name exists it must be
+	// executable so the manager can run it on the host.
+	if resolve := filepath.Join(m.Dir, ResolveScript); fileExists(resolve) {
+		if err := checkExecutable(resolve); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// fileExists reports whether path names an existing file (of any kind).
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // checkExecutable verifies the script exists, is a regular file, and has an

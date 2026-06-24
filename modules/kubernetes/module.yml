@@ -1,0 +1,9 @@
+name: kubernetes
+version: 1
+description: Select host kube contexts and copy them into the workspace ~/.kube/config (installs kubectl).
+prompts:
+  - name: contexts
+    label: Kube contexts to import
+    type: multiselect
+    required: true
+    optionsCommand: list-contexts

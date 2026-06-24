@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -81,7 +82,11 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 	homeDir := summary.Manifest.HomeDir
 	before := envHash(homeDir)
 
-	if err := l.runModuleScript(ctx, summary, mod.Name, module.InstallScript, "install", values); err != nil {
+	installVals, err := l.resolveInstallValues(ctx, mod.Name, values)
+	if err != nil {
+		return err
+	}
+	if err := l.runModuleScript(ctx, summary, mod.Name, module.InstallScript, "install", installVals); err != nil {
 		return err
 	}
 
@@ -166,7 +171,11 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 			continue
 		}
 		slog.Info("reconciling module", "workspace", manifest.Name, "module", m.Name)
-		if err := l.runModuleScript(ctx, summary, m.Name, module.InstallScript, "install", valuesFromInstance(m)); err != nil {
+		installVals, err := l.resolveInstallValues(ctx, m.Name, valuesFromInstance(m))
+		if err != nil {
+			return err
+		}
+		if err := l.runModuleScript(ctx, summary, m.Name, module.InstallScript, "install", installVals); err != nil {
 			return err
 		}
 		changed = true
@@ -209,6 +218,58 @@ func (l Lifecycle) runModuleScript(ctx context.Context, summary Summary, modName
 	}
 	slog.Debug("module script ran", "module", modName, "phase", phase, "output", strings.TrimSpace(string(out)))
 	return nil
+}
+
+// resolveInstallValues runs a module's optional host-side resolve hook and
+// merges its output into the values passed to the container install script. The
+// hook runs ON THE HOST (with full host access and the collected prompt values
+// as OCM_* environment variables) and prints "key=value" lines; each becomes an
+// additional OCM_<KEY> for the install script. This lets a module derive
+// container input from host-only state (e.g. extract the selected kube contexts
+// from ~/.kube/config) without persisting that derived value to the manifest.
+// Modules without a resolve hook get their values back unchanged.
+func (l Lifecycle) resolveInstallValues(ctx context.Context, modName string, values map[string]string) (map[string]string, error) {
+	dir := primaryModuleDir(l.cfg)
+	if dir == "" {
+		return values, nil
+	}
+	script := filepath.Join(dir, modName, module.ResolveScript)
+	info, err := os.Stat(script)
+	if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+		return values, nil
+	}
+
+	env := os.Environ()
+	env = append(env, "OCM_MODULE="+modName)
+	for key, value := range values {
+		env = append(env, module.EnvVarName(key)+"="+value)
+	}
+
+	cmd := exec.CommandContext(ctx, script)
+	cmd.Env = env
+	cmd.Dir = filepath.Join(dir, modName)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("module %s resolve hook failed: %w", modName, err)
+	}
+
+	merged := make(map[string]string, len(values))
+	for key, value := range values {
+		merged[key] = value
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		i := strings.Index(line, "=")
+		if i <= 0 {
+			continue
+		}
+		merged[line[:i]] = line[i+1:]
+	}
+	slog.Debug("module resolve hook ran", "module", modName)
+	return merged, nil
 }
 
 // bounceServer kills the running OpenCode server so the supervisor entrypoint
