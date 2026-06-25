@@ -64,6 +64,24 @@ type model struct {
 	editPromptOptions []string
 	editPromptChosen  []bool
 	editPromptCursor  int
+
+	// import picker state: choosing which host accounts to import as new
+	// instances of a multi-instance module (e.g. existing AWS profiles).
+	editImporting       bool
+	editImportMod       module.Module
+	editImportRow       int // editEntries index of the triggering add row
+	editImportOptions   []string
+	editImportChosen    []bool
+	editImportCursor    int
+	editImportManualIdx int // cursor position of the "add manually" action row
+
+	// single-page form state: collecting all of a multi-instance module's
+	// prompt values at once for a manually-added entry.
+	editFormMode   bool
+	editFormMod    module.Module
+	editFormRow    int // editEntries index of the triggering add row
+	editFormVals   []string
+	editFormCursor int
 }
 
 // versionState caches the OpenCode version reported by a running workspace
@@ -456,6 +474,12 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.filterMode {
 		return m.updateFilter(msg)
+	}
+	if m.editFormMode {
+		return m.updateEditForm(msg)
+	}
+	if m.editImporting {
+		return m.updateEditImport(msg)
 	}
 	if m.editPrompting {
 		return m.updateEditPrompt(msg)
@@ -897,6 +921,12 @@ func (m model) View() string {
 
 	if m.editPrompting {
 		view = overlayCentered(view, m.renderEditPrompt(), width, height)
+	}
+	if m.editImporting {
+		view = overlayCentered(view, m.renderEditImport(), width, height)
+	}
+	if m.editFormMode {
+		view = overlayCentered(view, m.renderEditForm(), width, height)
 	}
 	if m.createMode {
 		view = overlayCentered(view, m.renderCreatePrompt(), width, height)

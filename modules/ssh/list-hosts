@@ -1,0 +1,23 @@
+#!/bin/sh
+# Host-side optionsCommand for the `host` (key) prompt: list the Host aliases
+# defined in the host SSH config, one per line. Reads ~/.ssh/config plus any
+# ~/.ssh/config.d/*.conf snippets. Pattern aliases (those containing * or ?) are
+# skipped since they are not concrete hosts to import. Stays silent and exits 0
+# when no config exists, so the picker just shows the manual entry option.
+set -e
+
+collect() {
+  [ -f "$HOME/.ssh/config" ] && cat "$HOME/.ssh/config"
+  for f in "$HOME"/.ssh/config.d/*.conf; do
+    [ -f "$f" ] && cat "$f"
+  done
+}
+
+collect 2>/dev/null |
+  awk 'tolower($1) == "host" {
+    for (i = 2; i <= NF; i++) {
+      h = $i
+      if (h !~ /[*?]/) print h
+    }
+  }' |
+  awk '!seen[$0]++'

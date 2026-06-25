@@ -7,6 +7,7 @@ prompts:
     label: Host alias (e.g. github.com)
     type: string
     required: true
+    optionsCommand: list-hosts
   - name: hostname
     label: Hostname (defaults to the alias)
     type: string

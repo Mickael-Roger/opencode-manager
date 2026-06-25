@@ -1,0 +1,26 @@
+#!/bin/sh
+# Host-side optionsCommand for the `profile` (key) prompt: list the AWS profiles
+# that have static credentials on the host, one per line. Only profiles with an
+# aws_access_key_id are importable (SSO/role profiles have no static key for the
+# resolve hook to copy), so those are the only ones offered. Stays silent and
+# exits 0 when no credentials file exists, so the picker just shows the manual
+# entry option.
+set -e
+
+cred="${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}"
+[ -f "$cred" ] || exit 0
+
+awk '
+  /^[[:space:]]*\[/ {
+    name = $0
+    sub(/^[^[]*\[/, "", name)
+    sub(/\].*/, "", name)
+    sub(/^[[:space:]]+/, "", name)
+    sub(/[[:space:]]+$/, "", name)
+    cur = name
+    next
+  }
+  /^[[:space:]]*aws_access_key_id[[:space:]]*=/ {
+    if (cur != "" && !seen[cur]) { print cur; seen[cur] = 1 }
+  }
+' "$cred"

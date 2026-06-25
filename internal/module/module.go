@@ -77,6 +77,17 @@ func (m Module) InstanceID(values map[string]string) string {
 	return m.Name + ":" + values[m.Key]
 }
 
+// PromptByName returns a pointer to the prompt with the given name, or nil when
+// the module has no such prompt.
+func (m Module) PromptByName(name string) *Prompt {
+	for i := range m.Prompts {
+		if m.Prompts[i].Name == name {
+			return &m.Prompts[i]
+		}
+	}
+	return nil
+}
+
 // Prompt is a value the manager collects from the user before installing a
 // module. The collected value is passed to the install/uninstall scripts as an
 // OCM_<NAME> environment variable.
@@ -187,8 +198,12 @@ func (m Module) validate() error {
 			if len(p.Options) == 0 && p.OptionsCommand == "" {
 				return fmt.Errorf("prompt %q of type %q requires options or an optionsCommand", p.Name, p.Type)
 			}
-		} else if p.OptionsCommand != "" {
-			return fmt.Errorf("prompt %q has optionsCommand but is not a select/multiselect", p.Name)
+		} else if p.OptionsCommand != "" && p.Name != m.Key {
+			// optionsCommand is normally for select/multiselect choices, but the
+			// key prompt of a multi-instance module may also carry one: there it
+			// lists the host accounts importable as new instances, while the prompt
+			// stays a free-text field so a brand-new account can be typed in.
+			return fmt.Errorf("prompt %q has optionsCommand but is not a select/multiselect or the module key", p.Name)
 		}
 
 		if p.OptionsCommand != "" {
