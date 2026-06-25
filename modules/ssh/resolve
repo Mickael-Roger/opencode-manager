@@ -1,0 +1,63 @@
+#!/bin/sh
+# Host-side resolve hook: given the imported host alias ($OCM_HOST), read its
+# stanza from the host SSH config and emit the HostName, User, and the referenced
+# IdentityFile's contents (base64) as install values. An imported instance stores
+# only the alias in the manifest while the key and connection details are pulled
+# from the host on every install/reconcile.
+#
+# Runs on the host (where ~/.ssh lives) before the container install. For a
+# manually-added host (alias not present on the host) it emits nothing, leaving
+# the values typed into the form in place.
+set -e
+
+[ -n "$OCM_HOST" ] || exit 0
+
+collect() {
+  [ -f "$HOME/.ssh/config" ] && cat "$HOME/.ssh/config"
+  for f in "$HOME"/.ssh/config.d/*.conf; do
+    [ -f "$f" ] && cat "$f"
+  done
+}
+
+# Extract the lines belonging to the matching Host stanza (everything until the
+# next Host line). Matches when the alias is one of the Host line's tokens.
+block="$(collect 2>/dev/null | awk -v target="$OCM_HOST" '
+  tolower($1) == "host" {
+    inblk = 0
+    for (i = 2; i <= NF; i++) if ($i == target) inblk = 1
+    next
+  }
+  inblk { print }
+')"
+
+[ -n "$block" ] || exit 0
+
+# field KEY prints the value of the first "KEY value" line in the stanza.
+field() {
+  printf '%s\n' "$block" | awk -v k="$1" '
+    tolower($1) == tolower(k) {
+      $1 = ""
+      sub(/^[[:space:]]+/, "")
+      print
+      exit
+    }'
+}
+
+hostname="$(field HostName)"
+user="$(field User)"
+idfile="$(field IdentityFile)"
+
+[ -n "$hostname" ] && printf 'hostname=%s\n' "$hostname"
+[ -n "$user" ] && printf 'user=%s\n' "$user"
+
+if [ -n "$idfile" ]; then
+  case "$idfile" in
+    "~/"*) idfile="$HOME/${idfile#"~/"}" ;;
+    "~") idfile="$HOME" ;;
+    "$HOME"/*) ;;
+  esac
+  if [ -f "$idfile" ]; then
+    printf 'private_key=%s\n' "$(base64 < "$idfile" | tr -d '\n')"
+  fi
+fi
+exit 0

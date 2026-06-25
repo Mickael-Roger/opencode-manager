@@ -1,0 +1,29 @@
+#!/bin/sh
+# Host-side resolve hook: given the imported profile name ($OCM_PROFILE), read
+# its AK/SK/region from the host ~/.osc/config.json and emit them as install
+# values, so an imported instance stores only the profile name in the manifest
+# while the real keys are pulled from the host on every install/reconcile.
+#
+# Runs on the host (where ~/.osc lives) before the container install. For a
+# manually-added profile (one not present on the host, or when jq is missing) it
+# emits nothing, leaving the values typed into the form in place.
+set -e
+
+[ -n "$OCM_PROFILE" ] || exit 0
+
+cfg="$HOME/.osc/config.json"
+[ -f "$cfg" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+
+prof="$(jq -e -c --arg p "$OCM_PROFILE" '.[$p]' "$cfg" 2>/dev/null)" || exit 0
+
+ak="$(printf '%s' "$prof" | jq -r '.access_key // empty')"
+sk="$(printf '%s' "$prof" | jq -r '.secret_key // empty')"
+region="$(printf '%s' "$prof" | jq -r '.region // empty')"
+
+[ -n "$ak" ] && [ -n "$sk" ] || exit 0
+
+printf 'access_key=%s\n' "$ak"
+printf 'secret_key=%s\n' "$sk"
+[ -n "$region" ] && printf 'region=%s\n' "$region"
+exit 0

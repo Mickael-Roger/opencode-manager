@@ -126,9 +126,10 @@ func (m model) toggleEditEntry() (tea.Model, tea.Cmd) {
 
 	entry := m.editEntries[m.editPos]
 
-	// The add row always starts a fresh prompt flow for a new instance.
+	// The add row starts the add flow for a new instance: an import picker of
+	// host accounts when the module exposes one, otherwise a single-page form.
 	if entry.isAdd {
-		return m.startEditPrompt(entry.mod, m.editPos)
+		return m.startEditAdd(entry.mod, m.editPos)
 	}
 
 	if entry.selected {
@@ -338,22 +339,7 @@ func (m *model) finishEditPrompt() {
 	vals := m.editPromptVals
 
 	if mod.Multi() {
-		id := mod.InstanceID(vals)
-		for i := range m.editEntries {
-			if !m.editEntries[i].isAdd && m.editEntries[i].id == id {
-				m.editEntries[i].selected = true
-				m.editEntries[i].values = vals
-				m.finishPromptReset(mod.Name)
-				return
-			}
-		}
-		newEntry := editEntry{mod: mod, id: id, label: vals[mod.Key], selected: true, values: vals}
-		idx := m.editPromptRow
-		if idx < 0 || idx > len(m.editEntries) {
-			idx = len(m.editEntries)
-		}
-		m.editEntries = append(m.editEntries[:idx], append([]editEntry{newEntry}, m.editEntries[idx:]...)...)
-		m.editPos = idx
+		m.addPendingInstance(mod, m.editPromptRow, vals)
 		m.finishPromptReset(mod.Name)
 		return
 	}
@@ -372,6 +358,238 @@ func (m *model) finishPromptReset(name string) {
 	m.editPromptOptions = nil
 	m.editPromptChosen = nil
 	m.message = "Module " + name + " ready. Press a to apply."
+}
+
+// addPendingInstance inserts a new pending entry for a multi-instance module at
+// row (or re-selects a matching existing entry), recording the collected values
+// and moving the cursor to it.
+func (m *model) addPendingInstance(mod module.Module, row int, vals map[string]string) {
+	id := mod.InstanceID(vals)
+	for i := range m.editEntries {
+		if !m.editEntries[i].isAdd && m.editEntries[i].id == id {
+			m.editEntries[i].selected = true
+			m.editEntries[i].values = vals
+			m.editPos = i
+			return
+		}
+	}
+	newEntry := editEntry{mod: mod, id: id, label: vals[mod.Key], selected: true, values: vals}
+	if row < 0 || row > len(m.editEntries) {
+		row = len(m.editEntries)
+	}
+	m.editEntries = append(m.editEntries[:row], append([]editEntry{newEntry}, m.editEntries[row:]...)...)
+	m.editPos = row
+}
+
+// startEditAdd begins adding a new entry to a multi-instance module. When the
+// module's key prompt declares an optionsCommand, it lists the host accounts not
+// already present and opens the import picker; with no importable accounts it
+// falls through to the single-page manual form.
+func (m model) startEditAdd(mod module.Module, row int) (tea.Model, tea.Cmd) {
+	if key := mod.PromptByName(mod.Key); key != nil && key.OptionsCommand != "" {
+		opts, err := runHostOptions(mod, key.OptionsCommand)
+		if err != nil {
+			m.message = fmt.Sprintf("Could not list host %s accounts: %v", mod.Name, err)
+		}
+		opts = filterPresentInstances(m.editEntries, mod, opts)
+		if len(opts) > 0 {
+			m.editImporting = true
+			m.editImportMod = mod
+			m.editImportRow = row
+			m.editImportOptions = opts
+			m.editImportChosen = make([]bool, len(opts))
+			m.editImportCursor = 0
+			m.editImportManualIdx = len(opts)
+			m.message = ""
+			return m, nil
+		}
+	}
+	return m.startEditForm(mod, row)
+}
+
+// filterPresentInstances drops the host account names already present (installed
+// or pending) as instances of mod, so the import picker only offers new ones.
+func filterPresentInstances(entries []editEntry, mod module.Module, names []string) []string {
+	present := map[string]bool{}
+	for _, e := range entries {
+		if !e.isAdd && e.mod.Name == mod.Name {
+			present[e.label] = true
+		}
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !present[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// updateEditImport handles the host-account import picker: toggle which accounts
+// to import (each becomes its own instance), or pick the "add manually" row to
+// open the form for an account not on the host.
+func (m model) updateEditImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.editImporting = false
+		m.message = "Add cancelled."
+		return m, nil
+	case "up", "k":
+		if m.editImportCursor > 0 {
+			m.editImportCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if m.editImportCursor < m.editImportManualIdx {
+			m.editImportCursor++
+		}
+		return m, nil
+	case " ", "x":
+		// Only the account rows are toggleable; the manual row is an action.
+		if m.editImportCursor < len(m.editImportChosen) {
+			m.editImportChosen[m.editImportCursor] = !m.editImportChosen[m.editImportCursor]
+		}
+		return m, nil
+	case "enter":
+		mod := m.editImportMod
+		if m.editImportCursor == m.editImportManualIdx {
+			m.editImporting = false
+			return m.startEditForm(mod, m.editImportRow)
+		}
+		var names []string
+		for i, ok := range m.editImportChosen {
+			if ok {
+				names = append(names, m.editImportOptions[i])
+			}
+		}
+		if len(names) == 0 {
+			m.message = "Select at least one to import (space), or choose Add manually."
+			return m, nil
+		}
+		// Imported instances store only the key; the module's resolve hook pulls
+		// the real credentials from the host at install time.
+		row := m.editImportRow
+		for _, name := range names {
+			m.addPendingInstance(mod, row, map[string]string{mod.Key: name})
+			row++
+		}
+		m.editImporting = false
+		m.message = fmt.Sprintf("%d %s entr%s ready. Press a to apply.", len(names), mod.Name, plural(len(names), "y", "ies"))
+		return m, nil
+	}
+	return m, nil
+}
+
+// startEditForm opens the single-page form that collects every prompt value for
+// one new entry of a multi-instance module at once.
+func (m model) startEditForm(mod module.Module, row int) (tea.Model, tea.Cmd) {
+	m.editFormMode = true
+	m.editFormMod = mod
+	m.editFormRow = row
+	m.editFormCursor = 0
+	m.editFormVals = make([]string, len(mod.Prompts))
+	for i, p := range mod.Prompts {
+		m.editFormVals[i] = p.Default
+	}
+	m.message = ""
+	return m, nil
+}
+
+// updateEditForm handles the single-page form: navigate between fields, edit the
+// focused one, and save the collected values as a pending entry.
+func (m model) updateEditForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	prompts := m.editFormMod.Prompts
+	if len(prompts) == 0 || m.editFormCursor >= len(prompts) {
+		m.editFormMode = false
+		return m, nil
+	}
+	cur := prompts[m.editFormCursor]
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.editFormMode = false
+		m.message = "Add cancelled."
+		return m, nil
+	case "up":
+		if m.editFormCursor > 0 {
+			m.editFormCursor--
+		}
+		return m, nil
+	case "down", "tab":
+		if m.editFormCursor < len(prompts)-1 {
+			m.editFormCursor++
+		}
+		return m, nil
+	case "enter":
+		return m.submitEditForm()
+	case "backspace", "ctrl+h":
+		if cur.Type != module.PromptBool {
+			s := m.editFormVals[m.editFormCursor]
+			if len(s) > 0 {
+				m.editFormVals[m.editFormCursor] = s[:len(s)-1]
+			}
+		}
+		return m, nil
+	case " ":
+		if cur.Type == module.PromptBool {
+			if m.editFormVals[m.editFormCursor] == "true" {
+				m.editFormVals[m.editFormCursor] = "false"
+			} else {
+				m.editFormVals[m.editFormCursor] = "true"
+			}
+		} else {
+			m.editFormVals[m.editFormCursor] += " "
+		}
+		return m, nil
+	default:
+		if cur.Type != module.PromptBool && len(msg.Runes) > 0 {
+			m.editFormVals[m.editFormCursor] += string(msg.Runes)
+		}
+		return m, nil
+	}
+}
+
+// submitEditForm validates the form fields and, when complete, records the
+// collected values as a pending entry.
+func (m model) submitEditForm() (tea.Model, tea.Cmd) {
+	mod := m.editFormMod
+	prompts := mod.Prompts
+	vals := map[string]string{}
+	for i, p := range prompts {
+		v := strings.TrimSpace(m.editFormVals[i])
+		if v == "" && p.Default != "" {
+			v = p.Default
+		}
+		if p.Required && v == "" {
+			m.editFormCursor = i
+			m.message = fmt.Sprintf("%s is required.", p.Label)
+			return m, nil
+		}
+		switch {
+		case p.Type == module.PromptBool:
+			if v == "" {
+				v = "false"
+			}
+			vals[p.Name] = v
+		case v != "":
+			vals[p.Name] = v
+		}
+	}
+	m.editFormMode = false
+	m.addPendingInstance(mod, m.editFormRow, vals)
+	m.message = "Module " + mod.Name + " ready. Press a to apply."
+	return m, nil
+}
+
+// plural returns the singular or plural suffix for n.
+func plural(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return singular
+	}
+	return pluralForm
 }
 
 func (m model) applyEdit() (tea.Model, tea.Cmd) {
@@ -586,4 +804,95 @@ func (m model) renderEditPromptSelect(cur module.Prompt) string {
 	lines = append(lines, "", mutedStyle.Render(hint))
 
 	return k9sDialog("Module value", strings.Join(lines, "\n"), colBorder)
+}
+
+// renderEditImport renders the host-account import picker: a checklist of
+// importable accounts plus an "add manually" action for accounts not on the
+// host.
+func (m model) renderEditImport() string {
+	mod := m.editImportMod
+	lines := []string{
+		dialogText.Render(fmt.Sprintf("Add %s — import from host", mod.Name)),
+		"",
+		dialogLabel.Render("Existing accounts on this host"),
+		"",
+	}
+	for i, opt := range m.editImportOptions {
+		box := "[ ]"
+		if i < len(m.editImportChosen) && m.editImportChosen[i] {
+			box = "[x]"
+		}
+		row := box + " " + opt
+		if i == m.editImportCursor {
+			lines = append(lines, cursorStyle.Render(row))
+		} else {
+			lines = append(lines, bodyStyle.Render(row))
+		}
+	}
+
+	manual := "＋ Add manually (account not on this host)…"
+	if m.editImportCursor == m.editImportManualIdx {
+		lines = append(lines, cursorStyle.Render(manual))
+	} else {
+		lines = append(lines, mutedStyle.Render(manual))
+	}
+
+	lines = append(lines, "", mutedStyle.Render("↑/↓ move · space toggle · Enter import/confirm · Esc cancel"))
+	return k9sDialog("Add "+mod.Name, strings.Join(lines, "\n"), colBorder)
+}
+
+// renderEditForm renders the single-page form collecting every prompt value for
+// a manually-added entry, with the focused field highlighted.
+func (m model) renderEditForm() string {
+	mod := m.editFormMod
+	prompts := mod.Prompts
+	lines := []string{
+		dialogText.Render(fmt.Sprintf("Add %s — new entry", mod.Name)),
+		"",
+	}
+	for i, p := range prompts {
+		val := ""
+		if i < len(m.editFormVals) {
+			val = m.editFormVals[i]
+		}
+		display := val
+		switch {
+		case p.Secret():
+			display = strings.Repeat("•", len([]rune(val)))
+		case p.Type == module.PromptBool:
+			if val == "true" {
+				display = "true"
+			} else {
+				display = "false"
+			}
+		}
+
+		focused := i == m.editFormCursor
+		var field string
+		if display == "" {
+			placeholder := "value"
+			if p.Default != "" {
+				placeholder = p.Default
+			}
+			field = mutedStyle.Render(placeholder)
+		} else {
+			field = dialogLabel.Render(display)
+		}
+		if focused && p.Type != module.PromptBool {
+			field += "▏"
+		}
+
+		label := p.Label
+		if p.Required {
+			label += " *"
+		}
+		if focused {
+			lines = append(lines, cursorStyle.Render("› "+label)+"  "+field)
+		} else {
+			lines = append(lines, bodyStyle.Render("  "+label)+"  "+field)
+		}
+	}
+
+	lines = append(lines, "", mutedStyle.Render("↑/↓ or Tab move · type to edit · Enter save · Esc cancel"))
+	return k9sDialog("Add "+mod.Name, strings.Join(lines, "\n"), colBorder)
 }

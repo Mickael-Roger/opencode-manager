@@ -1,0 +1,13 @@
+#!/bin/sh
+# Host-side optionsCommand for the `profile` (key) prompt: list the Outscale
+# profiles configured on the host, one per line, read from ~/.osc/config.json
+# (the same file octl uses, keyed by profile name). Stays silent and exits 0
+# when the file or jq is missing, so the picker just shows the manual entry
+# option.
+set -e
+
+cfg="$HOME/.osc/config.json"
+[ -f "$cfg" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+
+jq -r 'keys[]' "$cfg" 2>/dev/null || true

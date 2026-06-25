@@ -102,6 +102,17 @@ on a running workspace just runs its `install`/`uninstall` inside the live
 container — no image rebuild and (usually) no restart. Edit a workspace's modules
 from the dashboard with `e`.
 
+Multi-instance modules (`aws`, `outscale`, `ssh`) can list the accounts already
+configured on your host and import one or many in a single step. When you add an
+entry, the editor shows the host accounts it found — AWS/Outscale profiles, SSH
+host aliases — to import as separate instances, plus an **Add manually…** option
+that opens a one-page form with every field (name, keys, region…) for an account
+that is not on the host. Imported instances store only the account name in the
+workspace manifest; their secrets are pulled from the host at install time and
+never written to the manifest. This is wired with two host-side hooks: an
+`optionsCommand` on the module's `key` prompt that lists importable accounts, and
+a `resolve` script that reads the selected account's credentials from the host.
+
 The whole module directory is bind-mounted read-only into every workspace at
 `/opt/opencode-manager/modules`. Built-in modules (`aws`, `git`, `kubernetes`,
 `outscale`, and `ssh`) ship in the top-level `modules/` directory and are installed into your module

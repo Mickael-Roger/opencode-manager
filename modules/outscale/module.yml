@@ -8,6 +8,7 @@ prompts:
     type: string
     required: true
     default: default
+    optionsCommand: list-accounts
   - name: region
     label: Region
     type: string

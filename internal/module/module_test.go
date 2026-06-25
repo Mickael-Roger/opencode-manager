@@ -146,6 +146,25 @@ prompts:
 	}
 }
 
+func TestLoadAllowsOptionsCommandOnKeyPrompt(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "aws", `name: aws
+version: 1
+key: profile
+prompts:
+  - { name: profile, label: Profile, type: string, required: true, optionsCommand: list-accounts }
+  - { name: secret_key, label: Secret, type: secret }
+`)
+	writeExecutable(t, dir, "list-accounts")
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if key := mod.PromptByName("profile"); key == nil || key.OptionsCommand != "list-accounts" {
+		t.Fatalf("expected key prompt to carry optionsCommand: %+v", mod.Prompts)
+	}
+}
+
 func TestLoadRejectsMissingOptionsCommand(t *testing.T) {
 	root := t.TempDir()
 	dir := writeModule(t, root, "k8s", `name: k8s
