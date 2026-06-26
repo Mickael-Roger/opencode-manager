@@ -57,6 +57,15 @@ type Module struct {
 	// same workspace (e.g. one ssh module per host), each entry added and removed
 	// independently. When empty the module is a singleton.
 	Key string
+	// RestartServer reports whether installing or removing this module changes
+	// the workspace environment (~/.env) and therefore requires bouncing the
+	// OpenCode server for the change to take effect. When true, an edit is only
+	// allowed while the workspace is idle, since the bounce would interrupt an
+	// in-flight task. When false, the module only writes its own config files
+	// (e.g. ~/.kube/config, ~/.aws/credentials) that tools read live, so it can
+	// be installed or removed without restarting the server — even mid-task.
+	// Defaults to true (conservative) when the manifest omits it.
+	RestartServer bool
 	// Dir is the module's directory on the host.
 	Dir string
 }
@@ -114,13 +123,15 @@ func (p Prompt) DynamicOptions() bool { return p.OptionsCommand != "" }
 // mask. Such values are still stored in plaintext in the workspace manifest.
 func (p Prompt) Secret() bool { return p.Type == PromptSecret }
 
-// definition mirrors the on-disk module.yml.
+// definition mirrors the on-disk module.yml. RestartServer is a pointer so an
+// absent key defaults to true (restart required) rather than to Go's false.
 type definition struct {
-	Name        string   `yaml:"name"`
-	Version     int      `yaml:"version"`
-	Description string   `yaml:"description"`
-	Key         string   `yaml:"key"`
-	Prompts     []Prompt `yaml:"prompts"`
+	Name          string   `yaml:"name"`
+	Version       int      `yaml:"version"`
+	Description   string   `yaml:"description"`
+	Key           string   `yaml:"key"`
+	RestartServer *bool    `yaml:"restartServer"`
+	Prompts       []Prompt `yaml:"prompts"`
 }
 
 // HasResolveHook reports whether the module ships a host-side resolve script.
@@ -142,12 +153,13 @@ func Load(dir string) (Module, error) {
 	}
 
 	mod := Module{
-		Name:        def.Name,
-		Version:     def.Version,
-		Description: def.Description,
-		Prompts:     def.Prompts,
-		Key:         def.Key,
-		Dir:         dir,
+		Name:          def.Name,
+		Version:       def.Version,
+		Description:   def.Description,
+		Prompts:       def.Prompts,
+		Key:           def.Key,
+		RestartServer: def.RestartServer == nil || *def.RestartServer,
+		Dir:           dir,
 	}
 
 	if err := mod.validate(); err != nil {

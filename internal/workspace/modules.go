@@ -100,9 +100,7 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 		return err
 	}
 
-	if envHash(homeDir) != before {
-		l.bounceServer(ctx, manifest.ContainerName)
-	}
+	l.maybeBounce(ctx, manifest.ContainerName, mod.Name, mod.RestartServer, before, envHash(homeDir))
 
 	slog.Info("module added", "workspace", manifest.Name, "module", mod.Name)
 	return nil
@@ -125,6 +123,7 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string)
 			values = valuesFromInstance(m)
 		}
 	}
+	restartServer := l.moduleRestartServer(modName)
 
 	homeDir := summary.Manifest.HomeDir
 	before := envHash(homeDir)
@@ -143,9 +142,7 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string)
 		return err
 	}
 
-	if envHash(homeDir) != before {
-		l.bounceServer(ctx, manifest.ContainerName)
-	}
+	l.maybeBounce(ctx, manifest.ContainerName, modName, restartServer, before, envHash(homeDir))
 
 	slog.Info("module removed", "workspace", manifest.Name, "module", id)
 	return nil
@@ -166,6 +163,7 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 	before := envHash(homeDir)
 
 	changed := false
+	restartServer := false
 	for _, m := range manifest.Modules {
 		if v, ok := installed[m.InstanceID()]; ok && v == m.Version {
 			continue
@@ -179,6 +177,7 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 			return err
 		}
 		changed = true
+		restartServer = restartServer || l.moduleRestartServer(m.Name)
 	}
 
 	if !changed {
@@ -188,9 +187,7 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 	if err := l.writeMarker(ctx, manifest.ContainerName, manifest.Modules); err != nil {
 		return err
 	}
-	if envHash(homeDir) != before {
-		l.bounceServer(ctx, manifest.ContainerName)
-	}
+	l.maybeBounce(ctx, manifest.ContainerName, "reconcile", restartServer, before, envHash(homeDir))
 	return nil
 }
 
@@ -270,6 +267,42 @@ func (l Lifecycle) resolveInstallValues(ctx context.Context, modName string, val
 	}
 	slog.Debug("module resolve hook ran", "module", modName)
 	return merged, nil
+}
+
+// maybeBounce restarts the OpenCode server after a module change, but only when
+// the module declares it affects the environment (restartServer) AND ~/.env
+// actually changed. Splitting the decision this way keeps a promise the TUI's
+// idle guard relies on: a module declared restartServer:false is never bounced,
+// so it can be installed or removed mid-task without interrupting it. A module
+// that changes ~/.env despite declaring restartServer:false is a manifest bug —
+// we log it so the stale environment is diagnosable rather than silent.
+func (l Lifecycle) maybeBounce(ctx context.Context, containerName, modName string, restartServer bool, before, after string) {
+	if before == after {
+		return
+	}
+	if !restartServer {
+		slog.Warn("module changed ~/.env but is declared restartServer:false; not bouncing server (env change will not take effect until the next restart)", "container", containerName, "module", modName)
+		return
+	}
+	l.bounceServer(ctx, containerName)
+}
+
+// moduleRestartServer reports the RestartServer flag for a module by name,
+// loaded from the primary module directory. Removal and reconcile only have the
+// installed module name (not the loaded definition), so they look it up here.
+// Unknown or unreadable modules default to true (restart required) to stay on
+// the safe side.
+func (l Lifecycle) moduleRestartServer(name string) bool {
+	dir := primaryModuleDir(l.cfg)
+	if dir == "" {
+		return true
+	}
+	mod, err := module.Load(filepath.Join(dir, name))
+	if err != nil {
+		slog.Debug("could not load module to read restartServer flag; assuming restart required", "module", name, "error", err)
+		return true
+	}
+	return mod.RestartServer
 }
 
 // bounceServer kills the running OpenCode server so the supervisor entrypoint

@@ -1,6 +1,9 @@
 name: outscale
 version: 1
 description: Install octl (the Outscale CLI) and write an isolated named AK/SK profile to ~/.osc/config.json.
+# Only writes ~/.osc/config.json; nothing in ~/.env, so it never bounces the
+# OpenCode server and can be edited while a task is running.
+restartServer: false
 key: profile
 prompts:
   - name: profile

@@ -58,6 +58,30 @@ prompts:
 	}
 }
 
+func TestLoadRestartServerDefaultsTrue(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "noflag", "name: noflag\nversion: 1\n")
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !mod.RestartServer {
+		t.Fatalf("RestartServer should default to true when the manifest omits it")
+	}
+}
+
+func TestLoadRestartServerExplicitFalse(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "kube", "name: kube\nversion: 1\nrestartServer: false\n")
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if mod.RestartServer {
+		t.Fatalf("RestartServer should be false when the manifest sets restartServer: false")
+	}
+}
+
 func TestLoadRejectsNameMismatch(t *testing.T) {
 	root := t.TempDir()
 	dir := writeModule(t, root, "aws", "name: other\nversion: 1\n")

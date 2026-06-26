@@ -1,6 +1,9 @@
 name: ssh
 version: 1
 description: Add an SSH key and host alias (written to ~/.ssh) for this workspace.
+# Only writes under ~/.ssh; nothing in ~/.env, so it never bounces the OpenCode
+# server and can be edited while a task is running.
+restartServer: false
 key: host
 prompts:
   - name: host

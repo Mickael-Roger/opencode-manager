@@ -606,6 +606,7 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 	}
 	var adds []addOp
 	var removes []string
+	needsRestart := false
 	for _, e := range m.editEntries {
 		if e.isAdd {
 			continue
@@ -613,8 +614,10 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 		switch {
 		case e.selected && !e.installed:
 			adds = append(adds, addOp{mod: e.mod, vals: e.values})
+			needsRestart = needsRestart || e.mod.RestartServer
 		case !e.selected && e.installed:
 			removes = append(removes, e.id)
+			needsRestart = needsRestart || e.mod.RestartServer
 		}
 	}
 
@@ -624,12 +627,16 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Idle guard: applying restarts the OpenCode server when a module changes
-	// the environment, which would interrupt an in-flight task.
-	switch m.statuses[selected.Manifest.Name].Activity {
-	case workspace.ActivityWorking, workspace.ActivityApproval:
-		m.message = fmt.Sprintf("Cannot edit modules while a task is running in %s. Wait until it is idle.", selected.Manifest.Name)
-		return m, nil
+	// Idle guard: applying a restart-requiring module bounces the OpenCode server
+	// to reload ~/.env, which would interrupt an in-flight task. Modules that only
+	// write their own config files (RestartServer == false) never bounce the
+	// server, so they can be installed or removed even while a task is running.
+	if needsRestart {
+		switch m.statuses[selected.Manifest.Name].Activity {
+		case workspace.ActivityWorking, workspace.ActivityApproval:
+			m.message = fmt.Sprintf("Cannot edit modules while a task is running in %s. Wait until it is idle.", selected.Manifest.Name)
+			return m, nil
+		}
 	}
 
 	name := selected.Manifest.Name
