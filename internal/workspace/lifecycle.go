@@ -121,11 +121,6 @@ func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
 	return nil
 }
 
-func (l Lifecycle) Provision(ctx context.Context, summary Summary) (string, error) {
-	status, _, err := l.provision(ctx, summary)
-	return status, err
-}
-
 func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runtime.ContainerSpec, error) {
 	if err := l.driver.Available(ctx); err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err

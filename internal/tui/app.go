@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -31,19 +32,31 @@ var appVersion = "dev"
 const npmPackageName = "@mickaelroger78/opencode-manager"
 
 type model struct {
-	cfg           config.Config
-	registry      workspace.Registry
-	lifecycle     workspace.Lifecycle
-	lifecycleErr  string
-	workspaces    []workspace.Summary
-	statuses      map[string]workspace.Status
-	workspacePos  int
-	width         int
-	height        int
-	runtimeName   string
-	runtimeError  string
-	loadError     string
-	message       string
+	cfg          config.Config
+	registry     workspace.Registry
+	lifecycle    workspace.Lifecycle
+	lifecycleErr string
+	workspaces   []workspace.Summary
+	statuses     map[string]workspace.Status
+	workspacePos int
+	width        int
+	height       int
+	runtimeName  string
+	runtimeError string
+	loadError    string
+	message      string
+
+	// baseImageReady gates the whole dashboard: until the managed base image
+	// finishes building (baseImageReadyMsg), the UI shows a blocking overlay and
+	// ignores every key except quit, so a workspace can't be created against a
+	// base image that does not exist yet. baseImageErr holds the build failure,
+	// if any, so the overlay can surface it instead of spinning forever.
+	baseImageReady bool
+	baseImageErr   string
+	// baseSpinnerFrame advances on baseSpinnerTickMsg to animate the building
+	// indicator; it only ticks while the base image is still being built.
+	baseSpinnerFrame int
+
 	command       string
 	commandMode   bool
 	filter        string
@@ -179,11 +192,17 @@ var (
 	promptStyle   = lipgloss.NewStyle().Foreground(colTitle)
 	borderStyle   = lipgloss.NewStyle().Foreground(colBorder)
 
+	// module editor
+	editGroupStyle = lipgloss.NewStyle().Foreground(colTitle).Bold(true)
+	editAddStyle   = lipgloss.NewStyle().Foreground(colInfoKey)
+	editDescStyle  = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
+
 	// k9s dialog ("Dialog") skin.
 	dialogText      = lipgloss.NewStyle().Foreground(colBody)                                                                       // cadetblue
 	dialogLabel     = lipgloss.NewStyle().Foreground(colMenuText).Bold(true)                                                        // white
 	dialogButton    = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#483d8b")).Padding(0, 2) // darkslateblue
 	dialogButtonHot = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colBorder).Bold(true).Padding(0, 2)      // dodgerblue focus
+	dialogButtonOff = lipgloss.NewStyle().Foreground(lipgloss.Color("#777777")).Background(lipgloss.Color("#333333")).Padding(0, 2) // disabled/greyed
 )
 
 var logoLines = []string{
@@ -267,6 +286,19 @@ func tickCmd() tea.Cmd {
 	})
 }
 
+// baseSpinnerTickMsg drives the base-image building animation. It runs on its
+// own fast interval (the 2s refresh tick is far too slow to look alive) and
+// only while the image is still being built.
+type baseSpinnerTickMsg time.Time
+
+const baseSpinnerInterval = 110 * time.Millisecond
+
+func baseSpinnerCmd() tea.Cmd {
+	return tea.Tick(baseSpinnerInterval, func(t time.Time) tea.Msg {
+		return baseSpinnerTickMsg(t)
+	})
+}
+
 // bellCmd rings the terminal bell. It writes to stderr so it does not corrupt
 // the alt-screen buffer rendered on stdout.
 func bellCmd() tea.Cmd {
@@ -326,7 +358,7 @@ func newModel(cfg config.Config) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadWorkspaces, m.checkRuntime, m.ensureBaseImage, checkForUpdate, tickCmd())
+	return tea.Batch(m.loadWorkspaces, m.checkRuntime, m.ensureBaseImage, checkForUpdate, tickCmd(), baseSpinnerCmd())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -390,6 +422,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tickMsg:
 		return m, tea.Batch(m.loadStatuses, tickCmd())
+	case baseSpinnerTickMsg:
+		// Stop animating (and stop rescheduling) once the build settles either
+		// way; the overlay disappears on success and freezes on error.
+		if m.baseImageReady || m.baseImageErr != "" {
+			return m, nil
+		}
+		m.baseSpinnerFrame++
+		return m, baseSpinnerCmd()
 	case lifecycleActionMsg:
 		if msg.err != nil {
 			slog.Error("lifecycle action failed", "action", msg.action, "workspace", msg.name, "error", msg.err)
@@ -406,7 +446,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		slog.Info("workspace provisioned", "workspace", msg.name)
-		m.message = fmt.Sprintf("Created workspace %s and provisioned its image/container.", msg.name)
+		m.message = fmt.Sprintf("Created workspace %s — container is up and running.", msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case updateActionMsg:
 		if msg.err != nil {
@@ -431,10 +471,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case baseImageReadyMsg:
 		if msg.err != nil {
 			slog.Error("base image creation failed", "error", msg.err)
+			m.baseImageErr = msg.err.Error()
 			m.message = fmt.Sprintf("Base image creation failed: %v", msg.err)
 			return m, nil
 		}
 		slog.Info("base image ready")
+		m.baseImageReady = true
+		m.baseImageErr = ""
 		m.message = "Base image ready. Press : for commands, / to filter, ? for help."
 		return m, nil
 	case attachReadyMsg:
@@ -497,6 +540,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Until the managed base image exists, the dashboard is frozen behind a
+	// blocking overlay: only quitting is allowed so nothing can act on a base
+	// image that is still being built (or failed to build).
+	if !m.baseImageReady {
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
 	if m.confirmDelete {
 		return m.updateDeleteConfirmation(msg)
 	}
@@ -671,6 +725,10 @@ func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.message = "Create cancelled."
 			return m, nil
 		}
+		// OK is disabled while the name is invalid; ignore Enter on it.
+		if _, ok := m.validateCreateName(); !ok {
+			return m, nil
+		}
 		return m.createWorkspace(strings.TrimSpace(m.createName))
 	case "backspace", "ctrl+h":
 		if len(m.createName) > 0 {
@@ -696,6 +754,34 @@ func (m model) executeCommand() (tea.Model, tea.Cmd) {
 	return m.executeCommandName(command)
 }
 
+// validateCreateName checks the in-progress workspace name entered in the
+// create dialog. It returns a short human reason and whether the name is
+// acceptable; an empty reason with ok=false means simply "too short / empty"
+// (no error to show yet, just a disabled OK button). A name is valid when it
+// has at least one character, contains only letters (accents included), digits,
+// '-' or '_', and is not already used by another workspace.
+func (m model) validateCreateName() (string, bool) {
+	name := strings.TrimSpace(m.createName)
+	if name == "" {
+		return "", false
+	}
+
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			continue
+		}
+		return "Use only letters, digits, '-' or '_'.", false
+	}
+
+	for _, ws := range m.workspaces {
+		if strings.EqualFold(ws.Manifest.Name, name) {
+			return "That name is already taken.", false
+		}
+	}
+
+	return "", true
+}
+
 func (m model) createWorkspace(name string) (tea.Model, tea.Cmd) {
 	if name == "" {
 		m.message = "Workspace name is required."
@@ -711,7 +797,7 @@ func (m model) createWorkspace(name string) (tea.Model, tea.Cmd) {
 
 	m.createMode = false
 	m.createName = ""
-	m.message = fmt.Sprintf("Created workspace %s. Building image and creating container...", result.Manifest.Name)
+	m.message = fmt.Sprintf("Created workspace %s. Building image and starting container...", result.Manifest.Name)
 	created := workspace.Summary{Manifest: result.Manifest, Path: result.Path}
 	return m, tea.Batch(m.loadWorkspaces, m.provisionWorkspace(created))
 }
@@ -724,7 +810,9 @@ func (m model) provisionWorkspace(summary workspace.Summary) tea.Cmd {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		_, err := m.lifecycle.Provision(ctx, summary)
+		// Provision the image/container and start it so a freshly created
+		// workspace is ready to attach to immediately.
+		err := m.lifecycle.EnsureStarted(ctx, summary)
 		return provisionWorkspaceMsg{name: summary.Manifest.Name, err: err}
 	}
 }
@@ -980,7 +1068,67 @@ func (m model) View() string {
 		view = overlayCentered(view, m.renderHelp(), width, height)
 	}
 
+	// The base-image gate sits on top of everything: while it is up the rest of
+	// the UI is frozen, so it must always win the overlay stack.
+	if !m.baseImageReady {
+		view = overlayCentered(view, m.renderBaseImageBuilding(), width, height)
+	}
+
 	return view
+}
+
+// renderBaseImageBuilding is the blocking dialog shown until the managed base
+// image is built. It freezes the dashboard so no workspace can be created
+// before its base image exists, and surfaces the build error if one occurred.
+func (m model) renderBaseImageBuilding() string {
+	if m.baseImageErr != "" {
+		content := lipgloss.JoinVertical(
+			lipgloss.Center,
+			errorStyle.Render("Base image creation failed."),
+			"",
+			dialogText.Render(m.baseImageErr),
+			"",
+			dialogText.Render("Press ")+dialogLabel.Render("q")+dialogText.Render(" to quit."),
+		)
+		return k9sDialog("Base Image", content, colError)
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		dialogLabel.Render("Creating the base image…"),
+		"",
+		snakeBar(m.baseSpinnerFrame, 30, 5),
+		"",
+		dialogText.Render("Setting up the shared workspace image."),
+		dialogText.Render("This can take a minute on first run."),
+		"",
+		mutedStyle.Render("Please wait — the dashboard is locked until this finishes."),
+	)
+	return k9sDialog("Base Image", content, colBorder)
+}
+
+// snakeBar renders a fixed-width "knight rider" track with a lit segment that
+// bounces back and forth, animated by frame. It signals real, ongoing work
+// (each frame advances on a base-image build tick) rather than a static spinner.
+func snakeBar(frame, width, snake int) string {
+	if snake > width {
+		snake = width
+	}
+	travel := width - snake
+	if travel <= 0 {
+		return titleStyle.Render(strings.Repeat("█", width))
+	}
+
+	// A full cycle slides right (travel steps) then back left (travel steps).
+	pos := frame % (2 * travel)
+	if pos > travel {
+		pos = 2*travel - pos
+	}
+
+	left := mutedStyle.Render(strings.Repeat("░", pos))
+	lit := titleStyle.Render(strings.Repeat("█", snake))
+	right := mutedStyle.Render(strings.Repeat("░", travel-pos))
+	return left + lit + right
 }
 
 func (m model) renderHeader(width int) string {
@@ -1432,9 +1580,6 @@ func (m model) renderDeleteConfirmation() string {
 
 func (m model) renderCreatePrompt() string {
 	display := dialogLabel.Render(m.createName) + "▏"
-	if m.createName == "" {
-		display = mutedStyle.Render("workspace name") + "▏"
-	}
 
 	field := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
@@ -1443,16 +1588,45 @@ func (m model) renderCreatePrompt() string {
 		Width(34).
 		Render(display)
 
+	reason, ok := m.validateCreateName()
+	// Keep a blank line where the reason goes so the dialog height is stable.
+	hint := " "
+	if reason != "" {
+		hint = errorStyle.Render(reason)
+	}
+
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		dialogText.Render("Enter a name for the new workspace."),
 		"",
 		field,
+		hint,
 		"",
-		dialogButtons([]string{"OK", "Cancel"}, m.dialogFocus),
+		createDialogButtons(m.dialogFocus, ok),
 	)
 
 	return k9sDialog("New Workspace", content, colBorder)
+}
+
+// createDialogButtons renders the create dialog's OK/Cancel row. OK is greyed
+// out and unfocusable-looking when okEnabled is false (invalid name).
+func createDialogButtons(focused int, okEnabled bool) string {
+	var okBtn string
+	switch {
+	case !okEnabled:
+		okBtn = dialogButtonOff.Render("OK")
+	case focused == 0:
+		okBtn = dialogButtonHot.Render("OK")
+	default:
+		okBtn = dialogButton.Render("OK")
+	}
+
+	cancelBtn := dialogButton.Render("Cancel")
+	if focused == 1 {
+		cancelBtn = dialogButtonHot.Render("Cancel")
+	}
+
+	return okBtn + "  " + cancelBtn
 }
 
 // k9sDialog renders a k9s-style popup: a bordered box with the title centered
