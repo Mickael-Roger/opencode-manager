@@ -643,6 +643,12 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 	m.editMode = false
 	m.message = fmt.Sprintf("Applying module changes to %s (+%d/-%d)...", name, len(adds), len(removes))
 
+	// Freeze interactive access to this workspace until the job finishes: the
+	// install/uninstall scripts run inside the container and may bounce the
+	// OpenCode server, so attaching mid-install would land in a half-configured
+	// session. Cleared when editApplyMsg arrives.
+	m.installing[name] = true
+
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()

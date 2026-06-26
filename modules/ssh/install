@@ -1,7 +1,13 @@
 #!/bin/sh
-# Writes an SSH key and a per-host config snippet under ~/.ssh. Idempotent: the
-# key and snippet are overwritten, and the Include line is added at most once.
+# Installs the OpenSSH client (if missing) and writes an SSH key and a per-host
+# config snippet under ~/.ssh. Idempotent: the client install is guarded, and the
+# key and snippet are overwritten while the Include line is added at most once.
 set -e
+
+if ! command -v ssh >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends openssh-client
+fi
 
 : "${OCM_HOSTNAME:=$OCM_HOST}"
 : "${OCM_USER:=git}"

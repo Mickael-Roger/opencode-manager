@@ -57,6 +57,13 @@ type model struct {
 	tokens        map[string]tokenState
 	versions      map[string]versionState
 
+	// installing holds workspaces whose module install/uninstall job is still
+	// running. Interactive container access (attach/shell) is frozen for these
+	// so a user can't reach OpenCode mid-install, before scripts finish and the
+	// server has reloaded. Keyed by workspace name; entry added when the job is
+	// kicked off and removed when its editApplyMsg arrives.
+	installing map[string]bool
+
 	// set when the npm registry reports a newer release than appVersion; the
 	// header shows an "update available" notice (see checkForUpdate).
 	updateLatest string
@@ -311,6 +318,7 @@ func newModel(cfg config.Config) model {
 		statuses:     map[string]workspace.Status{},
 		tokens:       map[string]tokenState{},
 		versions:     map[string]versionState{},
+		installing:   map[string]bool{},
 		width:        100,
 		height:       30,
 		message:      "Creating the base image...",
@@ -411,6 +419,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.versions, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case editApplyMsg:
+		delete(m.installing, msg.name)
 		if msg.err != nil {
 			slog.Error("module edit failed", "workspace", msg.name, "error", msg.err)
 			m.message = fmt.Sprintf("Module edit failed for %s: %v", msg.name, msg.err)
@@ -768,6 +777,10 @@ func (m model) attachSelected() (tea.Model, tea.Cmd) {
 		m.message = "Attach failed: " + m.lifecycleErr
 		return m, nil
 	}
+	if m.installing[selected.Manifest.Name] {
+		m.message = fmt.Sprintf("Installing modules in %s. Wait until it finishes before attaching.", selected.Manifest.Name)
+		return m, nil
+	}
 
 	m.message = "Preparing " + selected.Manifest.Name + "..."
 	return m, func() tea.Msg {
@@ -786,6 +799,10 @@ func (m model) shellSelected() (tea.Model, tea.Cmd) {
 	}
 	if m.lifecycleErr != "" {
 		m.message = "Shell failed: " + m.lifecycleErr
+		return m, nil
+	}
+	if m.installing[selected.Manifest.Name] {
+		m.message = fmt.Sprintf("Installing modules in %s. Wait until it finishes before opening a shell.", selected.Manifest.Name)
 		return m, nil
 	}
 
@@ -1583,6 +1600,13 @@ func (m model) workspaceStatus(ws workspace.Summary) (string, lipgloss.Color) {
 // doing inside a workspace. It only applies to a running container; otherwise
 // the lifecycle STATUS column already conveys that the workspace is asleep.
 func (m model) workspaceActivity(ws workspace.Summary) (string, lipgloss.Color) {
+	// A running install/uninstall job freezes interactive access (see
+	// attachSelected/shellSelected), so surface it ahead of the plugin-reported
+	// activity to make clear why attaching is refused.
+	if m.installing[ws.Manifest.Name] {
+		return "installing", colStarting
+	}
+
 	status, ok := m.statuses[ws.Manifest.Name]
 	if !ok {
 		return "—", colMuted

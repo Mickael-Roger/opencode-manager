@@ -677,7 +677,10 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 // Revision 7: added the supervisor entrypoint (sources ~/.env, reloadable
 // server), passwordless sudo for the sudo group, and the interactive-shell env
 // hook, for the module system.
-const baseImageRevision = 7
+//
+// Revision 8: added the openssh-client package so SSH remotes (e.g. ssh-style
+// git clone URLs) work without a per-module install.
+const baseImageRevision = 8
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {
