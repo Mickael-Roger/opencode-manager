@@ -676,15 +676,28 @@ func (m model) renderEditPage(width, height int) string {
 	if len(m.editEntries) == 0 {
 		rows = append(rows, " "+mutedStyle.Render(fit("No modules available.", contentWidth))+" ")
 	}
+
+	// Multi-instance modules are introduced by a group header; their instances
+	// and add row are indented beneath it. Singletons render as a single row.
+	prevMod := ""
 	for i, e := range m.editEntries {
-		if len(rows) >= height-2 {
+		if len(rows) >= height-3 {
 			break
 		}
+		if e.mod.Multi() && e.mod.Name != prevMod {
+			if prevMod != "" {
+				rows = append(rows, blank)
+			}
+			rows = append(rows, m.renderEditGroupHeader(e.mod, contentWidth))
+		}
+		prevMod = e.mod.Name
 		rows = append(rows, m.renderEditRow(e, i == m.editPos, contentWidth))
 	}
+
 	rows = append(rows, blank)
 	if len(rows) < height-1 {
-		rows = append(rows, " "+mutedStyle.Render(fit("space toggle · a apply · esc cancel", contentWidth))+" ")
+		hint := "↑/↓ move · space toggle · a apply · esc cancel"
+		rows = append(rows, " "+mutedStyle.Render(fit(hint, contentWidth))+" ")
 	}
 	for len(rows) < height-1 {
 		rows = append(rows, blank)
@@ -697,41 +710,113 @@ func (m model) renderEditPage(width, height int) string {
 	return m.boxWithTitle(title, rows, width)
 }
 
-func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int) string {
-	var text string
-	if e.isAdd {
-		text = "[+] " + e.mod.Name + " — add entry…"
-	} else {
-		box := "[ ]"
-		if e.selected {
-			box = "[x]"
-		}
-
-		marker := ""
-		switch {
-		case e.selected && !e.installed:
-			marker = " (will install)"
-		case !e.selected && e.installed:
-			marker = " (will remove)"
-		case e.installed:
-			marker = " (installed)"
-		}
-
-		name := e.label
-		if e.mod.Multi() {
-			name = e.mod.Name + " (" + e.label + ")"
-		}
-		text = box + " " + name + marker
-		if !e.mod.Multi() && e.mod.Description != "" {
-			text += " — " + e.mod.Description
-		}
+// renderEditGroupHeader renders the section heading for a multi-instance module:
+// an accented name followed by its dimmed description.
+func (m model) renderEditGroupHeader(mod module.Module, contentWidth int) string {
+	head := "▸ " + mod.Name
+	full := head
+	if mod.Description != "" {
+		full += "  " + mod.Description
 	}
-	line := fit(text, contentWidth)
+	fitted := []rune(fit(full, contentWidth))
+
+	n := len([]rune(head))
+	if n > len(fitted) {
+		n = len(fitted)
+	}
+	name := editGroupStyle.Render(string(fitted[:n]))
+	desc := editDescStyle.Render(string(fitted[n:]))
+	return " " + name + desc + " "
+}
+
+func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int) string {
+	// Add-entry action row for multi-instance modules.
+	if e.isAdd {
+		text := "   + add " + e.mod.Name + " entry…"
+		line := fit(text, contentWidth)
+		if selectedRow {
+			return cursorStyle.Render(" " + line + " ")
+		}
+		return " " + editAddStyle.Render(line) + " "
+	}
+
+	box := "◯"
+	if e.selected {
+		box = "◉"
+	}
+
+	indent := ""
+	if e.mod.Multi() {
+		indent = "   "
+	}
+
+	left := indent + box + " " + e.label
+	if !e.mod.Multi() && e.mod.Description != "" {
+		left += "  " + e.mod.Description
+	}
+
+	badge, badgeColor := editStateBadge(e)
+	badgeW := len([]rune(badge))
+	gap := 0
+	if badge != "" {
+		gap = 1
+	}
+
+	leftW := contentWidth - badgeW - gap
+	if leftW < 1 {
+		leftW = contentWidth
+		badge, badgeW, gap = "", 0, 0
+	}
+	leftFitted := fit(left, leftW)
 
 	if selectedRow {
-		return cursorStyle.Render(" " + line + " ")
+		row := leftFitted + strings.Repeat(" ", gap) + badge
+		return cursorStyle.Render(" " + fit(row, contentWidth) + " ")
 	}
-	return " " + bodyStyle.Render(line) + " "
+
+	// Recolor the checkbox glyph and (for singletons) the trailing description
+	// without disturbing the fixed column widths.
+	colored := colorizeEditLeft(leftFitted, len([]rune(indent)), e)
+	row := colored
+	if badge != "" {
+		row += strings.Repeat(" ", gap) + lipgloss.NewStyle().Foreground(badgeColor).Render(badge)
+	}
+	return " " + row + " "
+}
+
+// colorizeEditLeft repaints the checkbox glyph at index boxAt according to the
+// entry state and renders the remaining text in the body color, preserving the
+// already-computed column width.
+func colorizeEditLeft(leftFitted string, boxAt int, e editEntry) string {
+	r := []rune(leftFitted)
+	if boxAt >= len(r) {
+		return bodyStyle.Render(leftFitted)
+	}
+
+	boxColor := colMuted
+	if e.selected {
+		boxColor = colRunning
+	}
+
+	pre := string(r[:boxAt])
+	boxChar := lipgloss.NewStyle().Foreground(boxColor).Render(string(r[boxAt]))
+	rest := bodyStyle.Render(string(r[boxAt+1:]))
+	return pre + boxChar + rest
+}
+
+// editStateBadge returns the right-aligned status badge and its color for a
+// module row: the pending change (install/remove) or the current state.
+func editStateBadge(e editEntry) (string, lipgloss.Color) {
+	switch {
+	case e.selected && !e.installed:
+		return "+ install", colRunning
+	case !e.selected && e.installed:
+		return "- remove", colError
+	case e.installed:
+		return "✓ installed", colMuted
+	default:
+		return "", colMuted
+	}
 }
 
 func (m model) renderEditPrompt() string {
