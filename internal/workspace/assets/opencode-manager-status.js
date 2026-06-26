@@ -80,7 +80,18 @@ export const OpencodeManagerStatus = async ({ directory }) => {
     event: async ({ event }) => {
       const id = sessionOf(event)
       switch (event?.type) {
-        case "message.updated":
+        case "message.updated": {
+          // Only an in-progress assistant message means active generation.
+          // The final message.updated of a turn carries time.completed and can
+          // arrive AFTER session.idle; treating it as "working" would pin the
+          // session to working forever even though opencode is idle. A user
+          // message likewise is not the agent working.
+          const info = event?.properties?.info
+          if (info?.role === "assistant") {
+            sessions[id] = info?.time?.completed ? "idle" : "working"
+          }
+          break
+        }
         case "message.part.updated":
         case "tool.execute.before":
         case "tool.execute.after":

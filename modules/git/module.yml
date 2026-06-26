@@ -1,8 +1,9 @@
 name: git
-version: 1
-description: Configure the git identity (user.name / user.email) for this workspace.
-# Only writes ~/.gitconfig; nothing in ~/.env, so it never bounces the OpenCode
-# server and can be edited while a task is running.
+version: 2
+description: Configure the git identity (user.name / user.email) and optionally clone repositories into the workspace.
+# Writes ~/.gitconfig and clones any requested repos into the workspace home
+# directory; nothing in ~/.env, so it never bounces the OpenCode server and can
+# be edited while a task is running.
 restartServer: false
 prompts:
   - name: name
@@ -13,3 +14,6 @@ prompts:
     label: Git email
     type: string
     required: true
+  - name: repos
+    label: Repositories to clone (ssh or https URLs, space- or comma-separated)
+    type: string

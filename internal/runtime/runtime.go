@@ -576,7 +576,7 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	b.WriteString("\n\n")
 	b.WriteString("COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/\n\n")
 
-	packages := append([]string{"bash", "build-essential", "ca-certificates", "curl", "file", "git", "jq", "nodejs", "npm", "passwd", "procps", "ripgrep", "sudo"}, spec.Packages...)
+	packages := append([]string{"bash", "build-essential", "ca-certificates", "curl", "file", "git", "jq", "nodejs", "npm", "openssh-client", "passwd", "procps", "ripgrep", "sudo"}, spec.Packages...)
 	b.WriteString("RUN apt-get update && apt-get install -y --no-install-recommends ")
 	b.WriteString(strings.Join(packages, " "))
 	b.WriteString(" && rm -rf /var/lib/apt/lists/*\n")

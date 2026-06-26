@@ -1,7 +1,60 @@
 #!/bin/sh
+# Configures the git identity and clones any requested repositories into the
+# workspace home directory. Idempotent: identity is overwritten and a repo whose
+# target directory already exists is left untouched, so reconcile never re-clones
+# or clobbers local work.
 set -e
+
+# Install git if missing (it is needed for both the config below and cloning).
+if ! command -v git >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends git
+fi
 
 git config --global user.name "$OCM_NAME"
 git config --global user.email "$OCM_EMAIL"
 
 echo "git identity configured: $OCM_NAME <$OCM_EMAIL>"
+
+# is_ssh_url reports whether a clone URL goes over SSH (ssh:// or scp-like
+# git@host:path), as opposed to http(s). Such clones need the OpenSSH client.
+is_ssh_url() {
+  case "$1" in
+    ssh://*) return 0 ;;
+    *://*) return 1 ;;
+    *@*:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ensure_ssh_client installs the OpenSSH client the first time an SSH URL is
+# cloned. The keys/host config themselves come from configuring the ssh module;
+# here we only make sure the `ssh` binary git shells out to actually exists.
+ensure_ssh_client() {
+  command -v ssh >/dev/null 2>&1 && return 0
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends openssh-client
+}
+
+# The repos field accepts one or many URLs (ssh or https) separated by commas,
+# whitespace, or newlines. Normalise the separators to spaces and let the shell
+# word-split the list.
+if [ -n "$OCM_REPOS" ]; then
+  for repo in $(printf '%s' "$OCM_REPOS" | tr ',\n' '  '); do
+    [ -n "$repo" ] || continue
+    name="$(basename "$repo" .git)"
+    dest="$HOME/$name"
+    if [ -e "$dest" ]; then
+      echo "git repo '$name' already present, skipping"
+      continue
+    fi
+    is_ssh_url "$repo" && ensure_ssh_client
+    # Don't let one bad URL abort the whole install (reconcile must converge):
+    # warn and move on instead.
+    if git clone "$repo" "$dest"; then
+      echo "git repo cloned: $repo -> $dest"
+    else
+      echo "git repo clone failed: $repo" >&2
+    fi
+  done
+fi
