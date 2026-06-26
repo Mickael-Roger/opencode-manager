@@ -2,10 +2,14 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +25,10 @@ import (
 // at release time from the git tag via -ldflags (see .github/workflows/package.yml)
 // and stays "dev" for local builds, so it never needs to be edited by hand.
 var appVersion = "dev"
+
+// npmPackageName is the published package queried for update checks. It must
+// stay in sync with the "name" field in package.json.
+const npmPackageName = "@mickaelroger78/opencode-manager"
 
 type model struct {
 	cfg           config.Config
@@ -48,6 +56,10 @@ type model struct {
 	showDescribe  bool
 	tokens        map[string]tokenState
 	versions      map[string]versionState
+
+	// set when the npm registry reports a newer release than appVersion; the
+	// header shows an "update available" notice (see checkForUpdate).
+	updateLatest string
 
 	// module edit flow (see edit.go)
 	editMode        bool
@@ -150,6 +162,7 @@ var (
 	titleStyle    = lipgloss.NewStyle().Foreground(colTitle)
 	counterStyle  = lipgloss.NewStyle().Foreground(colCounter)
 	headerStyle   = lipgloss.NewStyle().Foreground(colHeader).Bold(true)
+	updateStyle   = lipgloss.NewStyle().Foreground(colStarting).Bold(true)
 	bodyStyle     = lipgloss.NewStyle().Foreground(colBody)
 	mutedStyle    = lipgloss.NewStyle().Foreground(colMuted)
 	errorStyle    = lipgloss.NewStyle().Foreground(colError)
@@ -167,10 +180,12 @@ var (
 )
 
 var logoLines = []string{
-	"╭──────────╮",
-	"│ opencode │",
-	"│  manager │",
-	"╰──────────╯",
+	" ██████╗  ██████╗███╗   ███╗",
+	"██╔═══██╗██╔════╝████╗ ████║",
+	"██║   ██║██║     ██╔████╔██║",
+	"██║   ██║██║     ██║╚██╔╝██║",
+	"╚██████╔╝╚██████╗██║ ╚═╝ ██║",
+	" ╚═════╝  ╚═════╝╚═╝     ╚═╝",
 }
 
 type workspaceListMsg struct {
@@ -225,6 +240,12 @@ type versionMsg struct {
 	name    string
 	version string
 	err     error
+}
+
+// updateAvailableMsg is emitted by checkForUpdate when the npm registry
+// advertises a release newer than the running appVersion.
+type updateAvailableMsg struct {
+	latest string
 }
 
 // tickMsg drives periodic refresh of container/activity statuses so the
@@ -297,7 +318,7 @@ func newModel(cfg config.Config) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadWorkspaces, m.checkRuntime, m.ensureBaseImage, tickCmd())
+	return tea.Batch(m.loadWorkspaces, m.checkRuntime, m.ensureBaseImage, checkForUpdate, tickCmd())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -456,6 +477,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			value = "unknown"
 		}
 		m.versions[msg.name] = versionState{value: value}
+		return m, nil
+	case updateAvailableMsg:
+		slog.Info("update available", "current", appVersion, "latest", msg.latest)
+		m.updateLatest = msg.latest
 		return m, nil
 	}
 
@@ -948,7 +973,7 @@ func (m model) renderHeader(width int) string {
 
 	logo := logoStyle.Render(strings.Join(logoLines, "\n"))
 	gap := width - lipgloss.Width(left) - lipgloss.Width(logo)
-	if width >= 84 && gap >= 2 {
+	if width >= 100 && gap >= 2 {
 		spacer := strings.Repeat(" ", gap)
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, logo)
 	}
@@ -976,6 +1001,11 @@ func (m model) renderInfo() string {
 	lines := make([]string, len(rows))
 	for i, row := range rows {
 		key := infoKeyStyle.Render(fit(row[0]+":", keyWidth+1))
+		if row[0] == "Rev" && m.updateLatest != "" {
+			notice := updateStyle.Render(fmt.Sprintf("  ⬆ update available: %s", m.updateLatest))
+			lines[i] = key + " " + infoValStyle.Render(row[1]) + notice
+			continue
+		}
 		valStyle := infoValStyle
 		if row[0] == "Attention" {
 			valStyle = lipgloss.NewStyle().Foreground(m.attentionColor())
@@ -1643,6 +1673,77 @@ func (m model) fetchVersion(summary workspace.Summary) tea.Cmd {
 		version, err := m.lifecycle.OpenCodeVersion(ctx, summary)
 		return versionMsg{name: summary.Manifest.Name, version: version, err: err}
 	}
+}
+
+// checkForUpdate queries the npm registry for the latest published release and,
+// when it is newer than the running build, returns an updateAvailableMsg so the
+// header can advertise it. It is best-effort: development builds and any network
+// or parse failure simply yield no message (the dashboard works offline).
+func checkForUpdate() tea.Msg {
+	if appVersion == "dev" {
+		return nil
+	}
+
+	endpoint := "https://registry.npmjs.org/-/package/" + url.PathEscape(npmPackageName) + "/dist-tags"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		slog.Debug("update check: build request failed", "error", err)
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Debug("update check: request failed", "error", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slog.Debug("update check: unexpected status", "status", resp.StatusCode)
+		return nil
+	}
+
+	var tags struct {
+		Latest string `json:"latest"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		slog.Debug("update check: decode failed", "error", err)
+		return nil
+	}
+	if tags.Latest == "" || !versionIsNewer(tags.Latest, appVersion) {
+		return nil
+	}
+	return updateAvailableMsg{latest: tags.Latest}
+}
+
+// versionIsNewer reports whether semantic version latest is strictly greater
+// than current. It compares the major.minor.patch triple and ignores any
+// pre-release or build metadata; unparseable parts count as 0.
+func versionIsNewer(latest, current string) bool {
+	l := parseVersion(latest)
+	c := parseVersion(current)
+	for i := 0; i < 3; i++ {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
+}
+
+func parseVersion(s string) [3]int {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+	var out [3]int
+	for i, part := range strings.SplitN(s, ".", 3) {
+		if i > 2 {
+			break
+		}
+		out[i], _ = strconv.Atoi(part)
+	}
+	return out
 }
 
 // workspaceVersion returns the OpenCode version display text for a workspace:

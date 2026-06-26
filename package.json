@@ -12,7 +12,8 @@
     "url": "https://github.com/Mickael-Roger/opencode-manager/issues"
   },
   "bin": {
-    "opencode-manager": "bin/opencode-manager"
+    "opencode-manager": "bin/opencode-manager",
+    "ocm": "bin/ocm"
   },
   "scripts": {
     "build": "go build -o dist/opencode-manager-$(node -p \"process.platform\")-$(node -p \"process.arch\") ./cmd/opencode-manager",

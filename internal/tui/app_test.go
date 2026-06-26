@@ -75,3 +75,25 @@ func TestActionsUseK9sBindings(t *testing.T) {
 		t.Fatalf("describe key = %q, want d", keys["describe"])
 	}
 }
+
+func TestVersionIsNewer(t *testing.T) {
+	cases := []struct {
+		latest, current string
+		want            bool
+	}{
+		{"0.2.0", "0.1.0", true},
+		{"1.0.0", "0.9.9", true},
+		{"0.1.1", "0.1.0", true},
+		{"v0.2.0", "0.1.0", true},      // leading v tolerated
+		{"0.1.0", "0.1.0", false},      // equal
+		{"0.1.0", "0.2.0", false},      // older
+		{"0.1.0-rc.1", "0.1.0", false}, // pre-release ignored, equal triple
+		{"0.2.0-rc.1", "0.1.0", true},
+		{"dev", "0.1.0", false}, // unparseable counts as 0.0.0
+	}
+	for _, c := range cases {
+		if got := versionIsNewer(c.latest, c.current); got != c.want {
+			t.Errorf("versionIsNewer(%q, %q) = %v, want %v", c.latest, c.current, got, c.want)
+		}
+	}
+}
