@@ -14,6 +14,10 @@
 > One terminal dashboard to create, attach, edit, and tear down OpenCode
 > sessions — each one running in its own isolated, per-project container.
 
+<p align="center">
+  <img src="docs/assets/ocm-demo.gif" alt="ocm in action" width="100%">
+</p>
+
 ## What it does
 
 Coding agents are powerful because they can touch your whole machine — which is
