@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+
+// `ocm` is a short alias for `opencode-manager`. It reuses the same launcher,
+// which resolves and runs the prebuilt binary for the current platform.
+require("./opencode-manager");

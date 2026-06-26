@@ -1,16 +1,47 @@
 # opencode-manager
 
-`opencode-manager` is a Go TUI for managing isolated OpenCode workspaces.
+```text
+ ██████╗  ██████╗███╗   ███╗
+██╔═══██╗██╔════╝████╗ ████║
+██║   ██║██║     ██╔████╔██║
+██║   ██║██║     ██║╚██╔╝██║
+╚██████╔╝╚██████╗██║ ╚═╝ ██║
+ ╚═════╝  ╚═════╝╚═╝     ╚═╝
+        opencode-manager
+```
 
-It lets you run OpenCode inside a dedicated per-project container and attach to it from the host. Each workspace gets its own home directory, generated OpenCode configuration, selected tools, selected credentials, and long-lived container.
+> **`ocm` is k9s for [OpenCode](https://opencode.ai).**
+> A fast terminal dashboard that runs every OpenCode session inside its own
+> isolated, per-project container — and lets you create, attach, edit, and tear
+> them down without ever leaving the keyboard.
+
+`opencode-manager` (command: **`ocm`**) is a Go TUI for managing isolated
+OpenCode workspaces. Just like `k9s` gives you a single cockpit over your
+Kubernetes clusters, `ocm` gives you a single cockpit over your AI coding
+agents: one screen lists all your workspaces with live status, and a keystroke
+spins one up, drops you into its session, or shuts it down.
+
+Each workspace runs OpenCode inside a dedicated per-project container that you
+attach to from the host. A workspace gets its own home directory, generated
+OpenCode configuration, explicitly selected tools, explicitly selected
+credentials, and a long-lived container — nothing more.
 
 ## Why
 
-Running OpenCode directly on a developer machine can give it access to too much: environment variables, cloud accounts, Kubernetes clusters, SSH keys, tokens, and local config files.
+Coding agents are powerful precisely because they can touch your whole machine —
+and that is exactly the problem. Running OpenCode directly on a developer
+machine can give it access to far too much: environment variables, cloud
+accounts, Kubernetes clusters, SSH keys, tokens, and local config files. One
+careless prompt and the agent is operating against production.
 
-Running OpenCode in a generic VM or container gives it access to almost nothing, but then every project needs to be manually reconfigured.
+Running OpenCode in a generic VM or container gives it access to almost nothing,
+but then every project needs to be manually reconfigured from scratch.
 
-`opencode-manager` solves this by creating one isolated environment per project. Each workspace receives only the modules and credentials explicitly selected for that project.
+`ocm` resolves that tension by creating **one isolated environment per
+project**. Each workspace receives only the modules and credentials you
+explicitly select for it — so the agent gets exactly the AWS profile, SSH key,
+or Kubernetes context that project needs, and nothing it doesn't. You manage all
+of them from one terminal dashboard.
 
 ## Status
 
@@ -219,8 +250,11 @@ Install the npm package with:
 npm install -g @mickaelroger78/opencode-manager
 ```
 
-The global install links the `opencode-manager` command into npm's global binary
-directory, so that directory must be in your shell `PATH`.
+The global install links two commands into npm's global binary directory, so
+that directory must be in your shell `PATH`:
+
+- `opencode-manager` — the full command.
+- `ocm` — a short alias for the exact same program; use whichever you prefer.
 
 For a project-local install, npm links the command under `node_modules/.bin`
 instead of your shell `PATH`:
@@ -252,11 +286,12 @@ Run the current TUI shell with:
 go run ./cmd/opencode-manager
 ```
 
-Minimal CLI:
+Minimal CLI (use `ocm` or `opencode-manager` interchangeably):
 
 ```sh
-opencode-manager list
-opencode-manager attach <workspace>
+ocm                      # launch the TUI dashboard
+ocm list                 # list workspaces
+ocm attach <workspace>   # attach to a workspace session
 ```
 
 The planned stack is:
