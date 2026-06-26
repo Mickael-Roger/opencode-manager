@@ -14,6 +14,10 @@
 > One terminal dashboard to create, attach, edit, and tear down OpenCode
 > sessions — each one running in its own isolated, per-project container.
 
+<p align="center">
+  <img src="docs/assets/ocm-demo.gif" alt="ocm in action" width="100%">
+</p>
+
 ## What it does
 
 Coding agents are powerful because they can touch your whole machine — which is
@@ -23,6 +27,18 @@ cloud accounts, Kubernetes clusters, SSH keys, and tokens.
 `ocm` gives each project **its own isolated container**, configured with only the
 tools and credentials you pick for it. You manage them all from a single screen:
 one keystroke spins a workspace up, drops you into its session, or shuts it down.
+
+<p align="center">
+  <img src="docs/assets/ocm-opencode.png" alt="OpenCode TUI inside a workspace" width="100%">
+  <br>
+  <em>Press <code>Enter</code> on any workspace to drop straight into its OpenCode TUI, running inside the isolated container.</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/ocm-edit-kubernetes.png" alt="Adding Kubernetes contexts to a workspace" width="100%">
+  <br>
+  <em>Press <code>e</code> to add exactly the tools and credentials a project needs — here, importing host Kubernetes contexts (accounts) into a single workspace.</em>
+</p>
 
 ## Install
 
