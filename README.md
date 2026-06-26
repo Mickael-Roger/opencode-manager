@@ -28,6 +28,18 @@ cloud accounts, Kubernetes clusters, SSH keys, and tokens.
 tools and credentials you pick for it. You manage them all from a single screen:
 one keystroke spins a workspace up, drops you into its session, or shuts it down.
 
+<p align="center">
+  <img src="docs/assets/ocm-opencode.png" alt="OpenCode TUI inside a workspace" width="100%">
+  <br>
+  <em>Press <code>Enter</code> on any workspace to drop straight into its OpenCode TUI, running inside the isolated container.</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/ocm-edit-kubernetes.png" alt="Adding Kubernetes contexts to a workspace" width="100%">
+  <br>
+  <em>Press <code>e</code> to add exactly the tools and credentials a project needs — here, importing host Kubernetes contexts (accounts) into a single workspace.</em>
+</p>
+
 ## Install
 
 ```sh
