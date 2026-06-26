@@ -1,6 +1,9 @@
 name: git
 version: 1
 description: Configure the git identity (user.name / user.email) for this workspace.
+# Only writes ~/.gitconfig; nothing in ~/.env, so it never bounces the OpenCode
+# server and can be edited while a task is running.
+restartServer: false
 prompts:
   - name: name
     label: Git user name

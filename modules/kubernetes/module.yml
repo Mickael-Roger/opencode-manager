@@ -1,6 +1,9 @@
 name: kubernetes
 version: 1
 description: Select host kube contexts and copy them into the workspace ~/.kube/config (installs kubectl).
+# Only writes ~/.kube/config and the kubectl binary; nothing in ~/.env, so it
+# never bounces the OpenCode server and can be edited while a task is running.
+restartServer: false
 prompts:
   - name: contexts
     label: Kube contexts to import

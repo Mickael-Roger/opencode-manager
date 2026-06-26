@@ -1,6 +1,9 @@
 name: aws
 version: 1
 description: Install the AWS CLI and write an isolated named profile + credentials.
+# Only writes ~/.aws (config + credentials); nothing in ~/.env, so it never
+# bounces the OpenCode server and can be edited while a task is running.
+restartServer: false
 key: profile
 prompts:
   - name: profile
