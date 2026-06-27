@@ -5,7 +5,7 @@
 //
 // It observes the opencode event bus and writes a small status file that the
 // opencode-manager TUI reads from the host to show a live, per-workspace
-// activity dashboard (working / waiting for human / needs approval / asleep).
+// activity dashboard (working / waiting on a human / sleeping / off).
 //
 // The file lives under the workspace home directory, which is bind-mounted on
 // the host, so the manager reads it directly without any exec or network call:

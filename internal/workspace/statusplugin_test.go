@@ -18,11 +18,11 @@ func TestActivityFromReport(t *testing.T) {
 		wantPend int
 	}{
 		{"working", statusReport{Activity: "working", UpdatedAt: fresh}, ActivityWorking, 0},
-		{"idle maps to waiting", statusReport{Activity: "idle", UpdatedAt: fresh}, ActivityWaiting, 0},
-		{"needs-approval maps to approval", statusReport{Activity: "needs-approval", PendingApproval: 2, UpdatedAt: fresh}, ActivityApproval, 2},
+		{"idle maps to sleeping", statusReport{Activity: "idle", UpdatedAt: fresh}, ActivitySleeping, 0},
+		{"needs-approval maps to waiting", statusReport{Activity: "needs-approval", PendingApproval: 2, UpdatedAt: fresh}, ActivityWaiting, 2},
 		{"error", statusReport{Activity: "error", UpdatedAt: fresh}, ActivityError, 0},
-		{"unknown activity is asleep", statusReport{Activity: "weird", UpdatedAt: fresh}, ActivityAsleep, 0},
-		{"stale heartbeat is asleep", statusReport{Activity: "working", PendingApproval: 1, UpdatedAt: now.Add(-time.Minute)}, ActivityAsleep, 0},
+		{"unknown activity is off", statusReport{Activity: "weird", UpdatedAt: fresh}, ActivityOff, 0},
+		{"stale heartbeat is off", statusReport{Activity: "working", PendingApproval: 1, UpdatedAt: now.Add(-time.Minute)}, ActivityOff, 0},
 	}
 
 	for _, tc := range cases {
@@ -60,8 +60,8 @@ func TestReadActivityStoppedButUsed(t *testing.T) {
 func TestReadActivityParsesFile(t *testing.T) {
 	home := writeStatus(t, `{"activity":"needs-approval","pendingApproval":1,"sessions":1,"updatedAt":"`+
 		time.Now().UTC().Format(time.RFC3339)+`"}`)
-	if act, pend := readActivity(home, true); act != ActivityApproval || pend != 1 {
-		t.Fatalf("readActivity = %q,%d; want approval,1", act, pend)
+	if act, pend := readActivity(home, true); act != ActivityWaiting || pend != 1 {
+		t.Fatalf("readActivity = %q,%d; want waiting,1", act, pend)
 	}
 }
 

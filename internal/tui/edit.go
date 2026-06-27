@@ -742,7 +742,7 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 	// server, so they can be installed or removed even while a task is running.
 	if needsRestart {
 		switch m.statuses[selected.Manifest.Name].Activity {
-		case workspace.ActivityWorking, workspace.ActivityApproval:
+		case workspace.ActivityWorking, workspace.ActivityWaiting:
 			m.message = fmt.Sprintf("Cannot edit modules while a task is running in %s. Wait until it is idle.", selected.Manifest.Name)
 			return m, nil
 		}

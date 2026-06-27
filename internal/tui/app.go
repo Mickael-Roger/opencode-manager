@@ -408,9 +408,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		for _, status := range msg.statuses {
 			name := status.Workspace.Manifest.Name
-			// Ring the bell when a workspace newly starts needing approval.
-			if status.Activity == workspace.ActivityApproval {
-				if prev, ok := m.statuses[name]; !ok || prev.Activity != workspace.ActivityApproval {
+			// Ring the bell when a workspace newly starts needing a human
+			// (blocked on an approval prompt).
+			if status.Activity == workspace.ActivityWaiting {
+				if prev, ok := m.statuses[name]; !ok || prev.Activity != workspace.ActivityWaiting {
 					ring = true
 				}
 			}
@@ -974,7 +975,7 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 
 	name := selected.Manifest.Name
 	switch m.statuses[name].Activity {
-	case workspace.ActivityWorking, workspace.ActivityApproval:
+	case workspace.ActivityWorking, workspace.ActivityWaiting:
 		m.message = fmt.Sprintf("Cannot update %s while a task is running in opencode. Wait until it is idle.", name)
 		return m, nil
 	}
@@ -1200,31 +1201,32 @@ func (m model) renderInfo() string {
 	return strings.Join(lines, "\n")
 }
 
-// attentionSummary describes how many running workspaces need the user: those
-// blocked on a permission prompt and those finished and waiting for input.
+// attentionSummary describes running workspaces that need the user: those
+// blocked on a permission prompt (waiting), plus those that have finished their
+// turn and gone idle (sleeping).
 func (m model) attentionSummary() string {
-	approval, waiting := m.attentionCounts()
-	if approval == 0 && waiting == 0 {
+	waiting, sleeping := m.attentionCounts()
+	if waiting == 0 && sleeping == 0 {
 		return "all clear"
 	}
 
 	parts := make([]string, 0, 2)
-	if approval > 0 {
-		parts = append(parts, fmt.Sprintf("%d need approval", approval))
-	}
 	if waiting > 0 {
 		parts = append(parts, fmt.Sprintf("%d waiting", waiting))
+	}
+	if sleeping > 0 {
+		parts = append(parts, fmt.Sprintf("%d sleeping", sleeping))
 	}
 	return strings.Join(parts, ", ")
 }
 
 func (m model) attentionColor() lipgloss.Color {
-	approval, waiting := m.attentionCounts()
+	waiting, sleeping := m.attentionCounts()
 	switch {
-	case approval > 0:
-		return colStopped
 	case waiting > 0:
-		return colStarting
+		return colStopped
+	case sleeping > 0:
+		return colMuted
 	default:
 		return colMuted
 	}
@@ -1798,7 +1800,7 @@ func (m model) workspaceStatus(ws workspace.Summary) (string, lipgloss.Color) {
 
 // workspaceActivity returns the display text and color for what opencode is
 // doing inside a workspace. It only applies to a running container; otherwise
-// the lifecycle STATUS column already conveys that the workspace is asleep.
+// the lifecycle STATUS column already conveys that the container is not up.
 func (m model) workspaceActivity(ws workspace.Summary) (string, lipgloss.Color) {
 	// A running install/uninstall job freezes interactive access (see
 	// attachSelected/shellSelected), so surface it ahead of the plugin-reported
@@ -1818,13 +1820,13 @@ func (m model) workspaceActivity(ws workspace.Summary) (string, lipgloss.Color) 
 	case workspace.ActivityWorking:
 		return "working", colRunning
 	case workspace.ActivityWaiting:
-		return "waiting", colStarting
-	case workspace.ActivityApproval:
-		return "approval", colStopped
+		return "waiting", colStopped
+	case workspace.ActivitySleeping:
+		return "sleeping", colMuted
 	case workspace.ActivityError:
 		return "error", colError
-	case workspace.ActivityAsleep:
-		return "asleep", colMuted
+	case workspace.ActivityOff:
+		return "off", colMuted
 	default:
 		if status.Container == runtime.StatusRunning {
 			return "starting", colMuted
@@ -1834,21 +1836,21 @@ func (m model) workspaceActivity(ws workspace.Summary) (string, lipgloss.Color) 
 }
 
 // attentionCounts returns how many running workspaces are blocked on a
-// permission prompt (approval) and how many have finished and are waiting for
-// human input (waiting).
-func (m model) attentionCounts() (approval, waiting int) {
+// permission prompt (waiting) and how many have finished their turn and gone
+// idle (sleeping).
+func (m model) attentionCounts() (waiting, sleeping int) {
 	for _, status := range m.statuses {
 		if status.Container != runtime.StatusRunning {
 			continue
 		}
 		switch status.Activity {
-		case workspace.ActivityApproval:
-			approval++
 		case workspace.ActivityWaiting:
 			waiting++
+		case workspace.ActivitySleeping:
+			sleeping++
 		}
 	}
-	return approval, waiting
+	return waiting, sleeping
 }
 
 func (m *model) requestDelete() {

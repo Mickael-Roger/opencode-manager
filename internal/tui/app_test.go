@@ -44,7 +44,7 @@ func TestWorkspaceStatusCreatingWhileProvisioning(t *testing.T) {
 // Update must be refused while OpenCode is mid-task so the post-update restart
 // cannot interrupt active work.
 func TestUpdateRefusedWhileTaskRunning(t *testing.T) {
-	for _, activity := range []workspace.Activity{workspace.ActivityWorking, workspace.ActivityApproval} {
+	for _, activity := range []workspace.Activity{workspace.ActivityWorking, workspace.ActivityWaiting} {
 		m := updateTestModel(activity)
 		next, cmd := m.updateSelected()
 		if cmd != nil {
@@ -58,7 +58,7 @@ func TestUpdateRefusedWhileTaskRunning(t *testing.T) {
 
 // Update is allowed (a command is dispatched) when no task is running.
 func TestUpdateDispatchedWhenIdle(t *testing.T) {
-	for _, activity := range []workspace.Activity{workspace.ActivityWaiting, workspace.ActivityAsleep, workspace.ActivityNew} {
+	for _, activity := range []workspace.Activity{workspace.ActivitySleeping, workspace.ActivityOff, workspace.ActivityNew} {
 		m := updateTestModel(activity)
 		next, cmd := m.updateSelected()
 		if cmd == nil {

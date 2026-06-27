@@ -60,7 +60,8 @@ RUN set -eux; \
       *)             variant="" ;; \
     esac; \
     if [ -n "$variant" ] && [ -x "$OCM/node_modules/$variant/bin/opencode" ]; then \
-      cp "$OCM/node_modules/$variant/bin/opencode" "$OCM/bin/opencode.exe"; \
+      cp -L "$OCM/node_modules/$variant/bin/opencode" "$OCM/bin/opencode.exe.real"; \
+      mv -f "$OCM/bin/opencode.exe.real" "$OCM/bin/opencode.exe"; \
     fi; \
     rm -rf "$OCM"/node_modules/opencode-linux-* "$OCM"/node_modules/opencode-darwin-* "$OCM"/node_modules/opencode-windows-*; \
     npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*; \

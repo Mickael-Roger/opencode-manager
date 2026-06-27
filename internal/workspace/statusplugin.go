@@ -38,10 +38,10 @@ const (
 	ActivityUnknown  Activity = ""         // no report yet (container just started)
 	ActivityNew      Activity = "new"      // workspace has never been used (no status file ever)
 	ActivityWorking  Activity = "working"  // agent is generating or running tools
-	ActivityWaiting  Activity = "waiting"  // finished a turn, waiting for human input
-	ActivityApproval Activity = "approval" // blocked on a permission prompt
+	ActivityWaiting  Activity = "waiting"  // blocked needing a human (a permission prompt)
+	ActivitySleeping Activity = "sleeping" // finished its turn, opencode idle but still running
 	ActivityError    Activity = "error"    // a session errored
-	ActivityAsleep   Activity = "asleep"   // opencode not active in a running container
+	ActivityOff      Activity = "off"      // opencode not active in a running container
 )
 
 // statusReport mirrors the JSON written by the status-reporter plugin.
@@ -135,19 +135,19 @@ func readActivity(homeDir string, running bool) (Activity, int) {
 // accounting for heartbeat staleness. Split out for testing.
 func activityFromReport(report statusReport, now time.Time) (Activity, int) {
 	if !report.UpdatedAt.IsZero() && now.Sub(report.UpdatedAt) > activityStaleAfter {
-		return ActivityAsleep, 0
+		return ActivityOff, 0
 	}
 
 	switch report.Activity {
 	case "working":
 		return ActivityWorking, report.PendingApproval
 	case "needs-approval":
-		return ActivityApproval, report.PendingApproval
+		return ActivityWaiting, report.PendingApproval
 	case "error":
 		return ActivityError, 0
 	case "idle":
-		return ActivityWaiting, 0
+		return ActivitySleeping, 0
 	default:
-		return ActivityAsleep, 0
+		return ActivityOff, 0
 	}
 }
