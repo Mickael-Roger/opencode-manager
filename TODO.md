@@ -23,3 +23,5 @@
 - [ ] Think about exposing a port (in the TUI action: expose port)
 - [ ] Add a display of token per container
 - [ ] CLI with more commands
+- [ ] Protect main branch
+- [ ] Make sure the ci create the github release
