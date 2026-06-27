@@ -142,7 +142,9 @@ jobs:
       # the manager does: an unprivileged sudo user, the module dir mounted, and
       # prompt values passed as OCM_*.
       - name: Build base image
-        run: docker build -t ocm-base:test -f "$BASE_CONTEXT/Dockerfile" "$BASE_CONTEXT"
+        # Retried: building pulls debian:stable-slim from Docker Hub, which
+        # intermittently times out (registry i/o timeout) on hosted runners.
+        run: scripts/ci/retry.sh docker build -t ocm-base:test -f "$BASE_CONTEXT/Dockerfile" "$BASE_CONTEXT"
       - name: Test module install
         env:
           RUNTIME: docker
@@ -178,8 +180,9 @@ jobs:
 
       # --- Base-image creation test (per runtime) ----------------------------
       - name: Build base image
-        run: |
-          "$RUNTIME" build -t "$BASE_REF" -f "$BASE_CONTEXT/Dockerfile" "$BASE_CONTEXT"
+        # Retried: building pulls debian:stable-slim from Docker Hub, which
+        # intermittently times out (registry i/o timeout) on hosted runners.
+        run: scripts/ci/retry.sh "$RUNTIME" build -t "$BASE_REF" -f "$BASE_CONTEXT/Dockerfile" "$BASE_CONTEXT"
 
       # --- Complete installation test (npm global install) -------------------
       - name: Download prebuilt binaries

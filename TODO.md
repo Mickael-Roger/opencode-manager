@@ -11,17 +11,17 @@
 - [x] When creating an image status must be creating instead of missing
 - [x] Improve the docker image size
 - [x] Review the status: sleeping, waiting and working
+- [x] Add langage modules category + python
+- [x] Add github, gitlab modules
 
-- [/] Add langage modules category + python
-- [/] Add github, gitlab modules
+- [/] Create templates of workspace (modules, ...)
 
 - [ ] Add gcp, ovh, scaleway modules
-- [ ] Create a function to create a new workspace by copying an existing one
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [ ] Add a config.yaml edition part in the TUI
-- [ ] Create templates of workspace (modules, ...)
 - [ ] Think about exposing a port (in the TUI action: expose port)
 - [ ] Add a display of token per container
 - [ ] CLI with more commands
 - [ ] Protect main branch
 - [ ] Make sure the ci create the github release
+- [ ] Not sure: Create a function to create a new workspace by copying an existing one

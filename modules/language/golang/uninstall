@@ -4,7 +4,13 @@
 set -e
 
 sudo rm -rf /usr/local/go
-rm -rf "$HOME/go"
+
+# The Go module cache (~/go/pkg/mod) is written read-only by `go install`, so a
+# plain rm -rf fails with "Permission denied". Make the tree writable first.
+if [ -d "$HOME/go" ]; then
+	chmod -R u+w "$HOME/go" 2>/dev/null || true
+	rm -rf "$HOME/go"
+fi
 
 ENV_FILE="$HOME/.env"
 [ -f "$ENV_FILE" ] && sed -i '/# >>> ocm:golang >>>/,/# <<< ocm:golang <<</d' "$ENV_FILE"
