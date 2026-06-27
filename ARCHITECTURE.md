@@ -133,7 +133,7 @@ runtime: docker
 useLocalOpenCodeAuth: false
 logLevel: warning
 baseImage:
-  name: debian:stable-slim
+  name: docker.io/mroger78/ocm-base:latest
   packages:
     - htop
     - unzip
@@ -158,13 +158,26 @@ Generated workspace images always include `brew`, `npx`, `uvx`, `git`,
 `ripgrep`, and `jq`. Add project-specific extras with `baseImage.packages` and
 `baseImage.commands`.
 
-`opencode-manager` builds a managed base image from the `baseImage` definition
-and reuses it while that definition stays unchanged. Changing `baseImage.name`,
-`baseImage.packages`, or `baseImage.commands` produces a new managed base image
-tag.
+`baseImage.name` defaults to the published, prebuilt base image
+`docker.io/mroger78/ocm-base:latest`, which already contains the full tooling
+(`brew`, `npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `tokscale`, and the
+manager scripts). With this default and no extras, `opencode-manager` simply
+pulls that image instead of building a base locally, so the first start is fast.
 
-When the TUI starts, it ensures the managed base image exists and shows
-`Creating the base image...` while the image is being built.
+Adding `baseImage.packages` or `baseImage.commands` builds a thin local overlay
+on top of the prebuilt base (only the extras are applied). Pointing
+`baseImage.name` at a different distro instead (e.g. `debian:stable-slim`) falls
+back to building the complete base recipe locally from that image. In all cases
+the resulting base is reused while the `baseImage` definition stays unchanged;
+changing any field produces a new managed base image.
+
+The prebuilt base image is built and published by the GitHub Actions pipeline
+from the recipe in `internal/runtime` (see `WriteBaseBuildContext` and
+`cmd/ocm-base-context`), so the published image and the local fallback build are
+always the same recipe.
+
+When the TUI starts, it ensures the base image is available and shows
+`Creating the base image...` while it is pulled or built.
 
 ## Global OpenCode Templates
 

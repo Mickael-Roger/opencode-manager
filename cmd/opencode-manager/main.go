@@ -74,6 +74,10 @@ func runCLI(cfg config.Config, args []string) error {
 			return usageError()
 		}
 		return attachWorkspace(cfg, args[1])
+	case "selftest":
+		// Hidden integration entrypoint (see selftest.go); not part of the public
+		// CLI and intentionally absent from the usage message.
+		return runSelftest(args[1:])
 	default:
 		return usageError()
 	}

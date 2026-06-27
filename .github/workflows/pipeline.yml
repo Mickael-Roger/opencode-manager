@@ -1,0 +1,332 @@
+name: Pipeline
+
+# Single pipeline so the publish jobs can depend (needs) on the full test gate.
+#
+# Channels:
+#   * Pull requests / manual runs -> lint, unit tests, build, and the
+#     docker + podman integration matrix (install, base-image build, usage,
+#     and upgrade tests). Nothing is published.
+#   * Push to main -> the gate, then the DEV channel: npm dist-tag `dev` and the
+#     base image docker.io/mroger78/ocm-base:dev (+ a per-commit sha tag).
+#   * Push a vX.Y.Z tag -> the gate, then the STABLE channel: npm `latest` and
+#     the base image promoted (same tested digest) to :X.Y.Z and :latest.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Published base image. Built from the recipe in internal/runtime via
+  # cmd/ocm-base-context, so it never drifts from what the binary expects.
+  BASE_IMAGE: docker.io/mroger78/ocm-base
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd internal)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    needs: [lint, unit]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            node_arch: x64
+          - goos: linux
+            goarch: arm64
+            node_arch: arm64
+          - goos: darwin
+            goarch: amd64
+            node_arch: x64
+          - goos: darwin
+            goarch: arm64
+            node_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` can resolve the version.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/mickael-menu/opencode-manager/internal/tui.appVersion=${VERSION}" \
+            -o dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }} ./cmd/opencode-manager
+          chmod 755 dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }}
+          path: dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }}
+          if-no-files-found: error
+
+  integration:
+    name: Integration (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [docker, podman]
+    env:
+      RUNTIME: ${{ matrix.runtime }}
+      # Use the runtime's local image store: the base image is built locally in
+      # this job, so the binary must not try to pull it from the registry.
+      BASE_REF: docker.io/mroger78/ocm-base:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install podman
+        if: matrix.runtime == 'podman'
+        run: sudo apt-get update && sudo apt-get install -y podman
+
+      # --- Base-image creation test (per runtime) ----------------------------
+      - name: Generate base build context
+        run: go run ./cmd/ocm-base-context -o "$RUNNER_TEMP/basectx"
+      - name: Build base image
+        run: |
+          "$RUNTIME" build -t "$BASE_REF" -f "$RUNNER_TEMP/basectx/Containerfile" "$RUNNER_TEMP/basectx"
+
+      # --- Complete installation test (npm global install) -------------------
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble dist and pack
+        run: |
+          mkdir -p dist
+          for a in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            cp "artifacts/opencode-manager-$a/opencode-manager-$a" dist/
+          done
+          chmod 755 dist/opencode-manager-*
+          npm pack
+      - name: Install package globally
+        run: npm install -g ./*.tgz
+
+      - name: Write runtime config
+        run: |
+          mkdir -p "$RUNNER_TEMP/ws"
+          cat > "$RUNNER_TEMP/ocm-config.yaml" <<EOF
+          workspaceRoot: "$RUNNER_TEMP/ws"
+          runtime: $RUNTIME
+          useLocalOpenCodeAuth: false
+          logLevel: info
+          baseImage:
+            name: $BASE_REF
+            packages: []
+            commands: []
+          EOF
+
+      # --- Usage test: base + workspace creation, container runs, opencode OK -
+      - name: Usage test
+        run: opencode-manager selftest --config "$RUNNER_TEMP/ocm-config.yaml" --name ci-usage
+
+      # --- Upgrade test: existing workspace survives a reinstall -------------
+      - name: Create workspace (pre-upgrade)
+        run: opencode-manager selftest --config "$RUNNER_TEMP/ocm-config.yaml" --name ci-upgrade --keep
+      - name: Reinstall (simulate upgrade)
+        run: npm install -g ./*.tgz
+      - name: Verify existing workspace still runs (post-upgrade)
+        run: opencode-manager selftest --config "$RUNNER_TEMP/ocm-config.yaml" --name ci-upgrade --reuse
+
+  publish-dev:
+    name: Publish dev channel
+    runs-on: ubuntu-latest
+    needs: [build, integration]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (provenance)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble dist
+        run: |
+          mkdir -p dist
+          for a in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            cp "artifacts/opencode-manager-$a/opencode-manager-$a" dist/
+          done
+          chmod 755 dist/opencode-manager-*
+
+      - name: Set dev version
+        run: npm version "0.0.0-dev.${{ github.run_number }}" --no-git-tag-version --allow-same-version
+      - name: Publish to npm (dev tag)
+        run: npm publish --tag dev --access public
+
+      - name: Generate base build context
+        run: go run ./cmd/ocm-base-context -o "$RUNNER_TEMP/basectx"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push base image (dev + sha)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/basectx
+          file: ${{ runner.temp }}/basectx/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.BASE_IMAGE }}:dev
+            ${{ env.BASE_IMAGE }}:sha-${{ github.sha }}
+
+  publish-stable:
+    name: Publish stable channel
+    runs-on: ubuntu-latest
+    needs: [build, integration]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (provenance)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+
+      - name: Verify tag is merged into main
+        run: |
+          git fetch --no-tags origin main
+          if git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "Tag commit ${GITHUB_SHA} is contained in main; proceeding."
+          else
+            echo "::error::Tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) is not merged into main; refusing to publish."
+            exit 1
+          fi
+
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble dist
+        run: |
+          mkdir -p dist
+          for a in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            cp "artifacts/opencode-manager-$a/opencode-manager-$a" dist/
+          done
+          chmod 755 dist/opencode-manager-*
+
+      - name: Set release version from tag
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - name: Publish to npm (latest)
+        run: npm publish --access public
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Promote base image to version + latest
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          SRC="${BASE_IMAGE}:sha-${GITHUB_SHA}"
+          VER="${VERSION#v}"
+          # Promote the exact digest tested on main for this commit, if present.
+          if docker buildx imagetools inspect "$SRC" >/dev/null 2>&1; then
+            echo "Promoting tested digest $SRC -> $VER + latest"
+            docker buildx imagetools create \
+              -t "${BASE_IMAGE}:${VER}" \
+              -t "${BASE_IMAGE}:latest" \
+              "$SRC"
+          else
+            echo "::warning::$SRC not found (tag not built on main); building from source."
+            go run ./cmd/ocm-base-context -o "$RUNNER_TEMP/basectx"
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              -t "${BASE_IMAGE}:${VER}" \
+              -t "${BASE_IMAGE}:latest" \
+              -f "$RUNNER_TEMP/basectx/Containerfile" \
+              "$RUNNER_TEMP/basectx"
+          fi

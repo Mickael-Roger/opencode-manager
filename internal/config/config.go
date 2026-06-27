@@ -22,6 +22,13 @@ const (
 	LogLevelError   = "error"
 )
 
+// DefaultBaseImage is the published, prebuilt base image used unless the user
+// overrides baseImage.name. It already contains the full tooling (uv, linuxbrew,
+// OpenCode, tokscale, and the manager scripts), so a default workspace pulls it
+// instead of building a base image locally. It is built and published by
+// .github/workflows from the recipe in internal/runtime (see WriteBaseBuildContext).
+const DefaultBaseImage = "docker.io/mroger78/ocm-base:latest"
+
 type Config struct {
 	WorkspaceRoot        string          `yaml:"workspaceRoot"`
 	Runtime              string          `yaml:"runtime"`
@@ -155,7 +162,7 @@ func Default() (Config, error) {
 		Runtime:       RuntimeDocker,
 		LogLevel:      LogLevelWarning,
 		BaseImage: BaseImageConfig{
-			Name: "debian:stable-slim",
+			Name: DefaultBaseImage,
 		},
 		ModuleDirs: []string{filepath.Join(globalDir, "modules")},
 	}, nil
