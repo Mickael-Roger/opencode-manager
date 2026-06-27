@@ -464,6 +464,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				delete(m.versions, name)
 			}
+
+			// Refresh token usage via tokscale at launch (the first time we see the
+			// container running) and whenever a workspace finishes a working turn
+			// (working -> anything else), so the TOKENS column stays current without
+			// running tokscale on every 2s tick. The last-known totals are kept when
+			// the container stops, so the column still shows a value while idle.
+			if status.Container == runtime.StatusRunning {
+				prev, hadPrev := m.statuses[name]
+				startedRunning := !hadPrev || prev.Container != runtime.StatusRunning
+				finishedWorking := hadPrev && prev.Activity == workspace.ActivityWorking && status.Activity != workspace.ActivityWorking
+				st, tracked := m.tokens[name]
+				if !(tracked && st.loading) && (startedRunning || finishedWorking || !st.loaded) {
+					m.tokens[name] = tokenState{loading: true}
+					cmds = append(cmds, m.fetchTokenUsage(status.Workspace))
+				}
+			}
 		}
 		m.statuses = next
 		if ring {
@@ -1384,7 +1400,7 @@ func (m model) renderTable(width, height int) string {
 	visible := m.visibleWorkspaces()
 
 	widths := columnWidths(contentWidth)
-	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "CONTAINER"}
+	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "TOKENS I/O", "CONTAINER"}
 	headerCells := make([]string, len(headers))
 	for i, h := range headers {
 		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
@@ -1427,6 +1443,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 	activityText, activityColor := m.workspaceActivity(ws)
 	rt := ws.Manifest.Runtime
 	version := m.workspaceVersion(ws)
+	tokens := m.workspaceTokens(ws)
 	container := ws.Manifest.ContainerName
 
 	if selected {
@@ -1436,7 +1453,8 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 			fit(activityText, widths[2]),
 			fit(rt, widths[3]),
 			fit(version, widths[4]),
-			fit(container, widths[5]),
+			fit(tokens, widths[5]),
+			fit(container, widths[6]),
 		}
 		return cursorStyle.Render(" " + strings.Join(cells, "  ") + " ")
 	}
@@ -1447,7 +1465,8 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 		lipgloss.NewStyle().Foreground(activityColor).Render(fit(activityText, widths[2])),
 		mutedStyle.Render(fit(rt, widths[3])),
 		mutedStyle.Render(fit(version, widths[4])),
-		mutedStyle.Render(fit(container, widths[5])),
+		mutedStyle.Render(fit(tokens, widths[5])),
+		mutedStyle.Render(fit(container, widths[6])),
 	}
 	return " " + strings.Join(cells, "  ") + " "
 }
@@ -1634,7 +1653,7 @@ func (m model) tokenFields(name string) []describeField {
 
 	usage := state.usage
 	return []describeField{
-		{key: "Tokens total", value: fmt.Sprintf("%s tok   %s   %d msg", humanCount(usage.TotalTokens), money(usage.TotalCost), usage.TotalMsgs), color: colRunning},
+		{key: "Tokens total", value: fmt.Sprintf("%s tok (%s in / %s out)   %s   %d msg", humanCount(usage.TotalTokens), humanCount(usage.TotalInput), humanCount(usage.TotalOutput), money(usage.TotalCost), usage.TotalMsgs), color: colRunning},
 		{key: "Tokens today", value: fmt.Sprintf("%s tok   %s   %d msg", humanCount(usage.TodayTokens), money(usage.TodayCost), usage.TodayMsgs)},
 	}
 }
@@ -2122,6 +2141,45 @@ func (m model) workspaceVersion(ws workspace.Summary) string {
 	return st.value
 }
 
+// workspaceTokens returns the input/output token display for a workspace's
+// TOKENS column: a dash when never measured, an ellipsis while the first
+// measurement is in flight, "err" when tokscale failed, otherwise the compact
+// all-time "input/output" totals reported by tokscale. The last-known totals are
+// shown even when the container is stopped (tokscale can only run while it is up).
+func (m model) workspaceTokens(ws workspace.Summary) string {
+	st, ok := m.tokens[ws.Manifest.Name]
+	switch {
+	case !ok || (!st.loaded && !st.loading):
+		return "—"
+	case st.loading && !st.loaded:
+		return "…"
+	case st.err != "":
+		return "err"
+	default:
+		return compactCount(st.usage.TotalInput) + "/" + compactCount(st.usage.TotalOutput)
+	}
+}
+
+// compactCount formats a token count for the narrow TOKENS column: 1234 -> "1.2k",
+// 2_500_000 -> "2.5M". Values below 1000 are shown as-is. The ".0" suffix is
+// trimmed so e.g. 2000 renders as "2k" rather than "2.0k".
+func compactCount(n int64) string {
+	switch {
+	case n < 1000:
+		return strconv.FormatInt(n, 10)
+	case n < 1_000_000:
+		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1000)) + "k"
+	case n < 1_000_000_000:
+		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1_000_000)) + "M"
+	default:
+		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1_000_000_000)) + "B"
+	}
+}
+
+func trimDotZero(s string) string {
+	return strings.TrimSuffix(s, ".0")
+}
+
 func (m model) isRunning(name string) bool {
 	status, ok := m.statuses[name]
 	return ok && status.Container == runtime.StatusRunning
@@ -2181,11 +2239,11 @@ func (m *model) clampSelection() {
 	m.workspacePos = clamp(m.workspacePos, 0, len(visible)-1)
 }
 
-// columnWidths splits the available content width across the six columns,
-// keeping STATUS, ACTIVITY, RUNTIME, and OPENCODE fixed and sharing the rest
-// between NAME and CONTAINER.
+// columnWidths splits the available content width across the seven columns,
+// keeping STATUS, ACTIVITY, RUNTIME, OPENCODE, and TOKENS fixed and sharing the
+// rest between NAME and CONTAINER.
 func columnWidths(contentWidth int) []int {
-	const gaps = 10 // five 2-space separators
+	const gaps = 12 // six 2-space separators
 	avail := contentWidth - gaps
 	if avail < 20 {
 		avail = 20
@@ -2195,7 +2253,8 @@ func columnWidths(contentWidth int) []int {
 	wActivity := 9
 	wRuntime := 7
 	wVersion := 9
-	rest := avail - wStatus - wActivity - wRuntime - wVersion
+	wTokens := 13
+	rest := avail - wStatus - wActivity - wRuntime - wVersion - wTokens
 	if rest < 16 {
 		rest = 16
 	}
@@ -2203,7 +2262,7 @@ func columnWidths(contentWidth int) []int {
 	wName := max(8, rest*45/100)
 	wContainer := max(8, rest-wName)
 
-	return []int{wName, wStatus, wActivity, wRuntime, wVersion, wContainer}
+	return []int{wName, wStatus, wActivity, wRuntime, wVersion, wTokens, wContainer}
 }
 
 // fit truncates or right-pads s to exactly w display columns.

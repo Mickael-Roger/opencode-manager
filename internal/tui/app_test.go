@@ -8,6 +8,50 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
 
+func TestCompactCount(t *testing.T) {
+	cases := map[int64]string{
+		0:             "0",
+		999:           "999",
+		1000:          "1k",
+		1234:          "1.2k",
+		12345:         "12.3k",
+		999999:        "1000k",
+		1_000_000:     "1M",
+		2_500_000:     "2.5M",
+		1_000_000_000: "1B",
+		3_400_000_000: "3.4B",
+	}
+	for in, want := range cases {
+		if got := compactCount(in); got != want {
+			t.Errorf("compactCount(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWorkspaceTokensDisplay(t *testing.T) {
+	ws := workspace.Summary{Manifest: workspace.Manifest{Name: "app"}}
+	m := model{tokens: map[string]tokenState{}}
+
+	if got := m.workspaceTokens(ws); got != "—" {
+		t.Errorf("never-measured = %q, want —", got)
+	}
+
+	m.tokens["app"] = tokenState{loading: true}
+	if got := m.workspaceTokens(ws); got != "…" {
+		t.Errorf("loading = %q, want …", got)
+	}
+
+	m.tokens["app"] = tokenState{loaded: true, usage: workspace.TokenUsage{TotalInput: 12345, TotalOutput: 4500}}
+	if got := m.workspaceTokens(ws); got != "12.3k/4.5k" {
+		t.Errorf("loaded = %q, want 12.3k/4.5k", got)
+	}
+
+	m.tokens["app"] = tokenState{loaded: true, err: "boom"}
+	if got := m.workspaceTokens(ws); got != "err" {
+		t.Errorf("error = %q, want err", got)
+	}
+}
+
 func updateTestModel(activity workspace.Activity) model {
 	ws := workspace.Summary{Manifest: workspace.Manifest{Name: "app"}}
 	return model{

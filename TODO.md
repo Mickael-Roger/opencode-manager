@@ -15,13 +15,15 @@
 - [x] Add github, gitlab modules
 
 - [/] Create templates of workspace (modules, ...)
+- [/] Make sure the ci create the github release
+- [/] Add a display of token per container
 
 - [ ] Add gcp, ovh, scaleway modules
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [ ] Add a config.yaml edition part in the TUI
 - [ ] Think about exposing a port (in the TUI action: expose port)
-- [ ] Add a display of token per container
 - [ ] CLI with more commands
 - [ ] Protect main branch
-- [ ] Make sure the ci create the github release
 - [ ] Not sure: Create a function to create a new workspace by copying an existing one
+- [ ] Add remote kubernetes cluster as backend support
+- [ ] Add a sort feature in the display of workspace (per name, status)

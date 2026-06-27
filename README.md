@@ -101,6 +101,12 @@ ocm attach <workspace>   # attach to a workspace session
 From the dashboard you create, attach, edit (`e`), stop, delete, and update
 workspaces — all from the keyboard.
 
+The dashboard table includes a **TOKENS I/O** column showing each workspace's
+all-time input/output token usage (compacted as `k`/`M`/`B`, e.g. `12.3k/4.5k`).
+It is measured with [tokscale](https://www.npmjs.com/package/tokscale) inside the
+container — refreshed when a workspace starts and each time it finishes a turn —
+and the full breakdown is on the describe page (`d`).
+
 ### Templates
 
 A **template** is a reusable, named set of modules-with-configuration — your
