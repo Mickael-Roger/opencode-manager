@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Runs inside the workspace container. Installs the selected Node.js version via
+# nvm (kept isolated under ~/.nvm so it never disturbs the base image's system
+# node), installs the dev environment (typescript + typescript-language-server),
+# and exports the chosen node's bin dir through a marked block in ~/.env.
+# Idempotent: nvm clone/install and the global npm install are re-runnable and the
+# ~/.env block is rewritten in place, so reconcile can re-run this safely.
+#
+# bash (not sh) because nvm.sh requires it.
+set -e
+
+: "${OCM_VERSION:=lts}"
+
+# git+curl are needed to fetch nvm and node; both ship in the base image.
+for bin in git curl; do
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends git curl ca-certificates
+    break
+  fi
+done
+
+# Install nvm into ~/.nvm by cloning a pinned tag (more idempotent than the
+# install.sh script, which also edits ~/.bashrc — we manage ~/.env ourselves).
+export NVM_DIR="$HOME/.nvm"
+NVM_VERSION="v0.40.3"
+if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+  git clone --quiet --branch "$NVM_VERSION" --depth 1 \
+    https://github.com/nvm-sh/nvm.git "$NVM_DIR"
+fi
+
+# shellcheck disable=SC1091
+. "$NVM_DIR/nvm.sh"
+
+# Install the requested version. "lts" tracks the current LTS line; a bare major
+# (e.g. 22) resolves to its newest release.
+if [ "$OCM_VERSION" = lts ]; then
+  nvm install --lts
+  nvm alias default 'lts/*'
+else
+  nvm install "$OCM_VERSION"
+  nvm alias default "$OCM_VERSION"
+fi
+
+NODE_VER="$(nvm version default)"
+NODE_BIN="$NVM_DIR/versions/node/$NODE_VER/bin"
+echo "node $NODE_VER installed via nvm"
+
+# Install the dev environment with the selected node's npm: typescript and the
+# language server (covers both JavaScript and TypeScript).
+"$NODE_BIN/npm" install -g typescript typescript-language-server
+echo "node dev tools installed: typescript, typescript-language-server"
+
+# Export NVM_DIR and the concrete node bin dir through a marked block in ~/.env so
+# the chosen node reaches the server and shells. The block is written with the
+# resolved absolute path (POSIX-safe; ~/.env is sourced by /bin/sh), and rewritten
+# in place so reconcile never duplicates it.
+ENV_FILE="$HOME/.env"
+touch "$ENV_FILE"
+sed -i '/# >>> ocm:nodejs >>>/,/# <<< ocm:nodejs <<</d' "$ENV_FILE"
+{
+  echo "# >>> ocm:nodejs >>>"
+  echo "export NVM_DIR=\"\$HOME/.nvm\""
+  echo "export PATH=\"$NODE_BIN:\$PATH\""
+  echo "# <<< ocm:nodejs <<<"
+} >>"$ENV_FILE"
+
+echo "nodejs environment written to ~/.env"

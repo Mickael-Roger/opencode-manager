@@ -1,0 +1,18 @@
+name: nodejs
+version: 1
+description: Install Node.js (selectable version) via nvm plus the dev environment — typescript and typescript-language-server (LSP) — and put it on PATH.
+# Appends a marked block to ~/.env (NVM_DIR + PATH to the selected node) so the
+# chosen Node reaches the OpenCode server and every shell, which requires bouncing
+# the server.
+restartServer: true
+prompts:
+  - name: version
+    label: Node.js version
+    type: select
+    required: true
+    default: lts
+    options:
+      - lts
+      - "22"
+      - "20"
+      - "18"

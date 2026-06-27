@@ -1,0 +1,36 @@
+#!/bin/sh
+# Runs inside the workspace container. Installs the GitHub CLI (gh) from the
+# official apt repo and, when a token is available (imported from the host by the
+# resolve hook, or typed in), authenticates gh for the chosen host. Idempotent:
+# the gh install is guarded and `gh auth login` overwrites the stored token, so
+# reconcile can re-run this safely.
+set -e
+
+: "${OCM_HOSTNAME:=github.com}"
+
+if ! command -v gh >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  sudo mkdir -p -m 755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+  sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  arch="$(dpkg --print-architecture)"
+  echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+  sudo apt-get update
+  sudo apt-get install -y gh
+fi
+
+echo "gh installed: $(gh --version | head -n1)"
+
+# Authenticate when a token is present: $OCM_TOKEN comes either from the host
+# resolve hook (imported gh auth) or from the manual token prompt.
+if [ -n "$OCM_TOKEN" ]; then
+  printf '%s' "$OCM_TOKEN" | gh auth login --hostname "$OCM_HOSTNAME" --with-token
+  echo "gh authenticated for ${OCM_HOSTNAME}"
+else
+  echo "gh installed without authentication"
+fi

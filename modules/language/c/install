@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs inside the workspace container. Installs the C toolchain and dev tooling
+# from apt: build-essential (gcc/g++/make), cmake, gdb, and clangd (the language
+# server). Everything lands on the system PATH, so no ~/.env change is needed.
+# Idempotent: apt-get install is a no-op for already-present packages, so reconcile
+# can re-run this safely.
+set -e
+
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  build-essential cmake gdb clang clangd
+
+echo "c dev environment installed: gcc/g++, make, cmake, gdb, clangd (LSP)"

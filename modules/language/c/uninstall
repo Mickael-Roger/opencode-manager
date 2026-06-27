@@ -1,0 +1,9 @@
+#!/bin/sh
+# Removes the C dev environment packages installed by this module. Best-effort:
+# packages another module still depends on are kept by apt, and a failure here
+# must not block reconcile.
+set -e
+
+sudo apt-get remove -y build-essential cmake gdb clang clangd 2>/dev/null || true
+
+echo "c dev environment removed"

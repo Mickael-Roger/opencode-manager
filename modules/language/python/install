@@ -1,0 +1,66 @@
+#!/bin/sh
+# Runs inside the workspace container. Installs the selected Python version with
+# uv (the base image ships uv; python-build-standalone interpreters are managed
+# under ~/.local/share/uv and never touch the system), exposes python/python3 on
+# PATH, and installs the dev environment (pyright LSP + ruff) as uv tools.
+# Idempotent: uv installs are re-runnable, the symlinks are refreshed, and the
+# ~/.env block is rewritten in place, so reconcile can re-run this safely.
+set -e
+
+: "${OCM_VERSION:=latest}"
+
+# uv ships in the base image; install it if a custom base lacks it. The official
+# installer drops uv into ~/.local/bin.
+if ! command -v uv >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Install the interpreter. "latest" lets uv pick the newest stable; a pinned minor
+# (e.g. 3.12) resolves to its newest patch. uv python find prints the resolved
+# interpreter path, from which the bin dir (pip, python3.x) is derived.
+if [ "$OCM_VERSION" = latest ]; then
+  uv python install
+  pybin="$(uv python find)"
+else
+  uv python install "$OCM_VERSION"
+  pybin="$(uv python find "$OCM_VERSION")"
+fi
+
+if [ -z "$pybin" ] || [ ! -x "$pybin" ]; then
+  echo "python: could not locate the interpreter for '$OCM_VERSION'" >&2
+  exit 1
+fi
+pydir="$(dirname "$pybin")"
+echo "python installed: $("$pybin" --version 2>&1)"
+
+# Expose stable python/python3 entry points in ~/.local/bin (always on PATH),
+# pointing at the managed interpreter.
+mkdir -p "$HOME/.local/bin"
+ln -sf "$pybin" "$HOME/.local/bin/python3"
+ln -sf "$pybin" "$HOME/.local/bin/python"
+
+# Install the dev environment as uv tools (executables land in ~/.local/bin):
+# pyright is the language server; ruff is the linter/formatter.
+uv tool install pyright
+uv tool install ruff
+echo "python dev tools installed: pyright (LSP), ruff"
+
+# Export the interpreter bin dir and the uv tool bin dir through a marked block in
+# ~/.env so the chosen Python and tools reach the server and shells. The block is
+# written with the resolved absolute interpreter path (POSIX-safe; ~/.env is
+# sourced by /bin/sh) and rewritten in place so reconcile never duplicates it.
+ENV_FILE="$HOME/.env"
+touch "$ENV_FILE"
+sed -i '/# >>> ocm:python >>>/,/# <<< ocm:python <<</d' "$ENV_FILE"
+{
+  echo "# >>> ocm:python >>>"
+  echo "export PATH=\"$pydir:\$HOME/.local/bin:\$PATH\""
+  echo "# <<< ocm:python <<<"
+} >>"$ENV_FILE"
+
+echo "python environment written to ~/.env"

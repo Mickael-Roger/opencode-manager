@@ -1,0 +1,7 @@
+name: c
+version: 1
+description: Install the C dev environment — GCC/build-essential, make, cmake, gdb — and clangd (LSP), all from apt onto the system PATH.
+# Only installs apt packages onto the system PATH; nothing in ~/.env, so it never
+# bounces the OpenCode server and can be installed or removed while a task runs.
+restartServer: false
+prompts: []

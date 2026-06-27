@@ -1,0 +1,12 @@
+#!/bin/sh
+# Removes the Go toolchain, the GOPATH workspace (~/go, including the installed
+# dev tools), and the ~/.env block that put them on PATH.
+set -e
+
+sudo rm -rf /usr/local/go
+rm -rf "$HOME/go"
+
+ENV_FILE="$HOME/.env"
+[ -f "$ENV_FILE" ] && sed -i '/# >>> ocm:golang >>>/,/# <<< ocm:golang <<</d' "$ENV_FILE"
+
+echo "golang removed"

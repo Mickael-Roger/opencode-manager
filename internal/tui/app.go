@@ -93,6 +93,10 @@ type model struct {
 	editMode    bool
 	editEntries []editEntry
 	editPos     int
+	// editCollapsed records which categories are collapsed in the module browser.
+	// Categories start collapsed: the browser opens showing only category headers,
+	// and the user expands one (enter) to reveal its modules.
+	editCollapsed map[string]bool
 	// editFilter narrows the module browser to entries whose name, description,
 	// category, or instance label match; editFilterMode is true while typing it.
 	editFilter      string

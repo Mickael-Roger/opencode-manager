@@ -1,0 +1,12 @@
+#!/bin/sh
+# Removes the nvm install (including every node version and the global dev tools
+# under it) and the ~/.env block that put node on PATH. The base image's system
+# node is untouched.
+set -e
+
+rm -rf "$HOME/.nvm"
+
+ENV_FILE="$HOME/.env"
+[ -f "$ENV_FILE" ] && sed -i '/# >>> ocm:nodejs >>>/,/# <<< ocm:nodejs <<</d' "$ENV_FILE"
+
+echo "nodejs removed"

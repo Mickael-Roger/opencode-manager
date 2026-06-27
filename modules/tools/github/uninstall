@@ -1,0 +1,13 @@
+#!/bin/sh
+# Logs gh out of the configured host (dropping the stored token) and removes the
+# gh package. Best-effort: a missing login or package must not fail the removal.
+set -e
+
+: "${OCM_HOSTNAME:=github.com}"
+
+if command -v gh >/dev/null 2>&1; then
+  gh auth logout --hostname "$OCM_HOSTNAME" 2>/dev/null || true
+fi
+sudo apt-get remove -y gh 2>/dev/null || true
+
+echo "github (gh) removed"

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Removes the python/python3 symlinks, the uv-installed dev tools (pyright, ruff),
+# and the ~/.env block that put Python on PATH. The uv-managed interpreters cached
+# under ~/.local/share/uv are left in place (harmless, and shared with uv itself);
+# remove them with `uv python uninstall --all` if you want the disk back.
+set -e
+
+rm -f "$HOME/.local/bin/python" "$HOME/.local/bin/python3"
+
+if command -v uv >/dev/null 2>&1; then
+  uv tool uninstall pyright 2>/dev/null || true
+  uv tool uninstall ruff 2>/dev/null || true
+fi
+
+ENV_FILE="$HOME/.env"
+[ -f "$ENV_FILE" ] && sed -i '/# >>> ocm:python >>>/,/# <<< ocm:python <<</d' "$ENV_FILE"
+
+echo "python removed"

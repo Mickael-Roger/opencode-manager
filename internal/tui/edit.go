@@ -15,9 +15,11 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
 
-// editEntry is one row in the module editor. A singleton module has a single
-// toggle row. A multi-instance module has one row per installed/pending entry
-// plus an "add" action row (isAdd) that starts the prompt flow for a new entry.
+// editEntry is one row in the module editor. A category header row (isCategory)
+// groups the modules beneath it and toggles their visibility. A singleton module
+// has a single toggle row. A multi-instance module has one row per
+// installed/pending entry plus an "add" action row (isAdd) that starts the prompt
+// flow for a new entry.
 type editEntry struct {
 	mod module.Module
 	// id is the instance identity (module name for singletons, "name:keyvalue"
@@ -25,6 +27,10 @@ type editEntry struct {
 	id string
 	// label is what the row shows: the instance key value, or the module name.
 	label string
+	// isCategory marks a category header row; category holds its name. Such a row
+	// carries no module — it only groups and collapses the rows beneath it.
+	isCategory bool
+	category   string
 	// isAdd marks the action row that creates a new instance of a multi module.
 	isAdd     bool
 	installed bool
@@ -68,8 +74,19 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 		installedByMod[inst.Name] = append(installedByMod[inst.Name], inst)
 	}
 
+	// The catalog is sorted by category then name, so a category header can be
+	// emitted at each category transition with its modules listed beneath it.
 	entries := make([]editEntry, 0, len(catalog))
+	collapsed := map[string]bool{}
+	prevCategory := ""
+	first := true
 	for _, mod := range catalog {
+		if first || mod.Category != prevCategory {
+			entries = append(entries, editEntry{isCategory: true, category: mod.Category})
+			collapsed[mod.Category] = true // categories start collapsed
+			prevCategory = mod.Category
+			first = false
+		}
 		insts := installedByMod[mod.Name]
 		if !mod.Multi() {
 			installed := len(insts) > 0
@@ -85,11 +102,12 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 
 	m.editMode = true
 	m.editEntries = entries
+	m.editCollapsed = collapsed
 	m.editPos = 0
 	m.editFilter = ""
 	m.editFilterMode = false
 	m.catalogErr = ""
-	m.message = "Edit modules — space toggles, / filters, a applies, esc cancels."
+	m.message = "Edit modules — enter expands a category, space toggles, / filters, a applies, esc cancels."
 	return m, nil
 }
 
@@ -169,15 +187,44 @@ func editEntryMatches(e editEntry, q string) bool {
 		strings.Contains(strings.ToLower(e.label), q)
 }
 
-// editVisible reports whether the entry at index i passes the current filter.
+// editVisible reports whether the entry at index i is shown, accounting for both
+// the category collapse state and the current filter. With no filter, category
+// headers are always shown and a module row is shown only when its category is
+// expanded. While filtering, collapse is ignored (a search reveals matches in any
+// category): a module row shows when it matches, and a category header shows when
+// it has at least one matching module.
 func (m model) editVisible(i int) bool {
 	if i < 0 || i >= len(m.editEntries) {
 		return false
 	}
+	e := m.editEntries[i]
+
 	if m.editFilter == "" {
-		return true
+		if e.isCategory {
+			return true
+		}
+		return !m.editCollapsed[e.mod.Category]
 	}
-	return editEntryMatches(m.editEntries[i], strings.ToLower(m.editFilter))
+
+	q := strings.ToLower(m.editFilter)
+	if e.isCategory {
+		return m.categoryHasMatch(e.category, q)
+	}
+	return editEntryMatches(e, q)
+}
+
+// categoryHasMatch reports whether any module row in the given category matches
+// the lowercased query q, so its header can be shown while filtering.
+func (m model) categoryHasMatch(category, q string) bool {
+	for _, e := range m.editEntries {
+		if e.isCategory || e.mod.Category != category {
+			continue
+		}
+		if editEntryMatches(e, q) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) firstVisibleEdit() int {
@@ -234,6 +281,13 @@ func (m model) toggleEditEntry() (tea.Model, tea.Cmd) {
 	}
 
 	entry := m.editEntries[m.editPos]
+
+	// A category header toggles its collapse state, revealing or hiding the
+	// modules beneath it. The cursor stays on the header.
+	if entry.isCategory {
+		m.editCollapsed[entry.category] = !m.editCollapsed[entry.category]
+		return m, nil
+	}
 
 	// The add row starts the add flow for a new instance: an import picker of
 	// host accounts when the module exposes one, otherwise a single-page form.
@@ -717,7 +771,7 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 	var removes []string
 	needsRestart := false
 	for _, e := range m.editEntries {
-		if e.isAdd {
+		if e.isCategory || e.isAdd {
 			continue
 		}
 		switch {
@@ -788,12 +842,12 @@ func (m model) renderEditPage(width, height int) string {
 		rows = append(rows, " "+mutedStyle.Render(fit("No modules match the filter.", contentWidth))+" ")
 	}
 
-	// File-browser layout: a category header, then its modules indented beneath
-	// it. Multi-instance modules add their own sub-header above their instances
-	// and add row. Singletons render as a single indented row. The filter hides
-	// non-matching entries (and any category/module header left with no rows).
+	// File-browser layout: a collapsible category header, then (when expanded) its
+	// modules indented beneath it. Multi-instance modules add their own sub-header
+	// above their instances and add row. Singletons render as a single indented
+	// row. The filter hides non-matching entries (and any category/module header
+	// left with no rows).
 	const moduleIndent = "  "
-	prevCategory := ""
 	prevMod := ""
 	for i, e := range m.editEntries {
 		if !m.editVisible(i) {
@@ -802,13 +856,13 @@ func (m model) renderEditPage(width, height int) string {
 		if len(rows) >= height-3 {
 			break
 		}
-		if e.mod.Category != prevCategory {
-			if prevCategory != "" {
+		if e.isCategory {
+			if i != 0 {
 				rows = append(rows, blank)
 			}
-			rows = append(rows, m.renderEditCategoryHeader(e.mod.Category, contentWidth))
-			prevCategory = e.mod.Category
+			rows = append(rows, m.renderEditCategoryHeader(e, i == m.editPos, contentWidth))
 			prevMod = ""
+			continue
 		}
 		if e.mod.Multi() && e.mod.Name != prevMod {
 			rows = append(rows, m.renderEditGroupHeader(e.mod, contentWidth, moduleIndent))
@@ -819,7 +873,7 @@ func (m model) renderEditPage(width, height int) string {
 
 	rows = append(rows, blank)
 	if len(rows) < height-1 {
-		hint := "↑/↓ move · space toggle · / filter · a apply · esc cancel"
+		hint := "↑/↓ move · enter expand · space toggle · / filter · a apply · esc cancel"
 		rows = append(rows, " "+mutedStyle.Render(fit(hint, contentWidth))+" ")
 	}
 	for len(rows) < height-1 {
@@ -837,13 +891,23 @@ func (m model) renderEditPage(width, height int) string {
 }
 
 // renderEditCategoryHeader renders a category section heading (the top level of
-// the module browser).
-func (m model) renderEditCategoryHeader(category string, contentWidth int) string {
-	label := category
+// the module browser). The arrow shows whether the category is collapsed ("▸")
+// or expanded ("▾"); a filtered browser ignores collapse and always shows it
+// expanded. The header is highlighted when the cursor rests on it.
+func (m model) renderEditCategoryHeader(e editEntry, selectedRow bool, contentWidth int) string {
+	label := e.category
 	if label == "" {
 		label = "uncategorized"
 	}
-	return " " + editCategoryStyle.Render(fit("▾ "+label, contentWidth)) + " "
+	arrow := "▾"
+	if m.editFilter == "" && m.editCollapsed[e.category] {
+		arrow = "▸"
+	}
+	line := fit(arrow+" "+label, contentWidth)
+	if selectedRow {
+		return cursorStyle.Render(" " + line + " ")
+	}
+	return " " + editCategoryStyle.Render(line) + " "
 }
 
 // renderEditGroupHeader renders the section heading for a multi-instance module:

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Removes the glab binary and its config (which holds any imported token).
+# Best-effort: nothing here must fail the removal.
+set -e
+
+sudo rm -f /usr/local/bin/glab
+rm -rf "$HOME/.config/glab-cli"
+
+echo "gitlab (glab) removed"

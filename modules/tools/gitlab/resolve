@@ -1,0 +1,26 @@
+#!/bin/sh
+# Host-side resolve hook: when import is requested and no token was typed in, read
+# this host's glab authentication token and emit it as the install `token` value,
+# so the container imports the host's glab auth without the token ever being
+# persisted to the manifest (resolve output is not stored). Runs on every
+# install/reconcile, so an imported token always reflects the current host auth.
+#
+# Stays silent and exits 0 when import is off, a manual token is set, glab is not
+# on the host, or the host is not authenticated — leaving the install
+# unauthenticated rather than failing.
+set -e
+
+case "$OCM_IMPORT_AUTH" in
+  yes | true | 1) ;;
+  *) exit 0 ;;
+esac
+
+# A manually-entered token wins; don't override it with the host's.
+[ -n "$OCM_TOKEN" ] && exit 0
+
+command -v glab >/dev/null 2>&1 || exit 0
+
+host="${OCM_HOSTNAME:-gitlab.com}"
+tok="$(glab config get token --host "$host" 2>/dev/null || true)"
+[ -n "$tok" ] && printf 'token=%s\n' "$tok"
+exit 0

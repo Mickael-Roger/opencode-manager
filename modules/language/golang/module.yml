@@ -1,0 +1,18 @@
+name: golang
+version: 1
+description: Install the Go toolchain (selectable version) plus the dev environment — gopls (LSP), delve, goimports — and put them on PATH.
+# Appends a marked block to ~/.env (GOPATH + PATH) so the toolchain reaches the
+# OpenCode server and every shell, which requires bouncing the server.
+restartServer: true
+prompts:
+  - name: version
+    label: Go version
+    type: select
+    required: true
+    default: latest
+    options:
+      - latest
+      - "1.25"
+      - "1.24"
+      - "1.23"
+      - "1.22"

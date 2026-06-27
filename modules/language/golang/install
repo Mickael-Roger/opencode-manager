@@ -1,0 +1,75 @@
+#!/bin/sh
+# Runs inside the workspace container. Installs the Go toolchain to /usr/local/go
+# (the selected version, resolved to the latest matching patch), the Go dev tools
+# (gopls LSP, delve, goimports) into ~/go/bin, and exports GOPATH/PATH through a
+# marked block in ~/.env. Idempotent: the toolchain dir is replaced, tool installs
+# are re-runnable, and the ~/.env block is rewritten in place, so reconcile can
+# re-run this safely.
+set -e
+
+: "${OCM_VERSION:=latest}"
+
+# Need curl (download) and jq (resolve a pinned minor to its latest patch). Both
+# ship in the base image, but guard in case of a custom base.
+for bin in curl jq; do
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl jq ca-certificates
+    break
+  fi
+done
+
+# Resolve the version string the way go.dev names its tarballs (e.g. go1.25.0).
+# "latest" asks go.dev for the current stable release; a pinned minor (e.g. 1.24)
+# is resolved to its newest stable patch via the download index (newest first).
+if [ "$OCM_VERSION" = latest ]; then
+  goversion="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"
+else
+  goversion="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
+    | jq -r --arg v "go$OCM_VERSION" \
+      '[.[] | select(.stable) | .version | select(. == $v or startswith($v + "."))] | first // empty')"
+fi
+
+if [ -z "$goversion" ]; then
+  echo "golang: could not resolve a version for '$OCM_VERSION'" >&2
+  exit 1
+fi
+
+case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+  arm64 | aarch64) garch=arm64 ;;
+  *) garch=amd64 ;;
+esac
+
+tarball="${goversion}.linux-${garch}.tar.gz"
+curl -fsSL "https://go.dev/dl/${tarball}" -o /tmp/go.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+rm -f /tmp/go.tar.gz
+
+echo "go ${goversion} installed to /usr/local/go"
+
+# Install the dev environment into GOPATH/bin (~/go/bin). gopls is the language
+# server; goimports and delve round out a usable Go setup.
+export GOPATH="$HOME/go"
+export PATH="/usr/local/go/bin:$GOPATH/bin:$PATH"
+go install golang.org/x/tools/gopls@latest
+go install golang.org/x/tools/cmd/goimports@latest
+go install github.com/go-delve/delve/cmd/dlv@latest
+
+echo "go dev tools installed: gopls, goimports, dlv"
+
+# Export GOPATH/PATH through a marked block in ~/.env so the toolchain and tools
+# reach the server and shells. Rewrite the block (delete then append) so reconcile
+# never duplicates it. $HOME/$PATH stay literal (single-quoted heredoc) so they
+# expand when ~/.env is sourced.
+ENV_FILE="$HOME/.env"
+touch "$ENV_FILE"
+sed -i '/# >>> ocm:golang >>>/,/# <<< ocm:golang <<</d' "$ENV_FILE"
+cat >>"$ENV_FILE" <<'EOF'
+# >>> ocm:golang >>>
+export GOPATH="$HOME/go"
+export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+# <<< ocm:golang <<<
+EOF
+
+echo "golang environment written to ~/.env"

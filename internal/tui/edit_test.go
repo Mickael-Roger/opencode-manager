@@ -62,6 +62,63 @@ func TestEditVisibleNavigationSkipsFiltered(t *testing.T) {
 	}
 }
 
+func catEntry(category string) editEntry {
+	return editEntry{isCategory: true, category: category}
+}
+
+func TestEditCategoriesCollapsedByDefault(t *testing.T) {
+	m := model{
+		editEntries: []editEntry{
+			catEntry("cloud"),
+			entry("aws", "cloud", "AWS CLI", ""),
+			catEntry("tools"),
+			entry("git", "tools", "git identity", ""),
+		},
+		editCollapsed: map[string]bool{"cloud": true, "tools": true},
+	}
+
+	// With both categories collapsed, only the two headers are visible.
+	if !m.editVisible(0) || m.editVisible(1) || !m.editVisible(2) || m.editVisible(3) {
+		t.Fatalf("unexpected collapsed visibility: %v %v %v %v",
+			m.editVisible(0), m.editVisible(1), m.editVisible(2), m.editVisible(3))
+	}
+	// Navigation hops header to header, skipping the hidden module rows.
+	if got := m.nextVisibleEdit(0); got != 2 {
+		t.Fatalf("nextVisibleEdit(0) = %d, want 2 (next header)", got)
+	}
+
+	// Expanding "cloud" reveals its module row.
+	m.editCollapsed["cloud"] = false
+	if !m.editVisible(1) {
+		t.Fatalf("aws row should be visible once cloud is expanded")
+	}
+	if got := m.nextVisibleEdit(0); got != 1 {
+		t.Fatalf("nextVisibleEdit(0) = %d, want 1 (expanded module row)", got)
+	}
+}
+
+func TestEditFilterIgnoresCollapse(t *testing.T) {
+	m := model{
+		editEntries: []editEntry{
+			catEntry("cloud"),
+			entry("aws", "cloud", "AWS CLI", ""),
+			catEntry("tools"),
+			entry("git", "tools", "git identity", ""),
+		},
+		editCollapsed: map[string]bool{"cloud": true, "tools": true},
+		editFilter:    "git",
+	}
+
+	// A filter reveals matches regardless of collapse: the tools header (it has a
+	// matching child) and the git row are visible; the non-matching cloud side is not.
+	if m.editVisible(0) || m.editVisible(1) {
+		t.Fatalf("cloud header/row should be hidden by the filter")
+	}
+	if !m.editVisible(2) || !m.editVisible(3) {
+		t.Fatalf("tools header and git row should be visible under the filter")
+	}
+}
+
 func TestSnapEditPosMovesToVisible(t *testing.T) {
 	m := model{
 		editEntries: []editEntry{

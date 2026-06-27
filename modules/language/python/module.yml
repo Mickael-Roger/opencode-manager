@@ -1,0 +1,19 @@
+name: python
+version: 1
+description: Install Python (selectable version) via uv plus the dev environment — pyright (LSP) and ruff (linter/formatter) — and put it on PATH.
+# Appends a marked block to ~/.env (PATH to the selected interpreter and the uv
+# tool bin dir) so the chosen Python reaches the OpenCode server and every shell,
+# which requires bouncing the server.
+restartServer: true
+prompts:
+  - name: version
+    label: Python version
+    type: select
+    required: true
+    default: latest
+    options:
+      - latest
+      - "3.13"
+      - "3.12"
+      - "3.11"
+      - "3.10"

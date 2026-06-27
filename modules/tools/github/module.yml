@@ -1,0 +1,22 @@
+name: github
+version: 1
+description: Install the GitHub CLI (gh) and optionally import this host's gh authentication.
+# Writes only gh's own config (~/.config/gh), which tools read live; nothing in
+# ~/.env, so it never bounces the OpenCode server and can be edited mid-task.
+restartServer: false
+prompts:
+  - name: hostname
+    label: GitHub host (github.com or a GitHub Enterprise host)
+    type: string
+    default: github.com
+  - name: import_auth
+    label: Import gh authentication from this host?
+    type: select
+    required: true
+    default: "yes"
+    options:
+      - "yes"
+      - "no"
+  - name: token
+    label: GitHub token (optional — overrides host import; blank stays unauthenticated)
+    type: secret
