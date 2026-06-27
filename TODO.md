@@ -10,6 +10,8 @@
 - [x] agents, AGENT.md, commands, ... must be links to thoses defined in the template
 - [x] Trap the alert or wait for interraction in every session and show it in the central dashboard
 - [x] Create a complete CI / CD pipeline with tests: docker, podman, ...
-- [/] Add a Dockerfile and remove it from the go code (same for the entrypoint script, ...)
+- [x] Add a Dockerfile and remove it from the go code (same for the entrypoint script, ...)
 - [ ] Improve the docker image size
 - [ ] Create templates of workspace (modules, ...)
+- [/] When creating an image status must be creating instead of missing
+- [ ] Review the status: sleeping, waiting and working

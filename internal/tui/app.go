@@ -77,6 +77,14 @@ type model struct {
 	// kicked off and removed when its editApplyMsg arrives.
 	installing map[string]bool
 
+	// provisioning holds workspaces whose initial image build + container
+	// creation is still running. Until it completes the container does not yet
+	// exist, so the runtime reports it as "missing"; this set lets the STATUS
+	// column show "creating" instead. Keyed by workspace name; entry added when
+	// createWorkspace kicks off provisioning and removed when its
+	// provisionWorkspaceMsg arrives.
+	provisioning map[string]bool
+
 	// set when the npm registry reports a newer release than appVersion; the
 	// header shows an "update available" notice (see checkForUpdate).
 	updateLatest string
@@ -356,6 +364,7 @@ func newModel(cfg config.Config) model {
 		tokens:       map[string]tokenState{},
 		versions:     map[string]versionState{},
 		installing:   map[string]bool{},
+		provisioning: map[string]bool{},
 		width:        100,
 		height:       30,
 		message:      "Creating the base image...",
@@ -445,6 +454,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("%s completed for %s.", msg.action, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case provisionWorkspaceMsg:
+		delete(m.provisioning, msg.name)
 		if msg.err != nil {
 			slog.Error("workspace provisioning failed", "workspace", msg.name, "error", msg.err)
 			m.message = fmt.Sprintf("Create runtime provisioning failed for %s: %v", msg.name, msg.err)
@@ -806,6 +816,7 @@ func (m model) createWorkspace(name string) (tea.Model, tea.Cmd) {
 	m.createMode = false
 	m.createName = ""
 	m.message = fmt.Sprintf("Created workspace %s. Building image and starting container...", result.Manifest.Name)
+	m.provisioning[result.Manifest.Name] = true
 	created := workspace.Summary{Manifest: result.Manifest, Path: result.Path}
 	return m, tea.Batch(m.loadWorkspaces, m.provisionWorkspace(created))
 }
@@ -1748,6 +1759,13 @@ func (m model) runtimeStatus() string {
 
 // workspaceStatus returns the display text and color for a workspace container.
 func (m model) workspaceStatus(ws workspace.Summary) (string, lipgloss.Color) {
+	// A freshly created workspace has no container yet (the runtime reports it
+	// "missing") while its image builds and the container is created. Surface
+	// that in-progress work as "creating" until provisioning completes.
+	if m.provisioning[ws.Manifest.Name] {
+		return "creating", colStarting
+	}
+
 	status, ok := m.statuses[ws.Manifest.Name]
 	if !ok || status.Container == "" {
 		return "checking", colMuted

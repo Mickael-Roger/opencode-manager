@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mickael-menu/opencode-manager/internal/runtime"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
 
@@ -14,6 +15,29 @@ func updateTestModel(activity workspace.Activity) model {
 		statuses: map[string]workspace.Status{
 			"app": {Activity: activity},
 		},
+	}
+}
+
+// A workspace whose container has not been created yet must show "creating"
+// while provisioning, not "missing" (the raw runtime status of a container that
+// does not exist).
+func TestWorkspaceStatusCreatingWhileProvisioning(t *testing.T) {
+	ws := workspace.Summary{Manifest: workspace.Manifest{Name: "app"}}
+	m := model{
+		workspaces:   []workspace.Summary{ws},
+		statuses:     map[string]workspace.Status{"app": {Container: runtime.StatusMissing}},
+		provisioning: map[string]bool{"app": true},
+	}
+
+	if label, _ := m.workspaceStatus(ws); label != "creating" {
+		t.Fatalf("status while provisioning = %q, want %q", label, "creating")
+	}
+
+	// Once provisioning completes the entry is gone and the raw runtime status
+	// shows through again.
+	delete(m.provisioning, "app")
+	if label, _ := m.workspaceStatus(ws); label != "missing" {
+		t.Fatalf("status after provisioning = %q, want %q", label, "missing")
 	}
 }
 
