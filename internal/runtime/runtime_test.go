@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -96,11 +98,12 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		"npm",
 		"kubectl",
 		"RUN update-ca-certificates",
-		"groupadd -r linuxbrew && useradd -r -g linuxbrew -m -s /bin/bash linuxbrew",
-		"su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
+		"getent group linuxbrew >/dev/null 2>&1 || groupadd -r linuxbrew",
+		"id -u linuxbrew >/dev/null 2>&1 || useradd -r -g linuxbrew -m -s /bin/bash linuxbrew",
+		"if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
 		"su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'",
-		"npm install -g opencode-ai && which opencode && opencode --version",
+		"command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai",
 		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
 		"RUN chmod 0755 /usr/local/bin/opencode-manager-attach",
 		"ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin",
@@ -116,6 +119,20 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		t.Fatalf("base Containerfile must not use heredocs (unsupported by Podman/buildah):\n%s", content)
 	}
 
+	// The install steps must be idempotent so the recipe can layer on a base that
+	// already provides a tool without crashing (e.g. "user already exists"). Guard
+	// against regressing to the unconditional forms.
+	for _, unguarded := range []string{
+		"RUN groupadd -r linuxbrew &&",
+		"RUN npm install -g opencode-ai",
+		"RUN npm install -g tokscale",
+		"RUN echo '[ -f \"$HOME/.env\" ]",
+	} {
+		if strings.Contains(content, unguarded) {
+			t.Fatalf("base Containerfile has a non-idempotent step %q:\n%s", unguarded, content)
+		}
+	}
+
 	if !strings.Contains(attachScript, "exec opencode attach \"$url\" --dir \"$dir\" -c") {
 		t.Fatalf("attach script missing attach-to-last-session command:\n%s", attachScript)
 	}
@@ -125,6 +142,69 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 	opencodeInstall := strings.Index(content, "npm install -g opencode-ai")
 	if packages == -1 || command == -1 || opencodeInstall == -1 || !(packages < command && command < opencodeInstall) {
 		t.Fatalf("expected base image commands after package install and before OpenCode install:\n%s", content)
+	}
+}
+
+func TestRenderOverlayContainerfileOnlyAddsExtras(t *testing.T) {
+	content := renderOverlayContainerfile(BaseBuildSpec{
+		FromImage: "docker.io/mroger78/ocm-base:latest",
+		Packages:  []string{"htop", "unzip"},
+		Commands:  []string{"update-ca-certificates"},
+		Prebuilt:  true,
+	})
+
+	for _, want := range []string{
+		"FROM docker.io/mroger78/ocm-base:latest",
+		"apt-get install -y --no-install-recommends htop unzip",
+		"RUN update-ca-certificates",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("overlay Containerfile missing %q:\n%s", want, content)
+		}
+	}
+
+	// The overlay inherits the heavy layers from the prebuilt base; it must not
+	// reinstall the tooling or re-COPY the manager scripts.
+	for _, unwanted := range []string{"linuxbrew", "opencode-ai", "tokscale", "COPY "} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("overlay Containerfile should not contain %q:\n%s", unwanted, content)
+		}
+	}
+}
+
+func TestRenderOverlayContainerfileNoExtrasIsBareFrom(t *testing.T) {
+	content := renderOverlayContainerfile(BaseBuildSpec{
+		FromImage: "docker.io/mroger78/ocm-base:latest",
+		Prebuilt:  true,
+	})
+	if strings.Contains(content, "RUN ") {
+		t.Fatalf("overlay with no extras should have no RUN instructions:\n%s", content)
+	}
+}
+
+func TestWriteBaseBuildContextPrebuiltOmitsScripts(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := WriteBaseBuildContext(dir, BaseBuildSpec{
+		FromImage: "docker.io/mroger78/ocm-base:latest",
+		Packages:  []string{"htop"},
+		Prebuilt:  true,
+	}); err != nil {
+		t.Fatalf("WriteBaseBuildContext returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, attachScriptName)); !os.IsNotExist(err) {
+		t.Fatalf("prebuilt overlay context should not include the attach script (err=%v)", err)
+	}
+}
+
+func TestWriteBaseBuildContextFullIncludesScripts(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := WriteBaseBuildContext(dir, BaseBuildSpec{FromImage: "debian:stable-slim"}); err != nil {
+		t.Fatalf("WriteBaseBuildContext returned error: %v", err)
+	}
+	for _, name := range []string{"Containerfile", attachScriptName, entrypointScriptName} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("full base context missing %q: %v", name, err)
+		}
 	}
 }
 

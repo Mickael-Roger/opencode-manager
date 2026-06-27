@@ -60,18 +60,61 @@ func (l Lifecycle) EnsureBaseImage(ctx context.Context) error {
 		return err
 	}
 
-	image := imageConfigFromConfig(l.cfg)
-	baseImageName, err := managedBaseImageName(image)
-	if err != nil {
-		return err
+	_, err := l.resolveBaseImage(ctx, imageConfigFromConfig(l.cfg))
+	return err
+}
+
+// resolveBaseImage makes the base image the workspace image will build FROM
+// available and returns its reference.
+//
+// For the default, published base (config.DefaultBaseImage) it pulls the image
+// instead of building it: with no user extras the published image is used
+// directly, and with extra packages/commands a thin overlay is built on top of
+// it. For any other (custom) base it falls back to building the full base recipe
+// locally, preserving the prior behavior for users who point baseImage.name at a
+// different distro.
+func (l Lifecycle) resolveBaseImage(ctx context.Context, image ImageConfig) (string, error) {
+	prebuilt := image.BaseImage == config.DefaultBaseImage
+
+	if prebuilt {
+		if err := l.ensurePulled(ctx, image.BaseImage); err != nil {
+			return "", err
+		}
+		if len(image.Packages) == 0 && len(image.Commands) == 0 {
+			return image.BaseImage, nil
+		}
 	}
 
-	return l.driver.BuildBaseImage(ctx, runtime.BaseBuildSpec{
-		ImageName: baseImageName,
+	managed, err := managedBaseImageName(image)
+	if err != nil {
+		return "", err
+	}
+	if err := l.driver.BuildBaseImage(ctx, runtime.BaseBuildSpec{
+		ImageName: managed,
 		FromImage: image.BaseImage,
 		Packages:  image.Packages,
 		Commands:  image.Commands,
-	})
+		Prebuilt:  prebuilt,
+	}); err != nil {
+		return "", err
+	}
+	return managed, nil
+}
+
+// ensurePulled pulls ref if it is not already present locally. The published
+// base image moves under the :latest tag, but pulling on every startup would
+// add network latency and break offline use, so a present image is reused; the
+// app upgrade flow is what refreshes it.
+func (l Lifecycle) ensurePulled(ctx context.Context, ref string) error {
+	id, err := l.driver.ImageID(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		slog.Debug("base image already present, skipping pull", "image", ref)
+		return nil
+	}
+	return l.driver.PullImage(ctx, ref)
 }
 
 func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status {
@@ -132,16 +175,8 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	}
 
 	manifest := summary.Manifest
-	baseImageName, err := managedBaseImageName(manifest.Image)
+	baseImageName, err := l.resolveBaseImage(ctx, manifest.Image)
 	if err != nil {
-		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
-	}
-	if err := l.driver.BuildBaseImage(ctx, runtime.BaseBuildSpec{
-		ImageName: baseImageName,
-		FromImage: manifest.Image.BaseImage,
-		Packages:  manifest.Image.Packages,
-		Commands:  manifest.Image.Commands,
-	}); err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 

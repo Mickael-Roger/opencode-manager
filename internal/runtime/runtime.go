@@ -97,6 +97,7 @@ done
 type Driver interface {
 	Name() string
 	Available(context.Context) error
+	PullImage(context.Context, string) error
 	BuildBaseImage(context.Context, BaseBuildSpec) error
 	BuildImage(context.Context, BuildSpec) error
 	ContainerStatus(context.Context, string) (string, error)
@@ -131,6 +132,13 @@ type BaseBuildSpec struct {
 	FromImage string
 	Packages  []string
 	Commands  []string
+	// Prebuilt selects the build recipe. When false (the default), FromImage is a
+	// plain distro (e.g. debian:stable-slim) and the full base recipe is rendered:
+	// system packages, uv, linuxbrew, OpenCode, tokscale, and the manager scripts.
+	// This is what publishes docker.io/mroger78/ocm-base. When true, FromImage is
+	// already a built ocm-base, so only a thin overlay is rendered that adds the
+	// user's extra Packages/Commands on top.
+	Prebuilt bool
 }
 
 type BuildSpec struct {
@@ -209,7 +217,7 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 		return nil
 	}
 
-	slog.Info("building base image", "image", spec.ImageName, "from", spec.FromImage, "packages", spec.Packages)
+	slog.Info("building base image", "image", spec.ImageName, "from", spec.FromImage, "prebuilt", spec.Prebuilt, "packages", spec.Packages)
 
 	dir, err := os.MkdirTemp("", "opencode-manager-base-image-*")
 	if err != nil {
@@ -217,19 +225,9 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 	}
 	defer os.RemoveAll(dir)
 
-	containerfile := filepath.Join(dir, "Containerfile")
-	if err := os.WriteFile(containerfile, []byte(renderBaseContainerfile(spec)), 0o600); err != nil {
-		return fmt.Errorf("write base Containerfile: %w", err)
-	}
-
-	attachPath := filepath.Join(dir, attachScriptName)
-	if err := os.WriteFile(attachPath, []byte(attachScript), 0o755); err != nil {
-		return fmt.Errorf("write attach script: %w", err)
-	}
-
-	entrypointPath := filepath.Join(dir, entrypointScriptName)
-	if err := os.WriteFile(entrypointPath, []byte(entrypointScript), 0o755); err != nil {
-		return fmt.Errorf("write entrypoint script: %w", err)
+	containerfile, err := WriteBaseBuildContext(dir, spec)
+	if err != nil {
+		return err
 	}
 
 	if err := d.run(ctx, "build", "-t", spec.ImageName, "-f", containerfile, dir); err != nil {
@@ -238,6 +236,53 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 
 	slog.Info("base image built", "image", spec.ImageName)
 	return nil
+}
+
+// PullImage fetches an image from a registry. It is used to obtain the published
+// base image (docker.io/mroger78/ocm-base) instead of building it locally.
+func (d CLIDriver) PullImage(ctx context.Context, ref string) error {
+	if ref == "" {
+		return fmt.Errorf("image reference is required")
+	}
+	slog.Info("pulling image", "image", ref)
+	return d.run(ctx, "pull", ref)
+}
+
+// WriteBaseBuildContext writes the Containerfile and the manager scripts that
+// make up a base-image build context into dir and returns the Containerfile
+// path. It is the single source of truth for the base recipe, shared by the
+// runtime (BuildBaseImage) and the CI helper (cmd/ocm-base-context) that
+// publishes docker.io/mroger78/ocm-base, so the two never drift.
+func WriteBaseBuildContext(dir string, spec BaseBuildSpec) (string, error) {
+	var contents string
+	if spec.Prebuilt {
+		contents = renderOverlayContainerfile(spec)
+	} else {
+		contents = renderBaseContainerfile(spec)
+	}
+
+	containerfile := filepath.Join(dir, "Containerfile")
+	if err := os.WriteFile(containerfile, []byte(contents), 0o600); err != nil {
+		return "", fmt.Errorf("write base Containerfile: %w", err)
+	}
+
+	// The thin overlay inherits the manager scripts from the prebuilt base, so it
+	// does not COPY them and the context needs only the Containerfile.
+	if spec.Prebuilt {
+		return containerfile, nil
+	}
+
+	attachPath := filepath.Join(dir, attachScriptName)
+	if err := os.WriteFile(attachPath, []byte(attachScript), 0o755); err != nil {
+		return "", fmt.Errorf("write attach script: %w", err)
+	}
+
+	entrypointPath := filepath.Join(dir, entrypointScriptName)
+	if err := os.WriteFile(entrypointPath, []byte(entrypointScript), 0o755); err != nil {
+		return "", fmt.Errorf("write entrypoint script: %w", err)
+	}
+
+	return containerfile, nil
 }
 
 func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
@@ -589,15 +634,21 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	// id, useradd grabs UID 1000, which collides with the host user the workspace
 	// image installs at UID 1000: getent then resolves UID 1000 to linuxbrew, the
 	// `debian` user is never created, and the pod runs as linuxbrew instead.
-	b.WriteString("RUN groupadd -r linuxbrew && useradd -r -g linuxbrew -m -s /bin/bash linuxbrew && mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin && chown -R linuxbrew:linuxbrew /home/linuxbrew\n")
-	b.WriteString("RUN su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew && /home/linuxbrew/.linuxbrew/bin/brew --version'\n")
+	//
+	// Every install step below is idempotent (install only what is missing) so the
+	// recipe can also be layered on a base that already provides some of these
+	// tools without failing — e.g. re-creating the linuxbrew user would otherwise
+	// crash with "user already exists".
+	b.WriteString("RUN set -eux; getent group linuxbrew >/dev/null 2>&1 || groupadd -r linuxbrew; id -u linuxbrew >/dev/null 2>&1 || useradd -r -g linuxbrew -m -s /bin/bash linuxbrew; mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin; chown -R linuxbrew:linuxbrew /home/linuxbrew\n")
+	b.WriteString("RUN set -eux; if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew'; fi; su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	b.WriteString("RUN git --version && rg --version && jq --version && npx --version && uvx --version && su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
 	// Install OpenCode from npm rather than the curl|bash installer: the
 	// installer resolves the version via the GitHub API, which is rate-limited
 	// and flaky (504s), whereas the npm registry is reliable and already used
-	// for tokscale below.
-	b.WriteString("RUN npm install -g opencode-ai && which opencode && opencode --version\n")
-	b.WriteString("RUN npm install -g tokscale@latest && which tokscale\n")
+	// for tokscale below. Installed only when absent so the step is a no-op on a
+	// base that already ships it.
+	b.WriteString("RUN set -eux; command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai; opencode --version\n")
+	b.WriteString("RUN set -eux; command -v tokscale >/dev/null 2>&1 || npm install -g tokscale@latest; command -v tokscale\n")
 	// Attach wrapper and supervisor entrypoint: copied from the build context
 	// (see attachScript/entrypointScript) rather than written via a heredoc,
 	// which the buildah builder used by Podman does not support in Containerfiles.
@@ -610,10 +661,33 @@ func renderBaseContainerfile(spec BaseBuildSpec) string {
 	// workspace user is added to the sudo group in the workspace image layer.
 	b.WriteString("RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager\n")
 	// Source the per-workspace ~/.env from interactive shells (the `s`/shell
-	// action) so they see module-provided variables, mirroring the server.
-	b.WriteString("RUN echo '[ -f \"$HOME/.env\" ] && . \"$HOME/.env\"' >> /etc/bash.bashrc\n")
+	// action) so they see module-provided variables, mirroring the server. Guarded
+	// so re-layering the recipe does not append the line twice.
+	b.WriteString("RUN grep -qF '[ -f \"$HOME/.env\" ]' /etc/bash.bashrc || echo '[ -f \"$HOME/.env\" ] && . \"$HOME/.env\"' >> /etc/bash.bashrc\n")
 	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
 
+	return b.String()
+}
+
+// renderOverlayContainerfile renders the thin overlay built on top of a prebuilt
+// ocm-base when the user adds extra baseImage.packages/commands. The heavy layers
+// (uv, linuxbrew, OpenCode, tokscale, scripts, sudo, PATH) are already in the base
+// and are inherited, so only the extras are applied here.
+func renderOverlayContainerfile(spec BaseBuildSpec) string {
+	var b strings.Builder
+	b.WriteString("FROM ")
+	b.WriteString(spec.FromImage)
+	b.WriteString("\n\n")
+	if len(spec.Packages) > 0 {
+		b.WriteString("RUN apt-get update && apt-get install -y --no-install-recommends ")
+		b.WriteString(strings.Join(spec.Packages, " "))
+		b.WriteString(" && rm -rf /var/lib/apt/lists/*\n")
+	}
+	for _, command := range spec.Commands {
+		b.WriteString("RUN ")
+		b.WriteString(command)
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

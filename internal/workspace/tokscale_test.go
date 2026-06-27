@@ -19,6 +19,7 @@ type fakeDriver struct {
 
 func (f *fakeDriver) Name() string                                                { return "fake" }
 func (f *fakeDriver) Available(context.Context) error                             { return nil }
+func (f *fakeDriver) PullImage(context.Context, string) error                     { return nil }
 func (f *fakeDriver) BuildBaseImage(context.Context, runtime.BaseBuildSpec) error { return nil }
 func (f *fakeDriver) BuildImage(context.Context, runtime.BuildSpec) error         { return nil }
 func (f *fakeDriver) ContainerStatus(context.Context, string) (string, error) {
