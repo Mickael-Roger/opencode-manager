@@ -192,10 +192,36 @@ var actions = []action{
 	{Key: "u", Cmd: "update", Desc: "Update"},
 	{Key: "c", Cmd: "create", Desc: "Create"},
 	{Key: "ctrl-d", Cmd: "delete", Desc: "Delete"},
-	// Page navigation: no hotkey (typed as :templates / :workspaces), so these
-	// only surface as command-mode autocomplete suggestions.
-	{Key: "", Cmd: "templates", Desc: "Templates"},
-	{Key: "", Cmd: "workspaces", Desc: "Workspaces"},
+}
+
+// resourceKind is a view the ":" prompt can switch to, k9s-style: ":" is no
+// longer a general command line, only a way to jump between kinds. Right now the
+// only kinds are the workspaces and templates pages.
+type resourceKind struct {
+	name    string
+	aliases []string
+}
+
+var kinds = []resourceKind{
+	{name: "workspaces", aliases: []string{"workspace", "ws"}},
+	{name: "templates", aliases: []string{"template", "tmpl"}},
+}
+
+// resolveKind matches typed text against a kind's canonical name or an alias and
+// returns the canonical name, or "" when nothing matches.
+func resolveKind(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	for _, k := range kinds {
+		if text == k.name {
+			return k.name
+		}
+		for _, a := range k.aliases {
+			if text == a {
+				return k.name
+			}
+		}
+	}
+	return ""
 }
 
 // k9s default ("stock") skin colors.
@@ -830,15 +856,30 @@ func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// executeCommand handles the ":" prompt. k9s-style, it only switches the visible
+// kind (workspaces/templates); it is not a general command line. "q"/"quit" are
+// kept because they are muscle memory in k9s.
 func (m model) executeCommand() (tea.Model, tea.Cmd) {
 	command := strings.TrimSpace(m.command)
 	m.commandMode = false
 	m.command = ""
-	if strings.HasPrefix(command, "create ") {
-		return m.createWorkspace(strings.TrimSpace(strings.TrimPrefix(command, "create ")), nil)
+
+	switch strings.ToLower(command) {
+	case "":
+		return m, nil
+	case "q", "quit":
+		return m, tea.Quit
 	}
 
-	return m.executeCommandName(command)
+	switch resolveKind(command) {
+	case "workspaces":
+		return m.showWorkspaces()
+	case "templates":
+		return m.showTemplates()
+	default:
+		m.message = fmt.Sprintf("No such view %q. Available: workspaces, templates.", command)
+		return m, nil
+	}
 }
 
 // validateCreateName checks the in-progress workspace name entered in the
@@ -1126,10 +1167,6 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 		return m.editSelected()
 	case "update":
 		return m.updateSelected()
-	case "templates":
-		return m.showTemplates()
-	case "workspaces":
-		return m.showWorkspaces()
 	default:
 		m.message = fmt.Sprintf("Unknown command %q. Press ? for help.", command)
 	}
@@ -1150,7 +1187,7 @@ func (m model) executeShortcut(key string) (tea.Model, tea.Cmd) {
 func (m *model) autocompleteCommand() {
 	matches := m.commandSuggestions()
 	if len(matches) == 1 {
-		m.command = matches[0].Cmd
+		m.command = matches[0]
 	}
 }
 
@@ -1164,7 +1201,16 @@ func (m model) View() string {
 	crumbs := m.renderCrumbs()
 	prompt := m.renderPrompt(width)
 
-	bodyHeight := height - headerHeight - lipgloss.Height(crumbs) - lipgloss.Height(prompt) - 1
+	// k9s-style: the ":" command prompt is a small box wedged between the top bar
+	// and the main view, shrinking the body by its height while it is open.
+	commandBox := ""
+	commandHeight := 0
+	if m.commandMode {
+		commandBox = m.renderCommandBox(width)
+		commandHeight = lipgloss.Height(commandBox)
+	}
+
+	bodyHeight := height - headerHeight - lipgloss.Height(crumbs) - lipgloss.Height(prompt) - commandHeight - 1
 	bodyHeight = max(3, bodyHeight)
 
 	var body string
@@ -1179,7 +1225,12 @@ func (m model) View() string {
 		body = m.renderTable(width, bodyHeight)
 	}
 
-	view := lipgloss.JoinVertical(lipgloss.Left, header, body, crumbs, prompt)
+	var view string
+	if m.commandMode {
+		view = lipgloss.JoinVertical(lipgloss.Left, header, commandBox, body, crumbs, prompt)
+	} else {
+		view = lipgloss.JoinVertical(lipgloss.Left, header, body, crumbs, prompt)
+	}
 
 	if m.editPrompting {
 		view = overlayCentered(view, m.renderEditPrompt(), width, height)
@@ -1353,7 +1404,7 @@ func (m model) attentionColor() lipgloss.Color {
 func (m model) renderMenu() string {
 	type entry struct{ key, desc string }
 	entries := []entry{
-		{":", "Command"},
+		{":", "Switch view"},
 		{"/", "Filter"},
 		{"?", "Help"},
 		{"↵", "Attach"},
@@ -1370,14 +1421,13 @@ func (m model) renderMenu() string {
 		// The templates page supports a smaller action set; surface it instead of
 		// the workspace actions that do not apply here.
 		entries = []entry{
-			{":", "Command"},
+			{":", "Switch view"},
 			{"/", "Filter"},
 			{"?", "Help"},
 			{"↵", "Edit"},
 			{"e", "Edit"},
 			{"c", "Create"},
 			{"^d", "Delete"},
-			{":ws", "Workspaces"},
 			{"q", "Quit"},
 		}
 	}
@@ -1400,7 +1450,7 @@ func (m model) renderTable(width, height int) string {
 	visible := m.visibleWorkspaces()
 
 	widths := columnWidths(contentWidth)
-	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "TOKENS I/O", "CONTAINER"}
+	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "TOKENS I/O/C", "CONTAINER", "AGE"}
 	headerCells := make([]string, len(headers))
 	for i, h := range headers {
 		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
@@ -1445,6 +1495,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 	version := m.workspaceVersion(ws)
 	tokens := m.workspaceTokens(ws)
 	container := ws.Manifest.ContainerName
+	age := m.workspaceAge(ws)
 
 	if selected {
 		cells := []string{
@@ -1455,6 +1506,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 			fit(version, widths[4]),
 			fit(tokens, widths[5]),
 			fit(container, widths[6]),
+			fit(age, widths[7]),
 		}
 		return cursorStyle.Render(" " + strings.Join(cells, "  ") + " ")
 	}
@@ -1467,6 +1519,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 		mutedStyle.Render(fit(version, widths[4])),
 		mutedStyle.Render(fit(tokens, widths[5])),
 		mutedStyle.Render(fit(container, widths[6])),
+		mutedStyle.Render(fit(age, widths[7])),
 	}
 	return " " + strings.Join(cells, "  ") + " "
 }
@@ -1528,12 +1581,6 @@ func (m model) renderCrumbs() string {
 
 func (m model) renderPrompt(width int) string {
 	switch {
-	case m.commandMode:
-		line := promptStyle.Render(":"+m.command) + "▏"
-		if s := m.renderSuggestions(); s != "" {
-			line += "  " + s
-		}
-		return line
 	case m.filterMode:
 		return filterStyle.Render("/"+m.filter) + "▏"
 	case m.templateFilterMode:
@@ -1547,23 +1594,52 @@ func (m model) renderPrompt(width int) string {
 	}
 }
 
-func (m model) renderSuggestions() string {
+// renderCommandBox draws the k9s-style command prompt: a small rounded box shown
+// between the top bar and the main view while ":" is active. ":" only switches
+// the visible kind (workspaces/templates), so the box shows the typed text with
+// an inline ghost completion plus the matching kinds.
+func (m model) renderCommandBox(width int) string {
+	bs := lipgloss.NewStyle().Foreground(colBorderFocus)
+
+	typed := m.command
 	matches := m.commandSuggestions()
-	if len(matches) == 0 {
-		return mutedStyle.Render("no matching command")
+
+	// Ghost completion: grey out the remainder of the single best match, k9s-style.
+	ghost := ""
+	if len(matches) > 0 && strings.HasPrefix(matches[0], strings.ToLower(typed)) {
+		ghost = matches[0][len(typed):]
 	}
 
-	parts := make([]string, 0, len(matches))
-	for _, match := range matches {
-		parts = append(parts, menuKeyStyle.Render(match.Cmd))
+	full := func(withHint bool) string {
+		s := titleStyle.Render("> ") + dialogLabel.Render(typed) + mutedStyle.Render(ghost) + "▏"
+		if !withHint {
+			return s
+		}
+		if len(matches) > 0 {
+			return s + mutedStyle.Render("  "+strings.Join(matches, "  "))
+		}
+		return s + errorStyle.Render("  no matching view")
 	}
 
-	return mutedStyle.Render("(" + strings.Join(parts, " ") + ")")
+	cw := width - 4 // content area: width minus borders (2) and side padding (2)
+	content := full(true)
+	if lipgloss.Width(content) > cw {
+		content = full(false) // drop the hint when it would overflow the box
+	}
+	pad := cw - lipgloss.Width(content)
+	if pad < 0 {
+		pad = 0
+	}
+
+	top := bs.Render("╭" + strings.Repeat("─", width-2) + "╮")
+	mid := bs.Render("│") + " " + content + strings.Repeat(" ", pad) + " " + bs.Render("│")
+	bottom := bs.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	return top + "\n" + mid + "\n" + bottom
 }
 
 func (m model) renderHelp() string {
 	rows := [][2]string{
-		{":", "command mode"},
+		{":", "switch view (:workspaces, :templates)"},
 		{"/", "filter"},
 		{"?", "toggle this help"},
 		{"j / ↓", "down"},
@@ -1578,8 +1654,6 @@ func (m model) renderHelp() string {
 		{"u", "update OpenCode"},
 		{"c", "create"},
 		{"^d", "delete"},
-		{":templates", "manage workspace templates"},
-		{":workspaces", "back to workspaces"},
 		{"q / ^c", "quit"},
 	}
 
@@ -1653,7 +1727,7 @@ func (m model) tokenFields(name string) []describeField {
 
 	usage := state.usage
 	return []describeField{
-		{key: "Tokens total", value: fmt.Sprintf("%s tok (%s in / %s out)   %s   %d msg", humanCount(usage.TotalTokens), humanCount(usage.TotalInput), humanCount(usage.TotalOutput), money(usage.TotalCost), usage.TotalMsgs), color: colRunning},
+		{key: "Tokens total", value: fmt.Sprintf("%s tok (%s in / %s out / %s cache)   %s   %d msg", humanCount(usage.TotalTokens), humanCount(usage.TotalInput), humanCount(usage.TotalOutput), humanCount(usage.TotalCacheRead), money(usage.TotalCost), usage.TotalMsgs), color: colRunning},
 		{key: "Tokens today", value: fmt.Sprintf("%s tok   %s   %d msg", humanCount(usage.TodayTokens), money(usage.TodayCost), usage.TodayMsgs)},
 	}
 }
@@ -1891,15 +1965,29 @@ func overlayCentered(base string, popup string, width int, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m model) commandSuggestions() []action {
-	matches := make([]action, 0, len(actions))
-	for _, a := range actions {
-		if strings.HasPrefix(a.Cmd, m.command) {
-			matches = append(matches, a)
+// commandSuggestions returns the canonical kind names whose name or one of their
+// aliases starts with the text typed at the ":" prompt.
+func (m model) commandSuggestions() []string {
+	q := strings.ToLower(strings.TrimSpace(m.command))
+	matches := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		if kindMatchesPrefix(k, q) {
+			matches = append(matches, k.name)
 		}
 	}
-
 	return matches
+}
+
+func kindMatchesPrefix(k resourceKind, q string) bool {
+	if q == "" || strings.HasPrefix(k.name, q) {
+		return true
+	}
+	for _, a := range k.aliases {
+		if strings.HasPrefix(a, q) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) runtimeStatus() string {
@@ -2156,7 +2244,8 @@ func (m model) workspaceTokens(ws workspace.Summary) string {
 	case st.err != "":
 		return "err"
 	default:
-		return compactCount(st.usage.TotalInput) + "/" + compactCount(st.usage.TotalOutput)
+		u := st.usage
+		return compactCount(u.TotalInput) + "/" + compactCount(u.TotalOutput) + "/" + compactCount(u.TotalCacheRead)
 	}
 }
 
@@ -2178,6 +2267,62 @@ func compactCount(n int64) string {
 
 func trimDotZero(s string) string {
 	return strings.TrimSuffix(s, ".0")
+}
+
+// workspaceAge returns the k9s-style AGE for a workspace: the time elapsed since
+// it was created, formatted compactly (e.g. "45s", "3m20s", "2d5h").
+func (m model) workspaceAge(ws workspace.Summary) string {
+	created := ws.Manifest.CreatedAt
+	if created.IsZero() {
+		return "—"
+	}
+	return humanDuration(time.Since(created))
+}
+
+// humanDuration formats a duration the way k9s (via kubectl's
+// k8s.io/apimachinery/pkg/util/duration.HumanDuration) renders the AGE column,
+// scaling the unit and number of components to the magnitude.
+func humanDuration(d time.Duration) string {
+	if seconds := int(d.Seconds()); seconds < 0 {
+		return "0s"
+	} else if seconds < 60*2 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := int(d / time.Minute)
+	if minutes < 10 {
+		s := int(d/time.Second) % 60
+		if s == 0 {
+			return fmt.Sprintf("%dm", minutes)
+		}
+		return fmt.Sprintf("%dm%ds", minutes, s)
+	} else if minutes < 60*3 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	hours := int(d / time.Hour)
+	if hours < 8 {
+		m := int(d/time.Minute) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh%dm", hours, m)
+	} else if hours < 48 {
+		return fmt.Sprintf("%dh", hours)
+	} else if hours < 24*8 {
+		h := hours % 24
+		if h == 0 {
+			return fmt.Sprintf("%dd", hours/24)
+		}
+		return fmt.Sprintf("%dd%dh", hours/24, h)
+	} else if hours < 24*365*2 {
+		return fmt.Sprintf("%dd", hours/24)
+	} else if hours < 24*365*8 {
+		dy := int(d/(time.Hour*24)) % 365
+		if dy == 0 {
+			return fmt.Sprintf("%dy", hours/24/365)
+		}
+		return fmt.Sprintf("%dy%dd", hours/24/365, dy)
+	}
+	return fmt.Sprintf("%dy", int(d/(time.Hour*24))/365)
 }
 
 func (m model) isRunning(name string) bool {
@@ -2239,11 +2384,11 @@ func (m *model) clampSelection() {
 	m.workspacePos = clamp(m.workspacePos, 0, len(visible)-1)
 }
 
-// columnWidths splits the available content width across the seven columns,
-// keeping STATUS, ACTIVITY, RUNTIME, OPENCODE, and TOKENS fixed and sharing the
-// rest between NAME and CONTAINER.
+// columnWidths splits the available content width across the eight columns,
+// keeping STATUS, ACTIVITY, RUNTIME, OPENCODE, TOKENS, and AGE fixed and sharing
+// the rest between NAME and CONTAINER.
 func columnWidths(contentWidth int) []int {
-	const gaps = 12 // six 2-space separators
+	const gaps = 14 // seven 2-space separators
 	avail := contentWidth - gaps
 	if avail < 20 {
 		avail = 20
@@ -2253,8 +2398,9 @@ func columnWidths(contentWidth int) []int {
 	wActivity := 9
 	wRuntime := 7
 	wVersion := 9
-	wTokens := 13
-	rest := avail - wStatus - wActivity - wRuntime - wVersion - wTokens
+	wTokens := 18
+	wAge := 6
+	rest := avail - wStatus - wActivity - wRuntime - wVersion - wTokens - wAge
 	if rest < 16 {
 		rest = 16
 	}
@@ -2262,7 +2408,7 @@ func columnWidths(contentWidth int) []int {
 	wName := max(8, rest*45/100)
 	wContainer := max(8, rest-wName)
 
-	return []int{wName, wStatus, wActivity, wRuntime, wVersion, wTokens, wContainer}
+	return []int{wName, wStatus, wActivity, wRuntime, wVersion, wTokens, wContainer, wAge}
 }
 
 // fit truncates or right-pads s to exactly w display columns.

@@ -18,10 +18,13 @@
 - [/] Make sure the ci create the github release
 - [/] Add a display of token per container
 
+- [ ] Update the gif image with the new interface
+- [ ] Add a user documentation (detailled)
+- [ ] In the readme, add the main features: including modules, templates, ...
 - [ ] Add gcp, ovh, scaleway modules
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [ ] Add a config.yaml edition part in the TUI
-- [ ] Think about exposing a port (in the TUI action: expose port)
+- [ ] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
 - [ ] CLI with more commands
 - [ ] Protect main branch
 - [ ] Not sure: Create a function to create a new workspace by copying an existing one

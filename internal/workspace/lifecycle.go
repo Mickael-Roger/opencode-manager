@@ -617,13 +617,15 @@ type TokenUsage struct {
 	TotalTokens int64
 	TotalCost   float64
 	TotalMsgs   int
-	// TotalInput and TotalOutput break the all-time token count into the input
-	// (prompt) and output (completion) totals shown in the dashboard column.
-	TotalInput  int64
-	TotalOutput int64
-	TodayTokens int64
-	TodayCost   float64
-	TodayMsgs   int
+	// TotalInput, TotalOutput, and TotalCacheRead break the all-time token count
+	// into the input (prompt), output (completion), and cache-read totals shown in
+	// the dashboard column (I/O/C).
+	TotalInput     int64
+	TotalOutput    int64
+	TotalCacheRead int64
+	TodayTokens    int64
+	TodayCost      float64
+	TodayMsgs      int
 }
 
 type tokscaleEntry struct {
@@ -641,11 +643,12 @@ type tokscaleReport struct {
 }
 
 type tokscaleAggregate struct {
-	tokens int64
-	cost   float64
-	msgs   int
-	input  int64
-	output int64
+	tokens    int64
+	cost      float64
+	msgs      int
+	input     int64
+	output    int64
+	cacheRead int64
 }
 
 // TokenUsage runs tokscale inside the workspace container to summarize OpenCode
@@ -665,14 +668,15 @@ func (l Lifecycle) TokenUsage(ctx context.Context, summary Summary) (TokenUsage,
 	}
 
 	return TokenUsage{
-		TotalTokens: total.tokens,
-		TotalCost:   total.cost,
-		TotalMsgs:   total.msgs,
-		TotalInput:  total.input,
-		TotalOutput: total.output,
-		TodayTokens: today.tokens,
-		TodayCost:   today.cost,
-		TodayMsgs:   today.msgs,
+		TotalTokens:    total.tokens,
+		TotalCost:      total.cost,
+		TotalMsgs:      total.msgs,
+		TotalInput:     total.input,
+		TotalOutput:    total.output,
+		TotalCacheRead: total.cacheRead,
+		TodayTokens:    today.tokens,
+		TodayCost:      today.cost,
+		TodayMsgs:      today.msgs,
 	}, nil
 }
 
@@ -695,6 +699,7 @@ func (l Lifecycle) runTokscale(ctx context.Context, containerName string, extra 
 		agg.msgs += entry.MessageCount
 		agg.input += entry.Input
 		agg.output += entry.Output
+		agg.cacheRead += entry.CacheRead
 	}
 
 	return agg, nil

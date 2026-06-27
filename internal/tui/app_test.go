@@ -3,7 +3,10 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
@@ -41,14 +44,122 @@ func TestWorkspaceTokensDisplay(t *testing.T) {
 		t.Errorf("loading = %q, want …", got)
 	}
 
-	m.tokens["app"] = tokenState{loaded: true, usage: workspace.TokenUsage{TotalInput: 12345, TotalOutput: 4500}}
-	if got := m.workspaceTokens(ws); got != "12.3k/4.5k" {
-		t.Errorf("loaded = %q, want 12.3k/4.5k", got)
+	m.tokens["app"] = tokenState{loaded: true, usage: workspace.TokenUsage{TotalInput: 12345, TotalOutput: 4500, TotalCacheRead: 89000}}
+	if got := m.workspaceTokens(ws); got != "12.3k/4.5k/89k" {
+		t.Errorf("loaded = %q, want 12.3k/4.5k/89k", got)
 	}
 
 	m.tokens["app"] = tokenState{loaded: true, err: "boom"}
 	if got := m.workspaceTokens(ws); got != "err" {
 		t.Errorf("error = %q, want err", got)
+	}
+}
+
+func TestResolveKind(t *testing.T) {
+	cases := map[string]string{
+		"workspaces": "workspaces",
+		"workspace":  "workspaces",
+		"ws":         "workspaces",
+		"WS":         "workspaces", // case-insensitive
+		"templates":  "templates",
+		"template":   "templates",
+		"tmpl":       "templates",
+		"pods":       "", // unknown
+		"attach":     "", // ":" is no longer a command line
+		"create":     "",
+		"":           "",
+	}
+	for in, want := range cases {
+		if got := resolveKind(in); got != want {
+			t.Errorf("resolveKind(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCommandSuggestionsSwitchKindsOnly(t *testing.T) {
+	// Empty prompt offers every kind.
+	m := model{command: ""}
+	if got := m.commandSuggestions(); len(got) != 2 {
+		t.Fatalf("empty prompt suggestions = %v, want both kinds", got)
+	}
+
+	// A prefix narrows by name or alias; "w" resolves to the workspaces kind only.
+	m = model{command: "w"}
+	if got := m.commandSuggestions(); len(got) != 1 || got[0] != "workspaces" {
+		t.Fatalf("'w' suggestions = %v, want [workspaces]", got)
+	}
+
+	// Former command words are not kinds, so they suggest nothing.
+	m = model{command: "att"}
+	if got := m.commandSuggestions(); len(got) != 0 {
+		t.Fatalf("'att' suggestions = %v, want none", got)
+	}
+}
+
+func TestExecuteCommandSwitchesView(t *testing.T) {
+	m := model{command: "templates", templateRegistry: workspace.NewTemplateRegistry(config.Config{WorkspaceRoot: t.TempDir()})}
+	next, _ := m.executeCommand()
+	if !next.(model).templatesMode {
+		t.Fatal("`:templates` did not switch to the templates view")
+	}
+
+	m2 := model{command: "ws", templatesMode: true}
+	next2, _ := m2.executeCommand()
+	if next2.(model).templatesMode {
+		t.Fatal("`:ws` did not switch back to the workspaces view")
+	}
+}
+
+func TestRenderCommandBoxLayout(t *testing.T) {
+	const width = 60
+	for _, cmd := range []string{"", "t", "workspaces", "doesnotmatchanything"} {
+		m := model{command: cmd}
+		box := m.renderCommandBox(width)
+		lines := strings.Split(box, "\n")
+		if len(lines) != 3 {
+			t.Fatalf("command box for %q has %d lines, want 3", cmd, len(lines))
+		}
+		for i, line := range lines {
+			if w := lipgloss.Width(line); w != width {
+				t.Errorf("command box for %q line %d width = %d, want %d", cmd, i, w, width)
+			}
+		}
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	const (
+		s = time.Second
+		m = time.Minute
+		h = time.Hour
+		d = 24 * time.Hour
+	)
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{-5 * s, "0s"},
+		{30 * s, "30s"},
+		{119 * s, "119s"},
+		{2 * m, "2m"},
+		{2*m + 5*s, "2m5s"},
+		{9*m + 30*s, "9m30s"},
+		{10 * m, "10m"},
+		{179 * m, "179m"},
+		{3 * h, "3h"},
+		{3*h + 30*m, "3h30m"},
+		{47 * h, "47h"},
+		{48 * h, "2d"},
+		{49 * h, "2d1h"},
+		{7 * d, "7d"},
+		{8 * d, "8d"},
+		{400 * d, "400d"},
+		{800 * d, "2y70d"},
+	}
+	for _, c := range cases {
+		if got := humanDuration(c.in); got != c.want {
+			t.Errorf("humanDuration(%s) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

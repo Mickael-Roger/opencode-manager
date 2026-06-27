@@ -81,6 +81,9 @@ func TestTokenUsageAggregates(t *testing.T) {
 	if usage.TotalOutput != 505 {
 		t.Errorf("TotalOutput=%d want 505", usage.TotalOutput)
 	}
+	if usage.TotalCacheRead != 100 {
+		t.Errorf("TotalCacheRead=%d want 100", usage.TotalCacheRead)
+	}
 	if usage.TodayTokens != 165 {
 		t.Errorf("TodayTokens=%d want 165", usage.TodayTokens)
 	}
