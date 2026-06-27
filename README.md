@@ -101,6 +101,21 @@ ocm attach <workspace>   # attach to a workspace session
 From the dashboard you create, attach, edit (`e`), stop, delete, and update
 workspaces — all from the keyboard.
 
+### Templates
+
+A **template** is a reusable, named set of modules-with-configuration — your
+recipe for "this kind of project needs AWS + Git + Kubernetes, set up like so".
+
+- Type `:templates` to open the templates page (and `:workspaces` to go back).
+- On it, `c` creates a template (name it, then pick its modules just like the
+  workspace module editor), `e` (or `Enter`) edits one, and `^d` deletes one.
+- When you create a workspace, after naming it you get an optional **Pick
+  Template** step: choose one and the new workspace starts with exactly those
+  modules already installed (choose *None* to start empty). The picker is skipped
+  when you have no templates yet.
+
+Templates are stored as `<workspaceRoot>/templates/<name>.yaml`.
+
 ## Configuration
 
 The global config lives at `~/.config/opencode-manager/config.yaml` and sets the

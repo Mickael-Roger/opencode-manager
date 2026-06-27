@@ -25,6 +25,7 @@ See [PROJECT.md](PROJECT.md) for the implementation plan.
 - Module-based configuration for packages, environment variables, config files, commands, skills, agents, and plugins.
 - Module hooks implemented as Go binaries, scripts, or other executables.
 - Main TUI actions to create, attach, edit, stop, delete, and update workspaces.
+- Reusable workspace templates (a named module set) applied when creating a workspace.
 - CLI commands limited to `list` and `attach`.
 
 ## Concept
@@ -126,6 +127,29 @@ own module directories under a category alongside them.
 In the editor (`e`), modules are shown as a category browser — a category header
 with its modules indented beneath it — and `/` filters by name, description, or
 category.
+
+## Templates
+
+A **template** is a reusable, named set of modules-with-values — the module
+recipe for a kind of project, without any workspace-specific state (no container,
+image, or home). Templates are managed on a dedicated page reached with
+`:templates` (and `:workspaces` to return), which reuses the same module editor as
+workspaces: creating or editing a template selects modules and collects their
+prompt values exactly as for a live workspace, but applying it saves the recipe
+instead of installing into a container.
+
+Each template is stored as a single YAML file at
+`<workspaceRoot>/templates/<slug>.yaml`, where `<slug>` is the name run through
+the same `SafeName` slugging used for workspace directories. The file holds the
+template name and a list of module instances identical in shape to a workspace
+manifest's `modules:` entries (name, id, category, version, values).
+
+When creating a workspace, the New Workspace name dialog is followed by an
+optional **Pick Template** step (skipped when no templates exist). Choosing a
+template copies its module instances into the new workspace's `workspace.yaml`
+*before* the workspace is provisioned; the lifecycle's existing reconcile step
+then installs those modules on first start — the same path that converges a freshly
+recreated container to its manifest — so no separate install logic is needed.
 
 ## Configuration
 

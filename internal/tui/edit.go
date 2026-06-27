@@ -69,13 +69,33 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	entries, collapsed := buildEditEntries(catalog, selected.Manifest.Modules)
+
+	m.editMode = true
+	m.editTemplateMode = false
+	m.editEntries = entries
+	m.editCollapsed = collapsed
+	m.editPos = 0
+	m.editFilter = ""
+	m.editFilterMode = false
+	m.catalogErr = ""
+	m.message = "Edit modules — enter expands a category, space toggles, / filters, a applies, esc cancels."
+	return m, nil
+}
+
+// buildEditEntries turns a module catalog plus the currently-installed instances
+// into the module-browser rows: a collapsible header per category, then a toggle
+// row per module (or per instance, for multi-instance modules, plus an add row).
+// Installed/template instances carry their prompt values so a template edit can
+// re-serialize them; the workspace edit flow ignores those values for unchanged
+// rows. The catalog is sorted by category then name, so a header can be emitted
+// at each category transition with its modules listed beneath it.
+func buildEditEntries(catalog []module.Module, installed []workspace.ModuleInstance) ([]editEntry, map[string]bool) {
 	installedByMod := map[string][]workspace.ModuleInstance{}
-	for _, inst := range selected.Manifest.Modules {
+	for _, inst := range installed {
 		installedByMod[inst.Name] = append(installedByMod[inst.Name], inst)
 	}
 
-	// The catalog is sorted by category then name, so a category header can be
-	// emitted at each category transition with its modules listed beneath it.
 	entries := make([]editEntry, 0, len(catalog))
 	collapsed := map[string]bool{}
 	prevCategory := ""
@@ -89,25 +109,56 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 		}
 		insts := installedByMod[mod.Name]
 		if !mod.Multi() {
-			installed := len(insts) > 0
-			entries = append(entries, editEntry{mod: mod, id: mod.Name, label: mod.Name, installed: installed, selected: installed})
+			isInstalled := len(insts) > 0
+			entry := editEntry{mod: mod, id: mod.Name, label: mod.Name, installed: isInstalled, selected: isInstalled}
+			if isInstalled {
+				entry.values = insts[0].ValuesMap()
+			}
+			entries = append(entries, entry)
 			continue
 		}
 		// Multi-instance: one toggle row per installed entry, then an add row.
 		for _, inst := range insts {
-			entries = append(entries, editEntry{mod: mod, id: inst.InstanceID(), label: inst.Value(mod.Key), installed: true, selected: true})
+			entries = append(entries, editEntry{mod: mod, id: inst.InstanceID(), label: inst.Value(mod.Key), installed: true, selected: true, values: inst.ValuesMap()})
 		}
 		entries = append(entries, editEntry{mod: mod, isAdd: true, label: mod.Name})
 	}
 
+	return entries, collapsed
+}
+
+// openTemplateEditor opens the module editor against a template's module set
+// instead of a workspace's live modules. Applying it (a) saves the template
+// rather than installing into a container. isNew distinguishes creating a
+// brand-new template from editing an existing one (it only affects the message).
+func (m model) openTemplateEditor(t workspace.Template, isNew bool) (tea.Model, tea.Cmd) {
+	catalog, err := m.lifecycle.Catalog()
+	if err != nil {
+		m.catalogErr = err.Error()
+		m.message = "Failed to load modules: " + err.Error()
+		return m, nil
+	}
+	if len(catalog) == 0 {
+		m.message = "No modules available."
+		return m, nil
+	}
+
+	entries, collapsed := buildEditEntries(catalog, t.Modules)
+
 	m.editMode = true
+	m.editTemplateMode = true
+	m.editTemplate = t
 	m.editEntries = entries
 	m.editCollapsed = collapsed
 	m.editPos = 0
 	m.editFilter = ""
 	m.editFilterMode = false
 	m.catalogErr = ""
-	m.message = "Edit modules — enter expands a category, space toggles, / filters, a applies, esc cancels."
+	verb := "Editing"
+	if isNew {
+		verb = "Creating"
+	}
+	m.message = fmt.Sprintf("%s template %q — enter expands, space toggles, / filters, a saves, esc cancels.", verb, t.Name)
 	return m, nil
 }
 
@@ -124,6 +175,7 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.editMode = false
+		m.editTemplateMode = false
 		m.editEntries = nil
 		m.editFilter = ""
 		m.message = "Edit cancelled."
@@ -756,6 +808,10 @@ func plural(n int, singular, pluralForm string) string {
 }
 
 func (m model) applyEdit() (tea.Model, tea.Cmd) {
+	if m.editTemplateMode {
+		return m.applyTemplateEdit()
+	}
+
 	selected, ok := m.selectedWorkspace()
 	if !ok {
 		m.editMode = false
@@ -829,6 +885,67 @@ func (m model) applyEdit() (tea.Model, tea.Cmd) {
 	}
 }
 
+// applyTemplateEdit saves the editor's currently-selected modules as the template
+// being edited. Unlike the workspace path there is no container interaction: the
+// full module set is rebuilt from the selected rows and written to disk.
+func (m model) applyTemplateEdit() (tea.Model, tea.Cmd) {
+	modules := make([]workspace.ModuleInstance, 0, len(m.editEntries))
+	for _, e := range m.editEntries {
+		if e.isCategory || e.isAdd || !e.selected {
+			continue
+		}
+		id := e.id
+		if id == "" {
+			id = e.mod.InstanceID(e.values)
+		}
+		modules = append(modules, workspace.ModuleInstance{
+			Name:     e.mod.Name,
+			ID:       id,
+			Category: e.mod.Category,
+			Version:  e.mod.Version,
+			Values:   toAnyValues(e.values),
+		})
+	}
+
+	now := time.Now().UTC()
+	t := m.editTemplate
+	t.Modules = modules
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = now
+	}
+	t.UpdatedAt = now
+
+	if err := m.templateRegistry.Save(t); err != nil {
+		m.message = fmt.Sprintf("Save template failed: %v", err)
+		return m, nil
+	}
+
+	m.editMode = false
+	m.editTemplateMode = false
+	m.editEntries = nil
+	m.editFilter = ""
+	if err := m.reloadTemplates(); err != nil {
+		m.message = fmt.Sprintf("Saved template %q, but reloading failed: %v", t.Name, err)
+		return m, nil
+	}
+	m.selectTemplate(t.Name)
+	m.message = fmt.Sprintf("Saved template %q (%d module%s).", t.Name, len(modules), plural(len(modules), "", "s"))
+	return m, nil
+}
+
+// toAnyValues converts collected string prompt values into the map[string]any
+// shape a ModuleInstance stores, mirroring upsertModule's conversion.
+func toAnyValues(values map[string]string) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
 func (m model) renderEditPage(width, height int) string {
 	inner := width - 2
 	contentWidth := inner - 2
@@ -881,7 +998,9 @@ func (m model) renderEditPage(width, height int) string {
 	}
 
 	title := titleStyle.Render("Edit modules")
-	if selected, ok := m.selectedWorkspace(); ok {
+	if m.editTemplateMode {
+		title = titleStyle.Render("Template modules") + counterStyle.Render("("+m.editTemplate.Name+")")
+	} else if selected, ok := m.selectedWorkspace(); ok {
 		title += counterStyle.Render("(" + selected.Manifest.Name + ")")
 	}
 	if m.editFilterMode || m.editFilter != "" {

@@ -453,6 +453,12 @@ func valuesFromInstance(m ModuleInstance) map[string]string {
 	return out
 }
 
+// ValuesMap returns the instance's prompt values as strings, e.g. to repopulate
+// the module editor when editing a template built from these instances.
+func (mi ModuleInstance) ValuesMap() map[string]string {
+	return valuesFromInstance(mi)
+}
+
 func valueToString(v any) string {
 	switch t := v.(type) {
 	case string:

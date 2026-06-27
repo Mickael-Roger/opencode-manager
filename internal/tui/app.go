@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,19 +33,20 @@ var appVersion = "dev"
 const npmPackageName = "@mickaelroger78/opencode-manager"
 
 type model struct {
-	cfg          config.Config
-	registry     workspace.Registry
-	lifecycle    workspace.Lifecycle
-	lifecycleErr string
-	workspaces   []workspace.Summary
-	statuses     map[string]workspace.Status
-	workspacePos int
-	width        int
-	height       int
-	runtimeName  string
-	runtimeError string
-	loadError    string
-	message      string
+	cfg              config.Config
+	registry         workspace.Registry
+	templateRegistry workspace.TemplateRegistry
+	lifecycle        workspace.Lifecycle
+	lifecycleErr     string
+	workspaces       []workspace.Summary
+	statuses         map[string]workspace.Status
+	workspacePos     int
+	width            int
+	height           int
+	runtimeName      string
+	runtimeError     string
+	loadError        string
+	message          string
 
 	// baseImageReady gates the whole dashboard: until the managed base image
 	// finishes building (baseImageReadyMsg), the UI shows a blocking overlay and
@@ -70,6 +72,28 @@ type model struct {
 	tokens        map[string]tokenState
 	versions      map[string]versionState
 
+	// templates page (the ":templates" view; see templates.go). templatesMode
+	// swaps the workspace table for the template list and reroutes key handling.
+	templatesMode      bool
+	templates          []workspace.Template
+	templatePos        int
+	templateFilter     string
+	templateFilterMode bool
+
+	// template create dialog: collecting a new template's name before opening the
+	// module editor against it.
+	templateCreateMode bool
+	templateCreateName string
+
+	// create-workspace template picker: the optional "Pick Template" step shown
+	// after the name dialog when at least one template exists. createPendingName
+	// carries the entered workspace name into the picker; createTemplatePos == 0
+	// means "no template".
+	createPicking     bool
+	createPendingName string
+	createTemplates   []workspace.Template
+	createTemplatePos int
+
 	// installing holds workspaces whose module install/uninstall job is still
 	// running. Interactive container access (attach/shell) is frozen for these
 	// so a user can't reach OpenCode mid-install, before scripts finish and the
@@ -93,6 +117,10 @@ type model struct {
 	editMode    bool
 	editEntries []editEntry
 	editPos     int
+	// editTemplateMode makes the module editor act on editTemplate (saving it)
+	// instead of a selected workspace's live modules. See editTemplate/applyTemplateEdit.
+	editTemplateMode bool
+	editTemplate     workspace.Template
 	// editCollapsed records which categories are collapsed in the module browser.
 	// Categories start collapsed: the browser opens showing only category headers,
 	// and the user expands one (enter) to reveal its modules.
@@ -164,6 +192,10 @@ var actions = []action{
 	{Key: "u", Cmd: "update", Desc: "Update"},
 	{Key: "c", Cmd: "create", Desc: "Create"},
 	{Key: "ctrl-d", Cmd: "delete", Desc: "Delete"},
+	// Page navigation: no hotkey (typed as :templates / :workspaces), so these
+	// only surface as command-mode autocomplete suggestions.
+	{Key: "", Cmd: "templates", Desc: "Templates"},
+	{Key: "", Cmd: "workspaces", Desc: "Workspaces"},
 }
 
 // k9s default ("stock") skin colors.
@@ -360,18 +392,19 @@ func newModel(cfg config.Config) model {
 	}
 
 	return model{
-		cfg:          cfg,
-		registry:     workspace.NewRegistry(cfg),
-		lifecycle:    lifecycle,
-		lifecycleErr: lifecycleErr,
-		statuses:     map[string]workspace.Status{},
-		tokens:       map[string]tokenState{},
-		versions:     map[string]versionState{},
-		installing:   map[string]bool{},
-		provisioning: map[string]bool{},
-		width:        100,
-		height:       30,
-		message:      "Creating the base image...",
+		cfg:              cfg,
+		registry:         workspace.NewRegistry(cfg),
+		templateRegistry: workspace.NewTemplateRegistry(cfg),
+		lifecycle:        lifecycle,
+		lifecycleErr:     lifecycleErr,
+		statuses:         map[string]workspace.Status{},
+		tokens:           map[string]tokenState{},
+		versions:         map[string]versionState{},
+		installing:       map[string]bool{},
+		provisioning:     map[string]bool{},
+		width:            100,
+		height:           30,
+		message:          "Creating the base image...",
 	}
 }
 
@@ -574,14 +607,23 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirmDelete {
 		return m.updateDeleteConfirmation(msg)
 	}
+	if m.createPicking {
+		return m.updateCreatePick(msg)
+	}
 	if m.createMode {
 		return m.updateCreate(msg)
+	}
+	if m.templateCreateMode {
+		return m.updateTemplateCreate(msg)
 	}
 	if m.commandMode {
 		return m.updateCommand(msg)
 	}
 	if m.filterMode {
 		return m.updateFilter(msg)
+	}
+	if m.templateFilterMode {
+		return m.updateTemplateFilter(msg)
 	}
 	if m.editFormMode {
 		return m.updateEditForm(msg)
@@ -616,6 +658,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 		}
 		return m, nil
+	}
+	if m.templatesMode {
+		return m.updateTemplates(msg)
 	}
 
 	switch msg.String() {
@@ -666,6 +711,9 @@ func (m model) updateDeleteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.confirmDelete = false
 		if m.dialogFocus == 0 {
+			if m.templatesMode {
+				return m.deleteSelectedTemplate()
+			}
 			return m.deleteSelected()
 		}
 		m.message = "Delete cancelled."
@@ -752,7 +800,7 @@ func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if _, ok := m.validateCreateName(); !ok {
 			return m, nil
 		}
-		return m.createWorkspace(strings.TrimSpace(m.createName))
+		return m.startCreatePick(strings.TrimSpace(m.createName))
 	case "backspace", "ctrl+h":
 		if len(m.createName) > 0 {
 			m.createName = m.createName[:len(m.createName)-1]
@@ -771,7 +819,7 @@ func (m model) executeCommand() (tea.Model, tea.Cmd) {
 	m.commandMode = false
 	m.command = ""
 	if strings.HasPrefix(command, "create ") {
-		return m.createWorkspace(strings.TrimSpace(strings.TrimPrefix(command, "create ")))
+		return m.createWorkspace(strings.TrimSpace(strings.TrimPrefix(command, "create ")), nil)
 	}
 
 	return m.executeCommandName(command)
@@ -805,7 +853,7 @@ func (m model) validateCreateName() (string, bool) {
 	return "", true
 }
 
-func (m model) createWorkspace(name string) (tea.Model, tea.Cmd) {
+func (m model) createWorkspace(name string, tmpl *workspace.Template) (tea.Model, tea.Cmd) {
 	if name == "" {
 		m.message = "Workspace name is required."
 		return m, nil
@@ -818,12 +866,50 @@ func (m model) createWorkspace(name string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Applying a template seeds the new workspace's manifest with its modules so
+	// reconcile (run during provisioning's EnsureStarted) installs them on first
+	// start — no per-module install call is needed here.
+	if tmpl != nil && len(tmpl.Modules) > 0 {
+		manifest := result.Manifest
+		manifest.Modules = cloneModuleInstances(tmpl.Modules)
+		manifest.UpdatedAt = time.Now().UTC()
+		if err := workspace.SaveManifest(filepath.Join(result.Path, workspace.ManifestFile), manifest); err != nil {
+			slog.Error("failed to apply template to workspace", "name", name, "template", tmpl.Name, "error", err)
+			m.message = fmt.Sprintf("Created workspace %s but applying template %q failed: %v", result.Manifest.Name, tmpl.Name, err)
+			return m, m.loadWorkspaces
+		}
+		result.Manifest = manifest
+	}
+
 	m.createMode = false
+	m.createPicking = false
 	m.createName = ""
-	m.message = fmt.Sprintf("Created workspace %s. Building image and starting container...", result.Manifest.Name)
+	m.createPendingName = ""
+	if tmpl != nil && len(tmpl.Modules) > 0 {
+		m.message = fmt.Sprintf("Created workspace %s from template %q. Building image, starting container, installing modules...", result.Manifest.Name, tmpl.Name)
+	} else {
+		m.message = fmt.Sprintf("Created workspace %s. Building image and starting container...", result.Manifest.Name)
+	}
 	m.provisioning[result.Manifest.Name] = true
 	created := workspace.Summary{Manifest: result.Manifest, Path: result.Path}
 	return m, tea.Batch(m.loadWorkspaces, m.provisionWorkspace(created))
+}
+
+// cloneModuleInstances returns a deep-enough copy of a template's modules so the
+// new workspace manifest does not share the template's value maps in memory.
+func cloneModuleInstances(src []workspace.ModuleInstance) []workspace.ModuleInstance {
+	out := make([]workspace.ModuleInstance, len(src))
+	for i, inst := range src {
+		out[i] = inst
+		if inst.Values != nil {
+			values := make(map[string]any, len(inst.Values))
+			for k, v := range inst.Values {
+				values[k] = v
+			}
+			out[i].Values = values
+		}
+	}
+	return out
 }
 
 func (m model) provisionWorkspace(summary workspace.Summary) tea.Cmd {
@@ -1024,6 +1110,10 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 		return m.editSelected()
 	case "update":
 		return m.updateSelected()
+	case "templates":
+		return m.showTemplates()
+	case "workspaces":
+		return m.showWorkspaces()
 	default:
 		m.message = fmt.Sprintf("Unknown command %q. Press ? for help.", command)
 	}
@@ -1065,6 +1155,8 @@ func (m model) View() string {
 	switch {
 	case m.editMode:
 		body = m.renderEditPage(width, bodyHeight)
+	case m.templatesMode:
+		body = m.renderTemplatesPage(width, bodyHeight)
 	case m.showDescribe:
 		body = m.renderDescribePage(width, bodyHeight)
 	default:
@@ -1084,6 +1176,12 @@ func (m model) View() string {
 	}
 	if m.createMode {
 		view = overlayCentered(view, m.renderCreatePrompt(), width, height)
+	}
+	if m.createPicking {
+		view = overlayCentered(view, m.renderCreatePick(), width, height)
+	}
+	if m.templateCreateMode {
+		view = overlayCentered(view, m.renderTemplateCreatePrompt(), width, height)
 	}
 	if m.confirmDelete {
 		view = overlayCentered(view, m.renderDeleteConfirmation(), width, height)
@@ -1252,6 +1350,21 @@ func (m model) renderMenu() string {
 		{"^d", "Delete"},
 		{"q", "Quit"},
 	}
+	if m.templatesMode {
+		// The templates page supports a smaller action set; surface it instead of
+		// the workspace actions that do not apply here.
+		entries = []entry{
+			{":", "Command"},
+			{"/", "Filter"},
+			{"?", "Help"},
+			{"↵", "Edit"},
+			{"e", "Edit"},
+			{"c", "Create"},
+			{"^d", "Delete"},
+			{":ws", "Workspaces"},
+			{"q", "Quit"},
+		}
+	}
 
 	lines := make([]string, len(entries))
 	for i, e := range entries {
@@ -1374,14 +1487,21 @@ func (m model) boxWithTitle(title string, rows []string, width int) string {
 }
 
 func (m model) renderCrumbs() string {
-	crumbs := crumbStyle.Render("workspaces")
+	base := "workspaces"
+	if m.templatesMode {
+		base = "templates"
+	}
+	crumbs := crumbStyle.Render(base)
 	if m.showDescribe {
 		crumbs += " " + crumbStyle.Render("describe")
 	}
 	if m.editMode {
 		crumbs += " " + crumbStyle.Render("edit")
 	}
-	if m.filter != "" {
+	if m.templatesMode && m.templateFilter != "" {
+		crumbs += " " + filterStyle.Render("/"+m.templateFilter)
+	}
+	if !m.templatesMode && m.filter != "" {
 		crumbs += " " + filterStyle.Render("/"+m.filter)
 	}
 	return crumbs
@@ -1397,6 +1517,8 @@ func (m model) renderPrompt(width int) string {
 		return line
 	case m.filterMode:
 		return filterStyle.Render("/"+m.filter) + "▏"
+	case m.templateFilterMode:
+		return filterStyle.Render("/"+m.templateFilter) + "▏"
 	default:
 		style := mutedStyle
 		if strings.Contains(strings.ToLower(m.message), "fail") || strings.Contains(strings.ToLower(m.message), "error") {
@@ -1423,7 +1545,7 @@ func (m model) renderSuggestions() string {
 func (m model) renderHelp() string {
 	rows := [][2]string{
 		{":", "command mode"},
-		{"/", "filter workspaces"},
+		{"/", "filter"},
 		{"?", "toggle this help"},
 		{"j / ↓", "down"},
 		{"k / ↑", "up"},
@@ -1437,6 +1559,8 @@ func (m model) renderHelp() string {
 		{"u", "update OpenCode"},
 		{"c", "create"},
 		{"^d", "delete"},
+		{":templates", "manage workspace templates"},
+		{":workspaces", "back to workspaces"},
 		{"q / ^c", "quit"},
 	}
 
@@ -1587,14 +1711,22 @@ func (m model) renderDescribePage(width, height int) string {
 }
 
 func (m model) renderDeleteConfirmation() string {
+	noun := "workspace"
 	name := m.selectedWorkspaceName()
+	if m.templatesMode {
+		noun = "template"
+		name = ""
+		if t, ok := m.selectedTemplate(); ok {
+			name = t.Name
+		}
+	}
 	if name == "" {
-		name = "selected workspace"
+		name = "selected " + noun
 	}
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
-		dialogText.Render("Delete workspace ")+dialogLabel.Render(name)+dialogText.Render("?"),
+		dialogText.Render("Delete "+noun+" ")+dialogLabel.Render(name)+dialogText.Render("?"),
 		dialogText.Render("This action cannot be undone."),
 		"",
 		dialogButtons([]string{"OK", "Cancel"}, m.dialogFocus),
