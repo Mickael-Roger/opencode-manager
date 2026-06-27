@@ -110,15 +110,11 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 		"git", "ripgrep", "jq", "nodejs", "npm",
 		"${EXTRA_PACKAGES}",
 		"RUN ${EXTRA_COMMANDS}",
-		"getent group linuxbrew >/dev/null 2>&1 || groupadd -r linuxbrew",
-		"id -u linuxbrew >/dev/null 2>&1 || useradd -r -g linuxbrew -m -s /bin/bash linuxbrew",
-		"if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
-		"su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'",
 		"command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai",
 		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
 		"RUN chmod 0755 /usr/local/bin/opencode-manager-attach",
-		"ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin",
+		"ENV PATH=/usr/local/bin",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("base Dockerfile missing %q:\n%s", want, content)
@@ -135,7 +131,6 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 	// already provides a tool without crashing (e.g. "user already exists"). Guard
 	// against regressing to the unconditional forms.
 	for _, unguarded := range []string{
-		"RUN groupadd -r linuxbrew &&",
 		"RUN npm install -g opencode-ai",
 		"RUN npm install -g tokscale",
 		"RUN echo '[ -f \"$HOME/.env\" ]",
@@ -214,7 +209,7 @@ func TestWorkspaceDockerfileUsesBaseAndHostUIDGIDArgs(t *testing.T) {
 		"useradd -m -u ${UID} -g ${GID}",
 		"usermod -aG sudo ${user_name}",
 		"/home/debian/workspace",
-		"chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew",
+		"chown -R ${UID}:${GID} /home/debian",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("workspace Dockerfile missing %q:\n%s", want, content)

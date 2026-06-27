@@ -29,7 +29,7 @@
 - New workspaces seed OpenCode files from `~/.config/opencode-manager/opencode/` into `home/.config/opencode/` for `opencode.json`, `agent/`, `commands/`, `plugins/`, and `skills/`.
 - `config.yaml` defines `baseImage.name`, `baseImage.packages`, and `baseImage.commands`; commands run during image build immediately after package installation.
 - `config.yaml` supports `useLocalOpenCodeAuth` (default `false`); when `true`, `~/.local/share/opencode/auth.json` is mounted read-write into the same path in workspace containers.
-- Generated workspace images must include `brew`, `npx`, `uvx`, `git`, `ripgrep`, and `jq` by default.
+- Generated workspace images must include `npx`, `uvx`, `git`, `ripgrep`, and `jq` by default.
 - Managed base images are tagged from a stable hash of `baseImage` definition and reused until that definition changes.
 - The TUI ensures the managed base image exists at startup and shows `Creating the base image...` while it is built.
 

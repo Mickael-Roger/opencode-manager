@@ -17,8 +17,12 @@ ARG EXTRA_COMMANDS=":"
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# No build-essential by default: it adds ~254MB and nothing in this recipe
+# needs a compiler (the npm globals below ship prebuilt binaries). A workspace
+# that needs to compile native code can install it on demand via passwordless
+# sudo, or bake it in through the EXTRA_PACKAGES build arg.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash build-essential ca-certificates curl file git jq nodejs npm \
+      bash ca-certificates curl file git jq nodejs npm \
       openssh-client passwd procps ripgrep sudo ${EXTRA_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,18 +30,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # by default).
 RUN ${EXTRA_COMMANDS}
 
-# Create linuxbrew as a system account (UID/GID < 1000). Without an explicit id,
-# useradd grabs UID 1000, which collides with the workspace user added at UID 1000
-# in the workspace image layer.
-RUN set -eux; getent group linuxbrew >/dev/null 2>&1 || groupadd -r linuxbrew; id -u linuxbrew >/dev/null 2>&1 || useradd -r -g linuxbrew -m -s /bin/bash linuxbrew; mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin; chown -R linuxbrew:linuxbrew /home/linuxbrew
-RUN set -eux; if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew'; fi; su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'
-RUN git --version && rg --version && jq --version && npx --version && uvx --version && su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'
+RUN git --version && rg --version && jq --version && npx --version && uvx --version
 
 # Install OpenCode and tokscale from npm (reliable, unlike the GitHub-API
 # installer), only when absent so the step is a no-op on a base that already ships
 # them.
-RUN set -eux; command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai; opencode --version
-RUN set -eux; command -v tokscale >/dev/null 2>&1 || npm install -g tokscale@latest; command -v tokscale
+# opencode-ai ships a ~160MB self-contained binary, but its package declares
+# every platform variant as an optionalDependency and npm installs all of the
+# ones matching this OS/arch (e.g. four linux-x64 builds: glibc/musl x avx2/
+# baseline) — ~630MB for one usable binary. postinstall already copied the right
+# one to bin/opencode.exe (the symlinked entrypoint; nothing re-selects at
+# runtime), so the variant packages are dead weight. We re-pin bin/opencode.exe
+# to the most portable variant for this arch and drop every variant package.
+# Cache is cleaned in the same layer so the freed bytes never persist.
+#
+#   - x86_64 -> ...-x64-baseline[-musl]: the baseline build omits AVX2 so it runs
+#     on any x64 CPU regardless of the build host's instruction set.
+#   - aarch64 -> ...-arm64[-musl]: arm64 has no baseline/AVX2 split, so the plain
+#     arm64 build is already the only/portable choice.
+# The libc suffix matches the build base (musl on Alpine, glibc otherwise).
+RUN set -eux; \
+    command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai; \
+    command -v tokscale >/dev/null 2>&1 || npm install -g tokscale@latest; \
+    OCM="$(npm root -g)/opencode-ai"; \
+    libc=""; if [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; then libc="-musl"; fi; \
+    case "$(uname -m)" in \
+      x86_64)        variant="opencode-linux-x64-baseline${libc}" ;; \
+      aarch64|arm64) variant="opencode-linux-arm64${libc}" ;; \
+      *)             variant="" ;; \
+    esac; \
+    if [ -n "$variant" ] && [ -x "$OCM/node_modules/$variant/bin/opencode" ]; then \
+      cp "$OCM/node_modules/$variant/bin/opencode" "$OCM/bin/opencode.exe"; \
+    fi; \
+    rm -rf "$OCM"/node_modules/opencode-linux-* "$OCM"/node_modules/opencode-darwin-* "$OCM"/node_modules/opencode-windows-*; \
+    npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*; \
+    opencode --version; command -v tokscale
 
 # Manager scripts: the attach wrapper and the supervisor entrypoint (PID 1). They
 # are COPYed rather than written via heredoc, which the buildah builder used by
@@ -53,4 +80,4 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chm
 # Source the per-workspace ~/.env from interactive shells, mirroring the server.
 RUN grep -qF '[ -f "$HOME/.env" ]' /etc/bash.bashrc || echo '[ -f "$HOME/.env" ] && . "$HOME/.env"' >> /etc/bash.bashrc
 
-ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin

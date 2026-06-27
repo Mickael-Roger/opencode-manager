@@ -142,7 +142,7 @@ When `useLocalOpenCodeAuth` is `true`, the host file
 workspace containers. It defaults to `false`, so host OpenCode auth is not shared
 unless explicitly enabled.
 
-Generated workspace images always include `brew`, `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Additional Debian packages are declared through `baseImage.packages`, and additional build steps are declared through `baseImage.commands`.
+Generated workspace images always include `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Additional Debian packages are declared through `baseImage.packages`, and additional build steps are declared through `baseImage.commands`.
 
 The managed base image is tagged from a stable hash of the base image definition and is reused while that definition stays unchanged. Workspace-specific images are built from the managed base image and add only workspace-specific setup such as the matching UID/GID user.
 

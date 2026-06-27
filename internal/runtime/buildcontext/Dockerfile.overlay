@@ -1,5 +1,5 @@
 # Thin overlay built on top of the published ocm-base when a workspace adds extra
-# baseImage.packages/commands. The heavy tooling (uv, linuxbrew, OpenCode,
+# baseImage.packages/commands. The heavy tooling (uv, OpenCode,
 # tokscale, the manager scripts) is inherited from the base, so this only applies
 # the extras. It is only built when there is at least one extra package or command.
 ARG BASE_IMAGE=docker.io/mroger78/ocm-base:latest

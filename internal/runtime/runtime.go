@@ -146,7 +146,7 @@ type BaseBuildSpec struct {
 	Commands  []string
 	// Prebuilt selects the build recipe. When false (the default), FromImage is a
 	// plain distro (e.g. debian:stable-slim) and the full base recipe is rendered:
-	// system packages, uv, linuxbrew, OpenCode, tokscale, and the manager scripts.
+	// system packages, uv, OpenCode, tokscale, and the manager scripts.
 	// This is what publishes docker.io/mroger78/ocm-base. When true, FromImage is
 	// already a built ocm-base, so only a thin overlay is rendered that adds the
 	// user's extra Packages/Commands on top.

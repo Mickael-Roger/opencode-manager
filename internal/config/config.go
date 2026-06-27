@@ -25,7 +25,7 @@ const (
 
 // BaseImageRepository is the repository of the published, prebuilt base image
 // (without a tag). Any tag of it (:latest, :dev, :X.Y.Z, a digest) already
-// contains the full tooling (uv, linuxbrew, OpenCode, tokscale, and the manager
+// contains the full tooling (uv, OpenCode, tokscale, and the manager
 // scripts). It is built and published by .github/workflows from the Dockerfile in
 // internal/runtime/buildcontext.
 const BaseImageRepository = "docker.io/mroger78/ocm-base"

@@ -167,13 +167,13 @@ workspace container. The default `false` keeps auth isolated from the host.
 `~/.local/share/opencode-manager/logs/opencode-manager.log` rather than printed
 to the terminal, so they never interfere with the TUI.
 
-Generated workspace images always include `brew`, `npx`, `uvx`, `git`,
+Generated workspace images always include `npx`, `uvx`, `git`,
 `ripgrep`, and `jq`. Add project-specific extras with `baseImage.packages` and
 `baseImage.commands`.
 
 `baseImage.name` defaults to the published, prebuilt base image
 `docker.io/mroger78/ocm-base:latest`, which already contains the full tooling
-(`brew`, `npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `tokscale`, and the
+(`npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `tokscale`, and the
 manager scripts). With this default and no extras, `opencode-manager` simply
 pulls that image instead of building a base locally, so the first start is fast.
 

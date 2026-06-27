@@ -1,17 +1,22 @@
 - [x] Same UX than k9s
 - [x] add a minimal cli with list and attach for tmux automation
-- [ ] Create a function to create a new workspace by copying an existing one
 - [x] Rename the project opencode-manager
-- [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [x] Add a npm packaging + github CI to publish it. This package install what is needed to
-- [ ] Add a config.yaml edition part in the TUI
 - [x] Add 's' shortcut to get a shell in a workspace container
 - [x] Add 'd' for describe a workspace and you get the number of used token in addition to the started date, ...
 - [x] agents, AGENT.md, commands, ... must be links to thoses defined in the template
 - [x] Trap the alert or wait for interraction in every session and show it in the central dashboard
 - [x] Create a complete CI / CD pipeline with tests: docker, podman, ...
 - [x] Add a Dockerfile and remove it from the go code (same for the entrypoint script, ...)
-- [ ] Improve the docker image size
+- [x] When creating an image status must be creating instead of missing
+
+- [x] Improve the docker image size
+
+- [ ] Create a function to create a new workspace by copying an existing one
+- [ ] Add flake.nix of nix something to add this project to my nixos configuration
+- [ ] Add a config.yaml edition part in the TUI
 - [ ] Create templates of workspace (modules, ...)
-- [/] When creating an image status must be creating instead of missing
 - [ ] Review the status: sleeping, waiting and working
+- [ ] Add langage modules category
+- [ ] Think about exposing a port (in the TUI action: expose port)
+- [ ] Add a display of token per container
