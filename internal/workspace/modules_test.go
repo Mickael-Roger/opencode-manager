@@ -31,14 +31,14 @@ func TestEnvHashChangesWithContent(t *testing.T) {
 
 func TestUpsertAndRemoveModule(t *testing.T) {
 	var mods []ModuleInstance
-	mods = upsertModule(mods, "aws", "aws", 1, map[string]string{"profile": "prod"})
-	mods = upsertModule(mods, "git", "git", 1, nil)
+	mods = upsertModule(mods, "aws", "aws", "cloud", 1, map[string]string{"profile": "prod"})
+	mods = upsertModule(mods, "git", "git", "tools", 1, nil)
 	if len(mods) != 2 {
 		t.Fatalf("expected 2 modules, got %d", len(mods))
 	}
 
 	// Upsert existing updates version/values in place.
-	mods = upsertModule(mods, "aws", "aws", 2, map[string]string{"profile": "dev"})
+	mods = upsertModule(mods, "aws", "aws", "cloud", 2, map[string]string{"profile": "dev"})
 	if len(mods) != 2 {
 		t.Fatalf("upsert should not append duplicate, got %d", len(mods))
 	}
@@ -58,14 +58,14 @@ func TestUpsertAndRemoveModule(t *testing.T) {
 // (distinguished by instance ID) coexist and are upserted/removed independently.
 func TestMultiInstanceModule(t *testing.T) {
 	var mods []ModuleInstance
-	mods = upsertModule(mods, "ssh:github.com", "ssh", 1, map[string]string{"host": "github.com"})
-	mods = upsertModule(mods, "ssh:gitlab.com", "ssh", 1, map[string]string{"host": "gitlab.com"})
+	mods = upsertModule(mods, "ssh:github.com", "ssh", "tools", 1, map[string]string{"host": "github.com"})
+	mods = upsertModule(mods, "ssh:gitlab.com", "ssh", "tools", 1, map[string]string{"host": "gitlab.com"})
 	if len(mods) != 2 {
 		t.Fatalf("expected 2 ssh instances, got %d: %+v", len(mods), mods)
 	}
 
 	// Re-upserting one instance updates it in place without touching the other.
-	mods = upsertModule(mods, "ssh:github.com", "ssh", 1, map[string]string{"host": "github.com", "user": "git"})
+	mods = upsertModule(mods, "ssh:github.com", "ssh", "tools", 1, map[string]string{"host": "github.com", "user": "git"})
 	if len(mods) != 2 {
 		t.Fatalf("upsert of existing instance should not append, got %d", len(mods))
 	}
@@ -125,7 +125,7 @@ func TestModuleMounts(t *testing.T) {
 }
 
 func TestModuleContainerDir(t *testing.T) {
-	if got := moduleContainerDir("aws"); got != "/opt/opencode-manager/modules/aws" {
+	if got := moduleContainerDir("cloud", "aws"); got != "/opt/opencode-manager/modules/cloud/aws" {
 		t.Fatalf("moduleContainerDir = %q", got)
 	}
 }
@@ -152,15 +152,16 @@ func TestAddModuleRunsInstallAndRecordsManifest(t *testing.T) {
 	summary := Summary{Manifest: manifest, Path: workspacePath}
 
 	l := Lifecycle{driver: fake}
-	mod := module.Module{Name: "hello", Version: 1}
+	mod := module.Module{Name: "hello", Category: "tools", Version: 1}
 	if err := l.AddModule(context.Background(), summary, mod, map[string]string{"name": "world"}); err != nil {
 		t.Fatalf("AddModule: %v", err)
 	}
 
-	// The install script must have been exec'd inside the container.
+	// The install script must have been exec'd inside the container, at the
+	// category-qualified path.
 	sawInstall := false
 	for _, args := range fake.gotArgs {
-		if strings.Join(args, " ") == moduleContainerDir("hello")+"/install" {
+		if strings.Join(args, " ") == moduleContainerDir("tools", "hello")+"/install" {
 			sawInstall = true
 		}
 	}

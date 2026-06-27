@@ -1,0 +1,24 @@
+#!/bin/sh
+# Container main process (PID 1). It sources the per-workspace ~/.env before
+# launching the OpenCode server so module-provided environment variables reach the
+# server (and every tool it spawns). The server runs as a background child;
+# killing only that child (e.g. `pkill -f 'opencode serve'`, which the manager
+# does after a module edits ~/.env) makes the loop re-source ~/.env and relaunch
+# it, so an env change needs only a cheap in-place bounce, not a container
+# recreate. A SIGTERM from `docker stop` is forwarded to the child for a clean stop.
+child=""
+shutdown() {
+  [ -n "$child" ] && kill -TERM "$child" 2>/dev/null
+  exit 0
+}
+trap shutdown TERM INT
+while true; do
+  set -a
+  [ -f "$HOME/.env" ] && . "$HOME/.env"
+  set +a
+  opencode serve --hostname 127.0.0.1 --port 4096 &
+  child=$!
+  wait "$child"
+  child=""
+  sleep 0.5
+done

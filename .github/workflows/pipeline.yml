@@ -24,9 +24,10 @@ permissions:
   contents: read
 
 env:
-  # Published base image. Built from the recipe in internal/runtime via
-  # cmd/ocm-base-context, so it never drifts from what the binary expects.
+  # Published base image, built directly from the Dockerfile the binary also uses.
   BASE_IMAGE: docker.io/mroger78/ocm-base
+  # Build context (Dockerfile + manager scripts) shared by the binary and CI.
+  BASE_CONTEXT: internal/runtime/buildcontext
 
 concurrency:
   group: pipeline-${{ github.ref }}
@@ -140,11 +141,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y podman
 
       # --- Base-image creation test (per runtime) ----------------------------
-      - name: Generate base build context
-        run: go run ./cmd/ocm-base-context -o "$RUNNER_TEMP/basectx"
       - name: Build base image
         run: |
-          "$RUNTIME" build -t "$BASE_REF" -f "$RUNNER_TEMP/basectx/Containerfile" "$RUNNER_TEMP/basectx"
+          "$RUNTIME" build -t "$BASE_REF" -f "$BASE_CONTEXT/Dockerfile" "$BASE_CONTEXT"
 
       # --- Complete installation test (npm global install) -------------------
       - name: Download prebuilt binaries
@@ -234,8 +233,6 @@ jobs:
             npm publish --tag dev --access public
           fi
 
-      - name: Generate base build context
-        run: go run ./cmd/ocm-base-context -o "$RUNNER_TEMP/basectx"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
       - name: Set up QEMU
@@ -248,8 +245,8 @@ jobs:
       - name: Build and push base image (dev + sha)
         uses: docker/build-push-action@v6
         with:
-          context: ${{ runner.temp }}/basectx
-          file: ${{ runner.temp }}/basectx/Containerfile
+          context: ${{ env.BASE_CONTEXT }}
+          file: ${{ env.BASE_CONTEXT }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
@@ -336,12 +333,11 @@ jobs:
               "$SRC"
           else
             echo "::warning::$SRC not found (tag not built on main); building from source."
-            go run ./cmd/ocm-base-context -o "$RUNNER_TEMP/basectx"
             docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --push \
               -t "${BASE_IMAGE}:${VER}" \
               -t "${BASE_IMAGE}:latest" \
-              -f "$RUNNER_TEMP/basectx/Containerfile" \
-              "$RUNNER_TEMP/basectx"
+              -f "${BASE_CONTEXT}/Dockerfile" \
+              "${BASE_CONTEXT}"
           fi

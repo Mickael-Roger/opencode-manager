@@ -1,0 +1,17 @@
+#!/bin/sh
+# Attach wrapper. The container's main process is a persistent `opencode serve`;
+# attaching runs a TUI client against it over HTTP. Ctrl-C exits only the client,
+# leaving the server running. Wait for the server to listen, then attach to the
+# last session if one exists, otherwise start a fresh session.
+url="http://127.0.0.1:4096"
+dir="/home/debian/workspace"
+i=0
+while [ "$i" -lt 150 ]; do
+  curl -sf -o /dev/null "$url/session" && break
+  i=$((i+1)); sleep 0.2
+done
+count=$(curl -sf "$url/session" | jq 'length' 2>/dev/null || echo 0)
+if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+  exec opencode attach "$url" --dir "$dir" -c
+fi
+exec opencode attach "$url" --dir "$dir"

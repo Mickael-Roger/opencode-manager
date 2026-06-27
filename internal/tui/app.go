@@ -82,9 +82,13 @@ type model struct {
 	updateLatest string
 
 	// module edit flow (see edit.go)
-	editMode        bool
-	editEntries     []editEntry
-	editPos         int
+	editMode    bool
+	editEntries []editEntry
+	editPos     int
+	// editFilter narrows the module browser to entries whose name, description,
+	// category, or instance label match; editFilterMode is true while typing it.
+	editFilter      string
+	editFilterMode  bool
 	catalogErr      string
 	editPrompting   bool
 	editPromptMod   module.Module
@@ -193,9 +197,10 @@ var (
 	borderStyle   = lipgloss.NewStyle().Foreground(colBorder)
 
 	// module editor
-	editGroupStyle = lipgloss.NewStyle().Foreground(colTitle).Bold(true)
-	editAddStyle   = lipgloss.NewStyle().Foreground(colInfoKey)
-	editDescStyle  = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
+	editCategoryStyle = lipgloss.NewStyle().Foreground(colFilter).Bold(true)
+	editGroupStyle    = lipgloss.NewStyle().Foreground(colTitle).Bold(true)
+	editAddStyle      = lipgloss.NewStyle().Foreground(colInfoKey)
+	editDescStyle     = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
 
 	// k9s dialog ("Dialog") skin.
 	dialogText      = lipgloss.NewStyle().Foreground(colBody)                                                                       // cadetblue
@@ -571,6 +576,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.editPrompting {
 		return m.updateEditPrompt(msg)
+	}
+	if m.editFilterMode {
+		return m.updateEditFilter(msg)
 	}
 	if m.editMode {
 		return m.updateEdit(msg)

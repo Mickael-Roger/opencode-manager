@@ -1,0 +1,13 @@
+# Per-workspace image: adds the host user (UID/GID) on top of the resolved base
+# image so files written into the bind-mounted home keep host ownership. The
+# workspace user joins the sudo group for the passwordless sudo configured in the
+# base image.
+ARG BASE_IMAGE=docker.io/mroger78/ocm-base:latest
+FROM ${BASE_IMAGE}
+
+ARG UID
+ARG GID
+
+RUN set -eux; if getent group ${GID}; then group_name=$(getent group ${GID} | cut -d: -f1); else groupadd -g ${GID} debian && group_name=debian; fi; if getent passwd ${UID}; then user_name=$(getent passwd ${UID} | cut -d: -f1); usermod -d /home/debian -s /bin/bash ${user_name}; else useradd -m -u ${UID} -g ${GID} -s /bin/bash debian; user_name=debian; fi; usermod -aG sudo ${user_name}; mkdir -p /home/debian/workspace && chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew
+ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /home/debian/workspace

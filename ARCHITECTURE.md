@@ -64,14 +64,21 @@ OpenCode paths are tracked through `workspace.yaml` and files under `home/`.
 ## Module Model
 
 Modules add capabilities to a workspace. A module is a self-contained directory
-with a thin declarative `module.yml` and two executables that do all the work:
+with a thin declarative `module.yml` and two executables that do all the work.
+Modules live under a **category** directory (e.g. `cloud`, `infra`, `tools`) that
+groups them in the editor:
 
 ```text
-modules/aws/
+modules/cloud/aws/
   module.yml      # name, version, description, and the prompts to collect
   install         # executable: install packages, write files, export env vars
   uninstall       # executable: undo what install did
 ```
+
+The category is taken from the parent directory name; it is purely organizational
+(the module is still identified by its globally unique `name`). To add a module,
+drop its directory under the relevant category (creating a new category directory
+is fine).
 
 `module.yml` only declares metadata and the values to ask the user for:
 
@@ -109,10 +116,16 @@ never written to the manifest. This is wired with two host-side hooks: an
 a `resolve` script that reads the selected account's credentials from the host.
 
 The whole module directory is bind-mounted read-only into every workspace at
-`/opt/opencode-manager/modules`. Built-in modules (`aws`, `git`, `kubernetes`,
-`outscale`, and `ssh`) ship in the top-level `modules/` directory and are
-installed into your module directory by the npm postinstall script; drop your own
-module subdirectories alongside them.
+`/opt/opencode-manager/modules`, mirroring the `category/module` layout (so the
+`aws` module runs from `/opt/opencode-manager/modules/cloud/aws`). Built-in
+modules ship in the top-level `modules/` directory grouped by category —
+`cloud/aws`, `cloud/outscale`, `infra/kubernetes`, `tools/git`, `tools/ssh` — and
+are installed into your module directory by the npm postinstall script; drop your
+own module directories under a category alongside them.
+
+In the editor (`e`), modules are shown as a category browser — a category header
+with its modules indented beneath it — and `/` filters by name, description, or
+category.
 
 ## Configuration
 
@@ -171,10 +184,12 @@ back to building the complete base recipe locally from that image. In all cases
 the resulting base is reused while the `baseImage` definition stays unchanged;
 changing any field produces a new managed base image.
 
-The prebuilt base image is built and published by the GitHub Actions pipeline
-from the recipe in `internal/runtime` (see `WriteBaseBuildContext` and
-`cmd/ocm-base-context`), so the published image and the local fallback build are
-always the same recipe.
+The base recipe lives as real files under `internal/runtime/buildcontext/`
+(`Dockerfile`, `Dockerfile.overlay`, `Dockerfile.workspace`, and the manager
+scripts). The GitHub Actions pipeline publishes `buildcontext/Dockerfile`
+directly, and the binary embeds the same directory and builds it locally as a
+fallback (passing the base image, extra packages, and commands as `--build-arg`
+values), so the published image and the local build never drift.
 
 When the TUI starts, it ensures the base image is available and shows
 `Creating the base image...` while it is pulled or built.

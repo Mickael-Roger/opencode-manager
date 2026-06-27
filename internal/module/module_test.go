@@ -245,9 +245,9 @@ version: 1
 func TestCatalogFirstRootWins(t *testing.T) {
 	root1 := t.TempDir()
 	root2 := t.TempDir()
-	writeModule(t, root1, "git", "name: git\nversion: 5\n")
-	writeModule(t, root2, "git", "name: git\nversion: 1\n")
-	writeModule(t, root2, "aws", "name: aws\nversion: 1\n")
+	writeModule(t, root1, "tools/git", "name: git\nversion: 5\n")
+	writeModule(t, root2, "tools/git", "name: git\nversion: 1\n")
+	writeModule(t, root2, "cloud/aws", "name: aws\nversion: 1\n")
 
 	mods, err := Catalog([]string{root1, root2})
 	if err != nil {
@@ -256,9 +256,25 @@ func TestCatalogFirstRootWins(t *testing.T) {
 	if len(mods) != 2 {
 		t.Fatalf("expected 2 modules, got %d: %+v", len(mods), mods)
 	}
-	// Sorted by name: aws then git; git from root1 (version 5) shadows root2.
-	if mods[1].Name != "git" || mods[1].Version != 5 {
-		t.Fatalf("expected git v5 from first root, got %+v", mods[1])
+	// Sorted by category then name: cloud/aws before tools/git.
+	if mods[0].Name != "aws" || mods[0].Category != "cloud" {
+		t.Fatalf("expected cloud/aws first, got %+v", mods[0])
+	}
+	// git from root1 (version 5) shadows root2; category is derived from its dir.
+	if mods[1].Name != "git" || mods[1].Version != 5 || mods[1].Category != "tools" {
+		t.Fatalf("expected tools/git v5 from first root, got %+v", mods[1])
+	}
+}
+
+func TestLoadDerivesCategoryFromParentDir(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "cloud/aws", "name: aws\nversion: 1\n")
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if mod.Category != "cloud" {
+		t.Fatalf("Category = %q, want cloud", mod.Category)
 	}
 }
 

@@ -86,8 +86,10 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 	m.editMode = true
 	m.editEntries = entries
 	m.editPos = 0
+	m.editFilter = ""
+	m.editFilterMode = false
 	m.catalogErr = ""
-	m.message = "Edit modules — space toggles, a applies, esc cancels."
+	m.message = "Edit modules — space toggles, / filters, a applies, esc cancels."
 	return m, nil
 }
 
@@ -96,27 +98,134 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc", "q":
+		// Clear an active filter first; a second esc leaves the editor.
+		if m.editFilter != "" {
+			m.editFilter = ""
+			m.snapEditPos()
+			m.message = "Filter cleared."
+			return m, nil
+		}
 		m.editMode = false
 		m.editEntries = nil
+		m.editFilter = ""
 		m.message = "Edit cancelled."
+	case "/":
+		m.editFilterMode = true
+		m.message = "Filter modules — type to search name/description, enter to keep, esc to clear."
 	case "up", "k":
-		if m.editPos > 0 {
-			m.editPos--
-		}
+		m.editPos = m.prevVisibleEdit(m.editPos)
 	case "down", "j":
-		if m.editPos < len(m.editEntries)-1 {
-			m.editPos++
-		}
+		m.editPos = m.nextVisibleEdit(m.editPos)
 	case "g", "home":
-		m.editPos = 0
+		if p := m.firstVisibleEdit(); p >= 0 {
+			m.editPos = p
+		}
 	case "G", "end":
-		m.editPos = max(0, len(m.editEntries)-1)
+		if p := m.lastVisibleEdit(); p >= 0 {
+			m.editPos = p
+		}
 	case " ", "enter":
 		return m.toggleEditEntry()
 	case "a":
 		return m.applyEdit()
 	}
 	return m, nil
+}
+
+// updateEditFilter handles typing the module-browser filter (the / search). It
+// narrows the visible entries by name, description, category, or instance label.
+func (m model) updateEditFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.editFilterMode = false
+		m.editFilter = ""
+		m.snapEditPos()
+	case "enter":
+		m.editFilterMode = false
+		m.snapEditPos()
+	case "backspace", "ctrl+h":
+		if len(m.editFilter) > 0 {
+			m.editFilter = m.editFilter[:len(m.editFilter)-1]
+		}
+		m.snapEditPos()
+	default:
+		if len(msg.Runes) > 0 {
+			m.editFilter += string(msg.Runes)
+			m.snapEditPos()
+		}
+	}
+	return m, nil
+}
+
+// editEntryMatches reports whether entry e matches the lowercased query q. It
+// searches the module name and description (as requested) plus the category and
+// the instance label so "/cloud" or an instance key also narrow the list.
+func editEntryMatches(e editEntry, q string) bool {
+	return strings.Contains(strings.ToLower(e.mod.Name), q) ||
+		strings.Contains(strings.ToLower(e.mod.Description), q) ||
+		strings.Contains(strings.ToLower(e.mod.Category), q) ||
+		strings.Contains(strings.ToLower(e.label), q)
+}
+
+// editVisible reports whether the entry at index i passes the current filter.
+func (m model) editVisible(i int) bool {
+	if i < 0 || i >= len(m.editEntries) {
+		return false
+	}
+	if m.editFilter == "" {
+		return true
+	}
+	return editEntryMatches(m.editEntries[i], strings.ToLower(m.editFilter))
+}
+
+func (m model) firstVisibleEdit() int {
+	for i := range m.editEntries {
+		if m.editVisible(i) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m model) lastVisibleEdit() int {
+	for i := len(m.editEntries) - 1; i >= 0; i-- {
+		if m.editVisible(i) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m model) nextVisibleEdit(from int) int {
+	for i := from + 1; i < len(m.editEntries); i++ {
+		if m.editVisible(i) {
+			return i
+		}
+	}
+	return from
+}
+
+func (m model) prevVisibleEdit(from int) int {
+	for i := from - 1; i >= 0; i-- {
+		if m.editVisible(i) {
+			return i
+		}
+	}
+	return from
+}
+
+// snapEditPos keeps the cursor on a visible row after the filter changes.
+func (m *model) snapEditPos() {
+	if m.editVisible(m.editPos) {
+		return
+	}
+	if p := m.firstVisibleEdit(); p >= 0 {
+		m.editPos = p
+	} else {
+		m.editPos = 0
+	}
 }
 
 func (m model) toggleEditEntry() (tea.Model, tea.Cmd) {
@@ -675,28 +784,42 @@ func (m model) renderEditPage(width, height int) string {
 	rows = append(rows, blank)
 	if len(m.editEntries) == 0 {
 		rows = append(rows, " "+mutedStyle.Render(fit("No modules available.", contentWidth))+" ")
+	} else if m.firstVisibleEdit() < 0 {
+		rows = append(rows, " "+mutedStyle.Render(fit("No modules match the filter.", contentWidth))+" ")
 	}
 
-	// Multi-instance modules are introduced by a group header; their instances
-	// and add row are indented beneath it. Singletons render as a single row.
+	// File-browser layout: a category header, then its modules indented beneath
+	// it. Multi-instance modules add their own sub-header above their instances
+	// and add row. Singletons render as a single indented row. The filter hides
+	// non-matching entries (and any category/module header left with no rows).
+	const moduleIndent = "  "
+	prevCategory := ""
 	prevMod := ""
 	for i, e := range m.editEntries {
+		if !m.editVisible(i) {
+			continue
+		}
 		if len(rows) >= height-3 {
 			break
 		}
-		if e.mod.Multi() && e.mod.Name != prevMod {
-			if prevMod != "" {
+		if e.mod.Category != prevCategory {
+			if prevCategory != "" {
 				rows = append(rows, blank)
 			}
-			rows = append(rows, m.renderEditGroupHeader(e.mod, contentWidth))
+			rows = append(rows, m.renderEditCategoryHeader(e.mod.Category, contentWidth))
+			prevCategory = e.mod.Category
+			prevMod = ""
+		}
+		if e.mod.Multi() && e.mod.Name != prevMod {
+			rows = append(rows, m.renderEditGroupHeader(e.mod, contentWidth, moduleIndent))
 		}
 		prevMod = e.mod.Name
-		rows = append(rows, m.renderEditRow(e, i == m.editPos, contentWidth))
+		rows = append(rows, m.renderEditRow(e, i == m.editPos, contentWidth, moduleIndent))
 	}
 
 	rows = append(rows, blank)
 	if len(rows) < height-1 {
-		hint := "↑/↓ move · space toggle · a apply · esc cancel"
+		hint := "↑/↓ move · space toggle · / filter · a apply · esc cancel"
 		rows = append(rows, " "+mutedStyle.Render(fit(hint, contentWidth))+" ")
 	}
 	for len(rows) < height-1 {
@@ -707,13 +830,26 @@ func (m model) renderEditPage(width, height int) string {
 	if selected, ok := m.selectedWorkspace(); ok {
 		title += counterStyle.Render("(" + selected.Manifest.Name + ")")
 	}
+	if m.editFilterMode || m.editFilter != "" {
+		title += " " + filterStyle.Render("/"+m.editFilter)
+	}
 	return m.boxWithTitle(title, rows, width)
 }
 
+// renderEditCategoryHeader renders a category section heading (the top level of
+// the module browser).
+func (m model) renderEditCategoryHeader(category string, contentWidth int) string {
+	label := category
+	if label == "" {
+		label = "uncategorized"
+	}
+	return " " + editCategoryStyle.Render(fit("▾ "+label, contentWidth)) + " "
+}
+
 // renderEditGroupHeader renders the section heading for a multi-instance module:
-// an accented name followed by its dimmed description.
-func (m model) renderEditGroupHeader(mod module.Module, contentWidth int) string {
-	head := "▸ " + mod.Name
+// an accented name followed by its dimmed description, indented under its category.
+func (m model) renderEditGroupHeader(mod module.Module, contentWidth int, indent string) string {
+	head := indent + "▸ " + mod.Name
 	full := head
 	if mod.Description != "" {
 		full += "  " + mod.Description
@@ -729,10 +865,17 @@ func (m model) renderEditGroupHeader(mod module.Module, contentWidth int) string
 	return " " + name + desc + " "
 }
 
-func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int) string {
+func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int, indent string) string {
+	// Multi-instance entries (and their add row) are indented one level deeper
+	// than their module sub-header.
+	rowIndent := indent
+	if e.mod.Multi() {
+		rowIndent = indent + "   "
+	}
+
 	// Add-entry action row for multi-instance modules.
 	if e.isAdd {
-		text := "   + add " + e.mod.Name + " entry…"
+		text := rowIndent + "+ add " + e.mod.Name + " entry…"
 		line := fit(text, contentWidth)
 		if selectedRow {
 			return cursorStyle.Render(" " + line + " ")
@@ -745,12 +888,7 @@ func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int) st
 		box = "◉"
 	}
 
-	indent := ""
-	if e.mod.Multi() {
-		indent = "   "
-	}
-
-	left := indent + box + " " + e.label
+	left := rowIndent + box + " " + e.label
 	if !e.mod.Multi() && e.mod.Description != "" {
 		left += "  " + e.mod.Description
 	}
@@ -776,7 +914,7 @@ func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int) st
 
 	// Recolor the checkbox glyph and (for singletons) the trailing description
 	// without disturbing the fixed column widths.
-	colored := colorizeEditLeft(leftFitted, len([]rune(indent)), e)
+	colored := colorizeEditLeft(leftFitted, len([]rune(rowIndent)), e)
 	row := colored
 	if badge != "" {
 		row += strings.Repeat(" ", gap) + lipgloss.NewStyle().Foreground(badgeColor).Render(badge)

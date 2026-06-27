@@ -80,24 +80,36 @@ func TestCreateArgsUserNamespace(t *testing.T) {
 	}
 }
 
-func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
-	content := renderBaseContainerfile(BaseBuildSpec{
-		ImageName: "opencode-manager/base:test",
-		FromImage: "debian:stable-slim",
-		Packages:  []string{"kubectl"},
-		Commands:  []string{"update-ca-certificates"},
-	})
+func readBuildFile(t *testing.T, name string) string {
+	t.Helper()
+	data, err := buildContextFS.ReadFile("buildcontext/" + name)
+	if err != nil {
+		t.Fatalf("read embedded %q: %v", name, err)
+	}
+	return string(data)
+}
+
+func hasBuildArg(args []string, kv string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--build-arg" && args[i+1] == kv {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
+	content := readBuildFile(t, baseDockerfile)
 
 	for _, want := range []string{
-		"FROM debian:stable-slim",
+		"ARG BASE_IMAGE=debian:stable-slim",
+		"FROM ${BASE_IMAGE}",
+		"ARG EXTRA_PACKAGES=",
+		"ARG EXTRA_COMMANDS=",
 		"COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/",
-		"git",
-		"ripgrep",
-		"jq",
-		"nodejs",
-		"npm",
-		"kubectl",
-		"RUN update-ca-certificates",
+		"git", "ripgrep", "jq", "nodejs", "npm",
+		"${EXTRA_PACKAGES}",
+		"RUN ${EXTRA_COMMANDS}",
 		"getent group linuxbrew >/dev/null 2>&1 || groupadd -r linuxbrew",
 		"id -u linuxbrew >/dev/null 2>&1 || useradd -r -g linuxbrew -m -s /bin/bash linuxbrew",
 		"if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew",
@@ -109,14 +121,14 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		"ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin",
 	} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("base Containerfile missing %q:\n%s", want, content)
+			t.Fatalf("base Dockerfile missing %q:\n%s", want, content)
 		}
 	}
 
 	// The base image must not use heredocs: the buildah builder used by Podman
-	// parses the heredoc body as further Containerfile instructions and fails.
+	// parses the heredoc body as further Dockerfile instructions and fails.
 	if strings.Contains(content, "<<") {
-		t.Fatalf("base Containerfile must not use heredocs (unsupported by Podman/buildah):\n%s", content)
+		t.Fatalf("base Dockerfile must not use heredocs (unsupported by Podman/buildah):\n%s", content)
 	}
 
 	// The install steps must be idempotent so the recipe can layer on a base that
@@ -129,114 +141,21 @@ func TestRenderBaseContainerfileInstallsRequiredTools(t *testing.T) {
 		"RUN echo '[ -f \"$HOME/.env\" ]",
 	} {
 		if strings.Contains(content, unguarded) {
-			t.Fatalf("base Containerfile has a non-idempotent step %q:\n%s", unguarded, content)
+			t.Fatalf("base Dockerfile has a non-idempotent step %q:\n%s", unguarded, content)
 		}
 	}
 
-	if !strings.Contains(attachScript, "exec opencode attach \"$url\" --dir \"$dir\" -c") {
-		t.Fatalf("attach script missing attach-to-last-session command:\n%s", attachScript)
-	}
-
+	// Package install -> user commands -> OpenCode install, in that order.
 	packages := strings.Index(content, "apt-get update && apt-get install")
-	command := strings.Index(content, "RUN update-ca-certificates")
+	command := strings.Index(content, "RUN ${EXTRA_COMMANDS}")
 	opencodeInstall := strings.Index(content, "npm install -g opencode-ai")
 	if packages == -1 || command == -1 || opencodeInstall == -1 || !(packages < command && command < opencodeInstall) {
-		t.Fatalf("expected base image commands after package install and before OpenCode install:\n%s", content)
+		t.Fatalf("expected user commands after package install and before OpenCode install:\n%s", content)
 	}
 }
 
-func TestRenderOverlayContainerfileOnlyAddsExtras(t *testing.T) {
-	content := renderOverlayContainerfile(BaseBuildSpec{
-		FromImage: "docker.io/mroger78/ocm-base:latest",
-		Packages:  []string{"htop", "unzip"},
-		Commands:  []string{"update-ca-certificates"},
-		Prebuilt:  true,
-	})
-
-	for _, want := range []string{
-		"FROM docker.io/mroger78/ocm-base:latest",
-		"apt-get install -y --no-install-recommends htop unzip",
-		"RUN update-ca-certificates",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("overlay Containerfile missing %q:\n%s", want, content)
-		}
-	}
-
-	// The overlay inherits the heavy layers from the prebuilt base; it must not
-	// reinstall the tooling or re-COPY the manager scripts.
-	for _, unwanted := range []string{"linuxbrew", "opencode-ai", "tokscale", "COPY "} {
-		if strings.Contains(content, unwanted) {
-			t.Fatalf("overlay Containerfile should not contain %q:\n%s", unwanted, content)
-		}
-	}
-}
-
-func TestRenderOverlayContainerfileNoExtrasIsBareFrom(t *testing.T) {
-	content := renderOverlayContainerfile(BaseBuildSpec{
-		FromImage: "docker.io/mroger78/ocm-base:latest",
-		Prebuilt:  true,
-	})
-	if strings.Contains(content, "RUN ") {
-		t.Fatalf("overlay with no extras should have no RUN instructions:\n%s", content)
-	}
-}
-
-func TestWriteBaseBuildContextPrebuiltOmitsScripts(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := WriteBaseBuildContext(dir, BaseBuildSpec{
-		FromImage: "docker.io/mroger78/ocm-base:latest",
-		Packages:  []string{"htop"},
-		Prebuilt:  true,
-	}); err != nil {
-		t.Fatalf("WriteBaseBuildContext returned error: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, attachScriptName)); !os.IsNotExist(err) {
-		t.Fatalf("prebuilt overlay context should not include the attach script (err=%v)", err)
-	}
-}
-
-func TestWriteBaseBuildContextFullIncludesScripts(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := WriteBaseBuildContext(dir, BaseBuildSpec{FromImage: "debian:stable-slim"}); err != nil {
-		t.Fatalf("WriteBaseBuildContext returned error: %v", err)
-	}
-	for _, name := range []string{"Containerfile", attachScriptName, entrypointScriptName} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Fatalf("full base context missing %q: %v", name, err)
-		}
-	}
-}
-
-func TestRenderWorkspaceContainerfileUsesCachedBaseAndHostUIDGIDArgs(t *testing.T) {
-	content := renderWorkspaceContainerfile(BuildSpec{
-		ImageName: "test:latest",
-		BaseImage: "opencode-manager/base:abc123",
-		UID:       501,
-		GID:       20,
-	})
-
-	for _, want := range []string{
-		"FROM opencode-manager/base:abc123",
-		"ARG UID",
-		"ARG GID",
-		"getent group ${GID}",
-		"useradd -m -u ${UID} -g ${GID}",
-		"/home/debian/workspace",
-		"chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("workspace Containerfile missing %q:\n%s", want, content)
-		}
-	}
-}
-
-func TestRenderBaseContainerfileModuleSupport(t *testing.T) {
-	content := renderBaseContainerfile(BaseBuildSpec{
-		ImageName: "opencode-manager/base:test",
-		FromImage: "debian:stable-slim",
-	})
-
+func TestBaseDockerfileModuleSupport(t *testing.T) {
+	content := readBuildFile(t, baseDockerfile)
 	for _, want := range []string{
 		"COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint",
 		"chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint",
@@ -245,25 +164,138 @@ func TestRenderBaseContainerfileModuleSupport(t *testing.T) {
 		"/etc/bash.bashrc",
 	} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("base Containerfile missing %q:\n%s", want, content)
+			t.Fatalf("base Dockerfile missing %q:\n%s", want, content)
 		}
-	}
-
-	// The supervisor entrypoint must source ~/.env and run the OpenCode server.
-	if !strings.Contains(entrypointScript, ". \"$HOME/.env\"") || !strings.Contains(entrypointScript, "opencode serve") {
-		t.Fatalf("entrypoint script missing env sourcing or server launch:\n%s", entrypointScript)
 	}
 }
 
-func TestRenderWorkspaceContainerfileAddsSudoGroup(t *testing.T) {
-	content := renderWorkspaceContainerfile(BuildSpec{
-		ImageName: "test:latest",
-		BaseImage: "opencode-manager/base:abc123",
-		UID:       501,
-		GID:       20,
+func TestOverlayDockerfileOnlyAddsExtras(t *testing.T) {
+	content := readBuildFile(t, overlayDockerfile)
+	for _, want := range []string{
+		"FROM ${BASE_IMAGE}",
+		"${EXTRA_PACKAGES}",
+		"RUN ${EXTRA_COMMANDS}",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("overlay Dockerfile missing %q:\n%s", want, content)
+		}
+	}
+	// The overlay inherits the heavy layers from the prebuilt base; its
+	// instructions must not reinstall the tooling or re-COPY the manager scripts.
+	// (Comment lines may mention them, so check only instruction lines.)
+	instructions := nonCommentLines(content)
+	for _, unwanted := range []string{"linuxbrew", "opencode-ai", "tokscale", "COPY "} {
+		if strings.Contains(instructions, unwanted) {
+			t.Fatalf("overlay Dockerfile instructions should not contain %q:\n%s", unwanted, instructions)
+		}
+	}
+}
+
+// nonCommentLines returns the Dockerfile content with comment lines removed.
+func nonCommentLines(content string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func TestWorkspaceDockerfileUsesBaseAndHostUIDGIDArgs(t *testing.T) {
+	content := readBuildFile(t, workspaceDockerfile)
+	for _, want := range []string{
+		"FROM ${BASE_IMAGE}",
+		"ARG UID",
+		"ARG GID",
+		"getent group ${GID}",
+		"useradd -m -u ${UID} -g ${GID}",
+		"usermod -aG sudo ${user_name}",
+		"/home/debian/workspace",
+		"chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("workspace Dockerfile missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestBaseBuildArgs(t *testing.T) {
+	// Full base build (custom distro, extra package + command).
+	dockerfile, args := baseBuildArgs(BaseBuildSpec{
+		FromImage: "debian:stable-slim",
+		Packages:  []string{"kubectl"},
+		Commands:  []string{"update-ca-certificates", "echo hi"},
 	})
-	if !strings.Contains(content, "usermod -aG sudo ${user_name}") {
-		t.Fatalf("workspace Containerfile missing sudo group membership:\n%s", content)
+	if dockerfile != baseDockerfile {
+		t.Fatalf("dockerfile = %q, want %q", dockerfile, baseDockerfile)
+	}
+	for _, want := range []string{"BASE_IMAGE=debian:stable-slim", "EXTRA_PACKAGES=kubectl", "EXTRA_COMMANDS=update-ca-certificates && echo hi"} {
+		if !hasBuildArg(args, want) {
+			t.Fatalf("base build args missing %q: %v", want, args)
+		}
+	}
+
+	// Prebuilt overlay uses the overlay Dockerfile.
+	dockerfile, args = baseBuildArgs(BaseBuildSpec{
+		FromImage: "docker.io/mroger78/ocm-base:latest",
+		Packages:  []string{"htop"},
+		Prebuilt:  true,
+	})
+	if dockerfile != overlayDockerfile {
+		t.Fatalf("prebuilt dockerfile = %q, want %q", dockerfile, overlayDockerfile)
+	}
+	if !hasBuildArg(args, "BASE_IMAGE=docker.io/mroger78/ocm-base:latest") || !hasBuildArg(args, "EXTRA_PACKAGES=htop") {
+		t.Fatalf("overlay build args wrong: %v", args)
+	}
+
+	// No extras: only BASE_IMAGE, no EXTRA_* args.
+	_, args = baseBuildArgs(BaseBuildSpec{FromImage: "debian:stable-slim"})
+	for _, unwanted := range []string{"EXTRA_PACKAGES=", "EXTRA_COMMANDS="} {
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--build-arg" && strings.HasPrefix(args[i+1], unwanted) {
+				t.Fatalf("did not expect %q with no extras: %v", unwanted, args)
+			}
+		}
+	}
+}
+
+func TestWorkspaceBuildArgs(t *testing.T) {
+	args := workspaceBuildArgs(BuildSpec{BaseImage: "opencode-manager/base:abc", UID: 501, GID: 20})
+	for _, want := range []string{"BASE_IMAGE=opencode-manager/base:abc", "UID=501", "GID=20"} {
+		if !hasBuildArg(args, want) {
+			t.Fatalf("workspace build args missing %q: %v", want, args)
+		}
+	}
+}
+
+func TestWriteBuildContextMaterializesFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeBuildContext(dir); err != nil {
+		t.Fatalf("writeBuildContext: %v", err)
+	}
+	for _, name := range []string{baseDockerfile, overlayDockerfile, workspaceDockerfile, attachScriptName, entrypointScriptName} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("build context missing %q: %v", name, err)
+		}
+		if name == attachScriptName || name == entrypointScriptName {
+			if info.Mode().Perm()&0o111 == 0 {
+				t.Fatalf("script %q must be executable, got %v", name, info.Mode())
+			}
+		}
+	}
+}
+
+func TestManagerScriptsContent(t *testing.T) {
+	if attach := readBuildFile(t, attachScriptName); !strings.Contains(attach, "exec opencode attach \"$url\" --dir \"$dir\" -c") {
+		t.Fatalf("attach script missing attach-to-last-session command:\n%s", attach)
+	}
+	entrypoint := readBuildFile(t, entrypointScriptName)
+	if !strings.Contains(entrypoint, ". \"$HOME/.env\"") || !strings.Contains(entrypoint, "opencode serve") {
+		t.Fatalf("entrypoint script missing env sourcing or server launch:\n%s", entrypoint)
 	}
 }
 

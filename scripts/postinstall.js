@@ -10,6 +10,7 @@ fs.mkdirSync(managerDir, { mode: 0o700, recursive: true });
 fs.mkdirSync(modulesDir, { mode: 0o700, recursive: true });
 
 ensureConfig();
+removeLegacyFlatBuiltins(modulesDir);
 syncModules(path.join(packageRoot, "modules"), modulesDir);
 
 function userConfigDir() {
@@ -45,24 +46,50 @@ function ensureConfig() {
   fs.writeFileSync(configPath, config, { mode: 0o600 });
 }
 
-// syncModules copies every module directory from the package's modules/ into
-// the user config, overwriting built-in modules so updates take effect.
-// User-authored modules with different names are left untouched.
+// syncModules copies every built-in module from the package's modules/ into the
+// user config, preserving the category/module layout (e.g. cloud/aws) and
+// overwriting each built-in module so updates take effect. User-authored modules
+// (different category or name) are left untouched.
 function syncModules(source, destination) {
   if (!fs.existsSync(source)) {
     return;
   }
 
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
+  for (const category of fs.readdirSync(source, { withFileTypes: true })) {
+    if (!category.isDirectory()) {
       continue;
     }
 
-    const sourcePath = path.join(source, entry.name);
-    const destinationPath = path.join(destination, entry.name);
+    const sourceCategory = path.join(source, category.name);
+    const destinationCategory = path.join(destination, category.name);
+    fs.mkdirSync(destinationCategory, { recursive: true });
 
-    fs.rmSync(destinationPath, { recursive: true, force: true });
-    fs.cpSync(sourcePath, destinationPath, { recursive: true });
+    for (const mod of fs.readdirSync(sourceCategory, { withFileTypes: true })) {
+      if (!mod.isDirectory()) {
+        continue;
+      }
+
+      const sourcePath = path.join(sourceCategory, mod.name);
+      const destinationPath = path.join(destinationCategory, mod.name);
+
+      fs.rmSync(destinationPath, { recursive: true, force: true });
+      fs.cpSync(sourcePath, destinationPath, { recursive: true });
+    }
+  }
+}
+
+// removeLegacyFlatBuiltins deletes the pre-category built-in module directories
+// that older versions placed directly under modules/ (e.g. modules/aws). They
+// would otherwise linger as orphans the categorized catalog no longer scans. A
+// directory is only removed when it is a flat module (has a module.yml directly
+// inside), so it never touches the new category directories.
+function removeLegacyFlatBuiltins(destination) {
+  const legacy = ["aws", "git", "kubernetes", "outscale", "ssh"];
+  for (const name of legacy) {
+    const dir = path.join(destination, name);
+    if (fs.existsSync(path.join(dir, "module.yml"))) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 }
 

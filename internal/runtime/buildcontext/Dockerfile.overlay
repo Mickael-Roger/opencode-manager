@@ -1,0 +1,12 @@
+# Thin overlay built on top of the published ocm-base when a workspace adds extra
+# baseImage.packages/commands. The heavy tooling (uv, linuxbrew, OpenCode,
+# tokscale, the manager scripts) is inherited from the base, so this only applies
+# the extras. It is only built when there is at least one extra package or command.
+ARG BASE_IMAGE=docker.io/mroger78/ocm-base:latest
+FROM ${BASE_IMAGE}
+
+ARG EXTRA_PACKAGES=""
+ARG EXTRA_COMMANDS=":"
+
+RUN if [ -n "${EXTRA_PACKAGES}" ]; then apt-get update && apt-get install -y --no-install-recommends ${EXTRA_PACKAGES} && rm -rf /var/lib/apt/lists/*; fi
+RUN ${EXTRA_COMMANDS}

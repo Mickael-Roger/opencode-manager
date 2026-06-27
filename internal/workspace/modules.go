@@ -20,8 +20,8 @@ import (
 )
 
 // modulesContainerRoot is where the host module directory is bind-mounted
-// (read-only) inside every workspace container. A module named "aws" runs from
-// modulesContainerRoot/aws/install.
+// (read-only) inside every workspace container. The host layout is mirrored, so a
+// module "aws" in category "cloud" runs from modulesContainerRoot/cloud/aws/install.
 const modulesContainerRoot = "/opt/opencode-manager/modules"
 
 // markerPath records which modules (and versions) are installed in a container.
@@ -30,8 +30,34 @@ const modulesContainerRoot = "/opt/opencode-manager/modules"
 // the install scripts to converge a fresh container to the manifest.
 const markerPath = "/var/lib/opencode-manager/installed"
 
-func moduleContainerDir(name string) string {
-	return modulesContainerRoot + "/" + name
+func moduleContainerDir(category, name string) string {
+	return modulesContainerRoot + "/" + category + "/" + name
+}
+
+// instanceCategory returns the category for an installed module instance. It uses
+// the value recorded in the manifest, falling back to a catalog lookup by name
+// for instances written before categories existed.
+func (l Lifecycle) instanceCategory(inst ModuleInstance) string {
+	if inst.Category != "" {
+		return inst.Category
+	}
+	return l.lookupCategory(inst.Name)
+}
+
+// lookupCategory finds a module's category by scanning the catalog for its name.
+// Returns "" when the module is not found on disk.
+func (l Lifecycle) lookupCategory(name string) string {
+	catalog, err := l.Catalog()
+	if err != nil {
+		slog.Debug("could not load catalog to resolve module category", "module", name, "error", err)
+		return ""
+	}
+	for _, mod := range catalog {
+		if mod.Name == name {
+			return mod.Category
+		}
+	}
+	return ""
 }
 
 // primaryModuleDir is the single host module directory used by the module
@@ -82,16 +108,16 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 	homeDir := summary.Manifest.HomeDir
 	before := envHash(homeDir)
 
-	installVals, err := l.resolveInstallValues(ctx, mod.Name, values)
+	installVals, err := l.resolveInstallValues(ctx, mod.Category, mod.Name, values)
 	if err != nil {
 		return err
 	}
-	if err := l.runModuleScript(ctx, summary, mod.Name, module.InstallScript, "install", installVals); err != nil {
+	if err := l.runModuleScript(ctx, summary, mod.Category, mod.Name, module.InstallScript, "install", installVals); err != nil {
 		return err
 	}
 
 	manifest := summary.Manifest
-	manifest.Modules = upsertModule(manifest.Modules, mod.InstanceID(values), mod.Name, mod.Version, values)
+	manifest.Modules = upsertModule(manifest.Modules, mod.InstanceID(values), mod.Name, mod.Category, mod.Version, values)
 	manifest.UpdatedAt = time.Now().UTC()
 	if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
 		return err
@@ -116,19 +142,21 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string)
 	}
 
 	modName := id
+	category := ""
 	values := map[string]string{}
 	for _, m := range summary.Manifest.Modules {
 		if m.InstanceID() == id {
 			modName = m.Name
+			category = l.instanceCategory(m)
 			values = valuesFromInstance(m)
 		}
 	}
-	restartServer := l.moduleRestartServer(modName)
+	restartServer := l.moduleRestartServer(category, modName)
 
 	homeDir := summary.Manifest.HomeDir
 	before := envHash(homeDir)
 
-	if err := l.runModuleScript(ctx, summary, modName, module.UninstallScript, "uninstall", values); err != nil {
+	if err := l.runModuleScript(ctx, summary, category, modName, module.UninstallScript, "uninstall", values); err != nil {
 		return err
 	}
 
@@ -169,15 +197,16 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 			continue
 		}
 		slog.Info("reconciling module", "workspace", manifest.Name, "module", m.Name)
-		installVals, err := l.resolveInstallValues(ctx, m.Name, valuesFromInstance(m))
+		category := l.instanceCategory(m)
+		installVals, err := l.resolveInstallValues(ctx, category, m.Name, valuesFromInstance(m))
 		if err != nil {
 			return err
 		}
-		if err := l.runModuleScript(ctx, summary, m.Name, module.InstallScript, "install", installVals); err != nil {
+		if err := l.runModuleScript(ctx, summary, category, m.Name, module.InstallScript, "install", installVals); err != nil {
 			return err
 		}
 		changed = true
-		restartServer = restartServer || l.moduleRestartServer(m.Name)
+		restartServer = restartServer || l.moduleRestartServer(category, m.Name)
 	}
 
 	if !changed {
@@ -193,7 +222,7 @@ func (l Lifecycle) reconcile(ctx context.Context, summary Summary) error {
 
 // runModuleScript runs a module's install/uninstall script inside the container
 // as the workspace user, passing prompt values as OCM_* environment variables.
-func (l Lifecycle) runModuleScript(ctx context.Context, summary Summary, modName, script, phase string, values map[string]string) error {
+func (l Lifecycle) runModuleScript(ctx context.Context, summary Summary, category, modName, script, phase string, values map[string]string) error {
 	env := map[string]string{
 		"HOME":       openCodeHomeDir,
 		"OCM_HOME":   openCodeHomeDir,
@@ -204,7 +233,7 @@ func (l Lifecycle) runModuleScript(ctx context.Context, summary Summary, modName
 		env[module.EnvVarName(key)] = value
 	}
 
-	scriptPath := moduleContainerDir(modName) + "/" + script
+	scriptPath := moduleContainerDir(category, modName) + "/" + script
 	out, err := l.driver.Exec(ctx, runtime.ExecSpec{
 		Container: summary.Manifest.ContainerName,
 		Env:       env,
@@ -225,12 +254,13 @@ func (l Lifecycle) runModuleScript(ctx context.Context, summary Summary, modName
 // container input from host-only state (e.g. extract the selected kube contexts
 // from ~/.kube/config) without persisting that derived value to the manifest.
 // Modules without a resolve hook get their values back unchanged.
-func (l Lifecycle) resolveInstallValues(ctx context.Context, modName string, values map[string]string) (map[string]string, error) {
+func (l Lifecycle) resolveInstallValues(ctx context.Context, category, modName string, values map[string]string) (map[string]string, error) {
 	dir := primaryModuleDir(l.cfg)
 	if dir == "" {
 		return values, nil
 	}
-	script := filepath.Join(dir, modName, module.ResolveScript)
+	moduleDir := filepath.Join(dir, category, modName)
+	script := filepath.Join(moduleDir, module.ResolveScript)
 	info, err := os.Stat(script)
 	if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
 		return values, nil
@@ -244,7 +274,7 @@ func (l Lifecycle) resolveInstallValues(ctx context.Context, modName string, val
 
 	cmd := exec.CommandContext(ctx, script)
 	cmd.Env = env
-	cmd.Dir = filepath.Join(dir, modName)
+	cmd.Dir = moduleDir
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("module %s resolve hook failed: %w", modName, err)
@@ -292,12 +322,12 @@ func (l Lifecycle) maybeBounce(ctx context.Context, containerName, modName strin
 // installed module name (not the loaded definition), so they look it up here.
 // Unknown or unreadable modules default to true (restart required) to stay on
 // the safe side.
-func (l Lifecycle) moduleRestartServer(name string) bool {
+func (l Lifecycle) moduleRestartServer(category, name string) bool {
 	dir := primaryModuleDir(l.cfg)
 	if dir == "" {
 		return true
 	}
-	mod, err := module.Load(filepath.Join(dir, name))
+	mod, err := module.Load(filepath.Join(dir, category, name))
 	if err != nil {
 		slog.Debug("could not load module to read restartServer flag; assuming restart required", "module", name, "error", err)
 		return true
@@ -387,7 +417,7 @@ func envHash(homeDir string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func upsertModule(mods []ModuleInstance, id, name string, version int, values map[string]string) []ModuleInstance {
+func upsertModule(mods []ModuleInstance, id, name, category string, version int, values map[string]string) []ModuleInstance {
 	vals := make(map[string]any, len(values))
 	for key, value := range values {
 		vals[key] = value
@@ -396,12 +426,13 @@ func upsertModule(mods []ModuleInstance, id, name string, version int, values ma
 		if mods[i].InstanceID() == id {
 			mods[i].ID = id
 			mods[i].Name = name
+			mods[i].Category = category
 			mods[i].Version = version
 			mods[i].Values = vals
 			return mods
 		}
 	}
-	return append(mods, ModuleInstance{Name: name, ID: id, Version: version, Values: vals})
+	return append(mods, ModuleInstance{Name: name, ID: id, Category: category, Version: version, Values: vals})
 }
 
 func removeModule(mods []ModuleInstance, id string) []ModuleInstance {

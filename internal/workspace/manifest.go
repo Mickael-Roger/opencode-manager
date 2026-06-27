@@ -37,9 +37,14 @@ type ModuleInstance struct {
 	// multi-instance modules it is "name:keyvalue", letting several entries of
 	// the same module coexist and be removed independently. Empty in manifests
 	// written before multi-instance support, where it falls back to Name.
-	ID      string         `yaml:"id,omitempty"`
-	Version int            `yaml:"version"`
-	Values  map[string]any `yaml:"values,omitempty"`
+	ID string `yaml:"id,omitempty"`
+	// Category is the module's category directory (e.g. "cloud"), recorded at
+	// install time so the container mount path (modules/<category>/<name>) is
+	// known without rescanning. Empty in manifests written before categories; the
+	// lifecycle falls back to looking it up from the catalog by name.
+	Category string         `yaml:"category,omitempty"`
+	Version  int            `yaml:"version"`
+	Values   map[string]any `yaml:"values,omitempty"`
 }
 
 // InstanceID returns the stable identity of this installed instance, falling

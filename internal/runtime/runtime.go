@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"embed"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,76 +24,87 @@ const (
 	StatusUnknown = "unknown"
 )
 
-// attachScriptName is the file name of the attach wrapper, both within the build
-// context and at /usr/local/bin inside the image.
-const attachScriptName = "opencode-manager-attach"
+// buildContextFS holds the image build context — the Dockerfiles and the manager
+// scripts — as real files under buildcontext/. They are the single source of
+// truth for how images are built: the CI pipeline publishes buildcontext/Dockerfile
+// directly, and the runtime materializes this directory to a temp dir and runs the
+// container builder against it (see writeBuildContext).
+//
+//go:embed buildcontext
+var buildContextFS embed.FS
+
+// Build context file names.
+const (
+	baseDockerfile      = "Dockerfile"
+	overlayDockerfile   = "Dockerfile.overlay"
+	workspaceDockerfile = "Dockerfile.workspace"
+
+	// attachScriptName / entrypointScriptName are the manager scripts, named the
+	// same in the build context and at /usr/local/bin inside the image.
+	attachScriptName     = "opencode-manager-attach"
+	entrypointScriptName = "opencode-manager-entrypoint"
+)
 
 // EntrypointPath is the supervisor entrypoint inside the image; it is the
-// container's main process (see entrypointScript).
+// container's main process.
 const EntrypointPath = "/usr/local/bin/" + entrypointScriptName
 
-// attachScript is the attach wrapper copied into the base image. The container's
-// main process is a persistent `opencode serve`, and attaching runs a TUI client
-// (`opencode attach`) against it over HTTP. Ctrl-C then exits only the client;
-// the server keeps running in the background. The wrapper waits for the server to
-// be listening, then attaches to the last session if one exists (asking the
-// server over HTTP, so no second opencode process is spawned), otherwise starts a
-// fresh session.
-//
-// It is shipped as a build-context file copied with COPY rather than written from
-// a heredoc: the buildah builder used by Podman does not support heredocs
-// (`<<'EOF'`) in Containerfiles (a BuildKit-only feature), and parses the script
-// body as further Containerfile instructions.
-const attachScript = `#!/bin/sh
-url="http://127.0.0.1:4096"
-dir="/home/debian/workspace"
-i=0
-while [ "$i" -lt 150 ]; do
-  curl -sf -o /dev/null "$url/session" && break
-  i=$((i+1)); sleep 0.2
-done
-count=$(curl -sf "$url/session" | jq 'length' 2>/dev/null || echo 0)
-if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
-  exec opencode attach "$url" --dir "$dir" -c
-fi
-exec opencode attach "$url" --dir "$dir"
-`
-
-// entrypointScriptName is the file name of the supervisor entrypoint, both in
-// the build context and at /usr/local/bin inside the image.
-const entrypointScriptName = "opencode-manager-entrypoint"
-
-// entrypointScript is the container's main process (PID 1). It sources the
-// per-workspace ~/.env before launching the OpenCode server so module-provided
-// environment variables reach the server process (and every tool it spawns).
-//
-// The server runs as a background child; killing only that child (for example
-// `pkill -f 'opencode serve'`, which the manager does after a module edits
-// ~/.env) makes the loop re-source ~/.env and relaunch the server, so an env
-// change needs only a cheap in-place server bounce, not a container recreate.
-// A SIGTERM from `docker stop` is trapped and forwarded to the child so the
-// container still stops cleanly.
-//
-// Like the attach wrapper it is shipped as a COPYed build-context file rather
-// than a heredoc, which the buildah builder used by Podman does not support.
-const entrypointScript = `#!/bin/sh
-child=""
-shutdown() {
-  [ -n "$child" ] && kill -TERM "$child" 2>/dev/null
-  exit 0
+// writeBuildContext materializes the embedded build context (Dockerfiles +
+// scripts) into dir so the container builder can run against it. The binary ships
+// these files embedded, so they must be written to disk before a build.
+func writeBuildContext(dir string) error {
+	entries, err := buildContextFS.ReadDir("buildcontext")
+	if err != nil {
+		return fmt.Errorf("read embedded build context: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := buildContextFS.ReadFile("buildcontext/" + entry.Name())
+		if err != nil {
+			return fmt.Errorf("read embedded %q: %w", entry.Name(), err)
+		}
+		mode := os.FileMode(0o644)
+		if entry.Name() == attachScriptName || entry.Name() == entrypointScriptName {
+			mode = 0o755
+		}
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), data, mode); err != nil {
+			return fmt.Errorf("write build context file %q: %w", entry.Name(), err)
+		}
+	}
+	return nil
 }
-trap shutdown TERM INT
-while true; do
-  set -a
-  [ -f "$HOME/.env" ] && . "$HOME/.env"
-  set +a
-  opencode serve --hostname 127.0.0.1 --port 4096 &
-  child=$!
-  wait "$child"
-  child=""
-  sleep 0.5
-done
-`
+
+// baseBuildArgs returns the Dockerfile to use and the --build-arg pairs for a
+// base-image build. A prebuilt base (extras layered on the published ocm-base)
+// uses the thin overlay Dockerfile; any other base uses the full recipe. The
+// FROM image and the user's extra packages/commands are passed as build args so
+// the Dockerfiles stay static and directly buildable.
+func baseBuildArgs(spec BaseBuildSpec) (string, []string) {
+	dockerfile := baseDockerfile
+	if spec.Prebuilt {
+		dockerfile = overlayDockerfile
+	}
+	args := []string{"--build-arg", "BASE_IMAGE=" + spec.FromImage}
+	if len(spec.Packages) > 0 {
+		args = append(args, "--build-arg", "EXTRA_PACKAGES="+strings.Join(spec.Packages, " "))
+	}
+	if len(spec.Commands) > 0 {
+		args = append(args, "--build-arg", "EXTRA_COMMANDS="+strings.Join(spec.Commands, " && "))
+	}
+	return dockerfile, args
+}
+
+// workspaceBuildArgs returns the --build-arg pairs for a per-workspace image
+// build (the resolved base image plus the host UID/GID).
+func workspaceBuildArgs(spec BuildSpec) []string {
+	return []string{
+		"--build-arg", "BASE_IMAGE=" + spec.BaseImage,
+		"--build-arg", "UID=" + strconv.Itoa(spec.UID),
+		"--build-arg", "GID=" + strconv.Itoa(spec.GID),
+	}
+}
 
 type Driver interface {
 	Name() string
@@ -225,12 +237,15 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 	}
 	defer os.RemoveAll(dir)
 
-	containerfile, err := WriteBaseBuildContext(dir, spec)
-	if err != nil {
+	if err := writeBuildContext(dir); err != nil {
 		return err
 	}
 
-	if err := d.run(ctx, "build", "-t", spec.ImageName, "-f", containerfile, dir); err != nil {
+	dockerfile, buildArgs := baseBuildArgs(spec)
+	args := []string{"build", "-t", spec.ImageName, "-f", filepath.Join(dir, dockerfile)}
+	args = append(args, buildArgs...)
+	args = append(args, dir)
+	if err := d.run(ctx, args...); err != nil {
 		return err
 	}
 
@@ -246,43 +261,6 @@ func (d CLIDriver) PullImage(ctx context.Context, ref string) error {
 	}
 	slog.Info("pulling image", "image", ref)
 	return d.run(ctx, "pull", ref)
-}
-
-// WriteBaseBuildContext writes the Containerfile and the manager scripts that
-// make up a base-image build context into dir and returns the Containerfile
-// path. It is the single source of truth for the base recipe, shared by the
-// runtime (BuildBaseImage) and the CI helper (cmd/ocm-base-context) that
-// publishes docker.io/mroger78/ocm-base, so the two never drift.
-func WriteBaseBuildContext(dir string, spec BaseBuildSpec) (string, error) {
-	var contents string
-	if spec.Prebuilt {
-		contents = renderOverlayContainerfile(spec)
-	} else {
-		contents = renderBaseContainerfile(spec)
-	}
-
-	containerfile := filepath.Join(dir, "Containerfile")
-	if err := os.WriteFile(containerfile, []byte(contents), 0o600); err != nil {
-		return "", fmt.Errorf("write base Containerfile: %w", err)
-	}
-
-	// The thin overlay inherits the manager scripts from the prebuilt base, so it
-	// does not COPY them and the context needs only the Containerfile.
-	if spec.Prebuilt {
-		return containerfile, nil
-	}
-
-	attachPath := filepath.Join(dir, attachScriptName)
-	if err := os.WriteFile(attachPath, []byte(attachScript), 0o755); err != nil {
-		return "", fmt.Errorf("write attach script: %w", err)
-	}
-
-	entrypointPath := filepath.Join(dir, entrypointScriptName)
-	if err := os.WriteFile(entrypointPath, []byte(entrypointScript), 0o755); err != nil {
-		return "", fmt.Errorf("write entrypoint script: %w", err)
-	}
-
-	return containerfile, nil
 }
 
 func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
@@ -304,19 +282,13 @@ func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
 	}
 	defer os.RemoveAll(dir)
 
-	containerfile := filepath.Join(dir, "Containerfile")
-	if err := os.WriteFile(containerfile, []byte(renderWorkspaceContainerfile(spec)), 0o600); err != nil {
-		return fmt.Errorf("write Containerfile: %w", err)
+	if err := writeBuildContext(dir); err != nil {
+		return err
 	}
 
-	args := []string{
-		"build",
-		"-t", spec.ImageName,
-		"--build-arg", "UID=" + strconv.Itoa(spec.UID),
-		"--build-arg", "GID=" + strconv.Itoa(spec.GID),
-		"-f", containerfile,
-		dir,
-	}
+	args := []string{"build", "-t", spec.ImageName, "-f", filepath.Join(dir, workspaceDockerfile)}
+	args = append(args, workspaceBuildArgs(spec)...)
+	args = append(args, dir)
 	if err := d.run(ctx, args...); err != nil {
 		return err
 	}
@@ -612,101 +584,4 @@ func isMissingResourceOutput(output []byte) bool {
 		strings.Contains(text, "not found") ||
 		strings.Contains(text, "does not exist") ||
 		strings.Contains(text, "image not known")
-}
-
-func renderBaseContainerfile(spec BaseBuildSpec) string {
-	var b strings.Builder
-	b.WriteString("FROM ")
-	b.WriteString(spec.FromImage)
-	b.WriteString("\n\n")
-	b.WriteString("COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/\n\n")
-
-	packages := append([]string{"bash", "build-essential", "ca-certificates", "curl", "file", "git", "jq", "nodejs", "npm", "openssh-client", "passwd", "procps", "ripgrep", "sudo"}, spec.Packages...)
-	b.WriteString("RUN apt-get update && apt-get install -y --no-install-recommends ")
-	b.WriteString(strings.Join(packages, " "))
-	b.WriteString(" && rm -rf /var/lib/apt/lists/*\n")
-	for _, command := range spec.Commands {
-		b.WriteString("RUN ")
-		b.WriteString(command)
-		b.WriteString("\n")
-	}
-	// Create linuxbrew as a system account (UID/GID < 1000). Without an explicit
-	// id, useradd grabs UID 1000, which collides with the host user the workspace
-	// image installs at UID 1000: getent then resolves UID 1000 to linuxbrew, the
-	// `debian` user is never created, and the pod runs as linuxbrew instead.
-	//
-	// Every install step below is idempotent (install only what is missing) so the
-	// recipe can also be layered on a base that already provides some of these
-	// tools without failing — e.g. re-creating the linuxbrew user would otherwise
-	// crash with "user already exists".
-	b.WriteString("RUN set -eux; getent group linuxbrew >/dev/null 2>&1 || groupadd -r linuxbrew; id -u linuxbrew >/dev/null 2>&1 || useradd -r -g linuxbrew -m -s /bin/bash linuxbrew; mkdir -p /home/linuxbrew/.linuxbrew/Homebrew /home/linuxbrew/.linuxbrew/bin; chown -R linuxbrew:linuxbrew /home/linuxbrew\n")
-	b.WriteString("RUN set -eux; if [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then su linuxbrew -c 'git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew && ln -s ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew'; fi; su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
-	b.WriteString("RUN git --version && rg --version && jq --version && npx --version && uvx --version && su linuxbrew -c '/home/linuxbrew/.linuxbrew/bin/brew --version'\n")
-	// Install OpenCode from npm rather than the curl|bash installer: the
-	// installer resolves the version via the GitHub API, which is rate-limited
-	// and flaky (504s), whereas the npm registry is reliable and already used
-	// for tokscale below. Installed only when absent so the step is a no-op on a
-	// base that already ships it.
-	b.WriteString("RUN set -eux; command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai; opencode --version\n")
-	b.WriteString("RUN set -eux; command -v tokscale >/dev/null 2>&1 || npm install -g tokscale@latest; command -v tokscale\n")
-	// Attach wrapper and supervisor entrypoint: copied from the build context
-	// (see attachScript/entrypointScript) rather than written via a heredoc,
-	// which the buildah builder used by Podman does not support in Containerfiles.
-	b.WriteString("COPY " + attachScriptName + " /usr/local/bin/" + attachScriptName + "\n")
-	b.WriteString("COPY " + entrypointScriptName + " /usr/local/bin/" + entrypointScriptName + "\n")
-	b.WriteString("RUN chmod 0755 /usr/local/bin/" + attachScriptName + " /usr/local/bin/" + entrypointScriptName + "\n")
-	// Passwordless sudo for the sudo group: module install scripts run as the
-	// unprivileged workspace user (so files they write into the bind-mounted home
-	// keep host ownership) but need root to install system packages. The
-	// workspace user is added to the sudo group in the workspace image layer.
-	b.WriteString("RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager\n")
-	// Source the per-workspace ~/.env from interactive shells (the `s`/shell
-	// action) so they see module-provided variables, mirroring the server. Guarded
-	// so re-layering the recipe does not append the line twice.
-	b.WriteString("RUN grep -qF '[ -f \"$HOME/.env\" ]' /etc/bash.bashrc || echo '[ -f \"$HOME/.env\" ] && . \"$HOME/.env\"' >> /etc/bash.bashrc\n")
-	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
-
-	return b.String()
-}
-
-// renderOverlayContainerfile renders the thin overlay built on top of a prebuilt
-// ocm-base when the user adds extra baseImage.packages/commands. The heavy layers
-// (uv, linuxbrew, OpenCode, tokscale, scripts, sudo, PATH) are already in the base
-// and are inherited, so only the extras are applied here.
-func renderOverlayContainerfile(spec BaseBuildSpec) string {
-	var b strings.Builder
-	b.WriteString("FROM ")
-	b.WriteString(spec.FromImage)
-	b.WriteString("\n\n")
-	if len(spec.Packages) > 0 {
-		b.WriteString("RUN apt-get update && apt-get install -y --no-install-recommends ")
-		b.WriteString(strings.Join(spec.Packages, " "))
-		b.WriteString(" && rm -rf /var/lib/apt/lists/*\n")
-	}
-	for _, command := range spec.Commands {
-		b.WriteString("RUN ")
-		b.WriteString(command)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-func renderWorkspaceContainerfile(spec BuildSpec) string {
-	var b strings.Builder
-	b.WriteString("FROM ")
-	b.WriteString(spec.BaseImage)
-	b.WriteString("\n\n")
-	b.WriteString("ARG UID\n")
-	b.WriteString("ARG GID\n\n")
-	b.WriteString("RUN set -eux; ")
-	b.WriteString("if getent group ${GID}; then group_name=$(getent group ${GID} | cut -d: -f1); else groupadd -g ${GID} debian && group_name=debian; fi; ")
-	b.WriteString("if getent passwd ${UID}; then user_name=$(getent passwd ${UID} | cut -d: -f1); usermod -d /home/debian -s /bin/bash ${user_name}; else useradd -m -u ${UID} -g ${GID} -s /bin/bash debian; user_name=debian; fi; ")
-	// Add the workspace user to the sudo group so module install scripts can use
-	// passwordless sudo (configured in the base image) for system packages.
-	b.WriteString("usermod -aG sudo ${user_name}; ")
-	b.WriteString("mkdir -p /home/debian/workspace && chown -R ${UID}:${GID} /home/debian /home/linuxbrew/.linuxbrew\n")
-	b.WriteString("ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\n")
-	b.WriteString("WORKDIR /home/debian/workspace\n")
-
-	return b.String()
 }

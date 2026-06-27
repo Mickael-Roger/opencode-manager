@@ -68,6 +68,10 @@ type Module struct {
 	RestartServer bool
 	// Dir is the module's directory on the host.
 	Dir string
+	// Category is the module's grouping, taken from the name of the directory it
+	// lives under (e.g. "cloud" for modules/cloud/aws). It organizes the module
+	// browser in the TUI and is mirrored in the container mount path.
+	Category string
 }
 
 // Multi reports whether the module can be installed as multiple independent
@@ -160,6 +164,9 @@ func Load(dir string) (Module, error) {
 		Key:           def.Key,
 		RestartServer: def.RestartServer == nil || *def.RestartServer,
 		Dir:           dir,
+		// The category is the name of the directory the module lives under, e.g.
+		// modules/cloud/aws -> "cloud".
+		Category: filepath.Base(filepath.Dir(dir)),
 	}
 
 	if err := mod.validate(); err != nil {
@@ -174,7 +181,7 @@ func (m Module) validate() error {
 		return fmt.Errorf("name is required")
 	}
 	// The module's directory base must equal its name so the container mount
-	// path (modulesRoot/<name>) is predictable from the manifest alone.
+	// path (modulesRoot/<category>/<name>) is predictable from the manifest alone.
 	if base := filepath.Base(m.Dir); base != m.Name {
 		return fmt.Errorf("name %q must match directory name %q", m.Name, base)
 	}
@@ -289,16 +296,18 @@ func checkExecutable(path string) error {
 	return nil
 }
 
-// Catalog loads every module found across the given roots. Roots are scanned in
-// order and the first definition of a given name wins, so earlier roots (e.g.
-// the user's own module directory) can shadow built-ins. Directories without a
-// module.yml are ignored; an invalid module.yml is an error.
+// Catalog loads every module found across the given roots. Modules live two
+// levels deep, under a category directory: <root>/<category>/<module>/module.yml
+// (e.g. modules/cloud/aws). Roots are scanned in order and the first definition
+// of a given name wins, so earlier roots (e.g. the user's own module directory)
+// can shadow built-ins. Directories without a module.yml are ignored; an invalid
+// module.yml is an error. The result is sorted by category, then name.
 func Catalog(roots []string) ([]Module, error) {
 	byName := map[string]Module{}
 	var order []string
 
 	for _, root := range roots {
-		entries, err := os.ReadDir(root)
+		categories, err := os.ReadDir(root)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -306,23 +315,34 @@ func Catalog(roots []string) ([]Module, error) {
 			return nil, fmt.Errorf("read module directory %q: %w", root, err)
 		}
 
-		for _, entry := range entries {
-			if !entry.IsDir() {
+		for _, category := range categories {
+			if !category.IsDir() {
 				continue
 			}
-			dir := filepath.Join(root, entry.Name())
-			if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
-				continue
-			}
-			mod, err := Load(dir)
+			categoryDir := filepath.Join(root, category.Name())
+			entries, err := os.ReadDir(categoryDir)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("read module category %q: %w", categoryDir, err)
 			}
-			if _, ok := byName[mod.Name]; ok {
-				continue
+
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				dir := filepath.Join(categoryDir, entry.Name())
+				if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
+					continue
+				}
+				mod, err := Load(dir)
+				if err != nil {
+					return nil, err
+				}
+				if _, ok := byName[mod.Name]; ok {
+					continue
+				}
+				byName[mod.Name] = mod
+				order = append(order, mod.Name)
 			}
-			byName[mod.Name] = mod
-			order = append(order, mod.Name)
 		}
 	}
 
@@ -330,7 +350,12 @@ func Catalog(roots []string) ([]Module, error) {
 	for _, name := range order {
 		mods = append(mods, byName[name])
 	}
-	sort.Slice(mods, func(i, j int) bool { return mods[i].Name < mods[j].Name })
+	sort.Slice(mods, func(i, j int) bool {
+		if mods[i].Category != mods[j].Category {
+			return mods[i].Category < mods[j].Category
+		}
+		return mods[i].Name < mods[j].Name
+	})
 	return mods, nil
 }
 
