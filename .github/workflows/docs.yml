@@ -1,0 +1,64 @@
+name: Docs
+
+# Build the MkDocs Material site from docs/ and deploy it to GitHub Pages.
+#
+#   * Pull requests touching the docs -> build only (validates the site).
+#   * Push to main touching the docs -> build, then deploy to GitHub Pages.
+#
+# One-time setup: repository Settings -> Pages -> Source = "GitHub Actions".
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: pip
+      - name: Install MkDocs Material
+        run: pip install mkdocs-material
+      - name: Build
+        run: mkdocs build --strict
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      pages: write # deploy to GitHub Pages
+      id-token: write # OIDC token for the Pages deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -4,3 +4,6 @@
 
 # Stray binary from `go build` without -o.
 /opencode-manager
+
+# MkDocs build output (the site is built and deployed by CI, never committed).
+/site/

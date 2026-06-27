@@ -13,13 +13,14 @@
 - [x] Review the status: sleeping, waiting and working
 - [x] Add langage modules category + python
 - [x] Add github, gitlab modules
+- [x] Add a display of token per container -> Miss the cache part
 
 - [/] Create templates of workspace (modules, ...)
 - [/] Make sure the ci create the github release
-- [/] Add a display of token per container
 
 - [ ] Update the gif image with the new interface
 - [ ] Add a user documentation (detailled)
+- [ ] Review the module page: remove description and "Add", just the list, then enter
 - [ ] In the readme, add the main features: including modules, templates, ...
 - [ ] Add gcp, ovh, scaleway modules
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration

@@ -1,0 +1,76 @@
+site_name: opencode-manager
+site_description: k9s for OpenCode — manage isolated OpenCode workspaces, each in its own container.
+site_url: https://mickael-roger.github.io/opencode-manager/
+site_author: Mickael Roger
+
+repo_name: Mickael-Roger/opencode-manager
+repo_url: https://github.com/Mickael-Roger/opencode-manager
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    # Light / dark toggle.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting Started: getting-started.md
+  - Concepts: concepts.md
+  - Guides:
+      - TUI Guide: tui.md
+      - CLI Reference: cli.md
+      - Configuration: configuration.md
+  - Modules:
+      - Using Modules: modules.md
+      - Writing Modules: writing-modules.md
+      - Templates: templates.md
+  - Troubleshooting: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
