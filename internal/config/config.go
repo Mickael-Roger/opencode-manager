@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -22,12 +23,34 @@ const (
 	LogLevelError   = "error"
 )
 
-// DefaultBaseImage is the published, prebuilt base image used unless the user
-// overrides baseImage.name. It already contains the full tooling (uv, linuxbrew,
-// OpenCode, tokscale, and the manager scripts), so a default workspace pulls it
-// instead of building a base image locally. It is built and published by
-// .github/workflows from the recipe in internal/runtime (see WriteBaseBuildContext).
-const DefaultBaseImage = "docker.io/mroger78/ocm-base:latest"
+// BaseImageRepository is the repository of the published, prebuilt base image
+// (without a tag). Any tag of it (:latest, :dev, :X.Y.Z, a digest) already
+// contains the full tooling (uv, linuxbrew, OpenCode, tokscale, and the manager
+// scripts). It is built and published by .github/workflows from the recipe in
+// internal/runtime (see WriteBaseBuildContext).
+const BaseImageRepository = "docker.io/mroger78/ocm-base"
+
+// DefaultBaseImage is the base image used unless the user overrides
+// baseImage.name. A default workspace pulls it instead of building a base image
+// locally.
+const DefaultBaseImage = BaseImageRepository + ":latest"
+
+// IsManagedBaseImage reports whether name refers to the published ocm-base image,
+// at any tag or digest. Such an image already embeds all required tools, so it
+// must only be pulled — never rebuilt and never have tools (re)installed on top.
+// The optional "docker.io/" registry prefix is normalized so both
+// "mroger78/ocm-base:dev" and "docker.io/mroger78/ocm-base:dev" match.
+func IsManagedBaseImage(name string) bool {
+	repo := name
+	if i := strings.IndexByte(repo, '@'); i >= 0 { // strip @digest
+		repo = repo[:i]
+	}
+	// Strip a :tag, but not a registry port (a colon before the last slash).
+	if i := strings.LastIndexByte(repo, ':'); i > strings.LastIndexByte(repo, '/') {
+		repo = repo[:i]
+	}
+	return strings.TrimPrefix(repo, "docker.io/") == strings.TrimPrefix(BaseImageRepository, "docker.io/")
+}
 
 type Config struct {
 	WorkspaceRoot        string          `yaml:"workspaceRoot"`

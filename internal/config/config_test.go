@@ -157,3 +157,26 @@ func writeFile(t *testing.T, path string, data []byte) {
 		t.Fatalf("write test file: %v", err)
 	}
 }
+
+func TestIsManagedBaseImage(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"docker.io/mroger78/ocm-base:latest", true},
+		{"docker.io/mroger78/ocm-base:dev", true},
+		{"docker.io/mroger78/ocm-base:0.3.0", true},
+		{"docker.io/mroger78/ocm-base", true},
+		{"mroger78/ocm-base:dev", true},
+		{"docker.io/mroger78/ocm-base@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true},
+		{"debian:stable-slim", false},
+		{"docker.io/debian:stable-slim", false},
+		{"docker.io/mroger78/other:latest", false},
+		{"ghcr.io/mroger78/ocm-base:latest", false},
+	}
+	for _, c := range cases {
+		if got := IsManagedBaseImage(c.name); got != c.want {
+			t.Errorf("IsManagedBaseImage(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

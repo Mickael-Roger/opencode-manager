@@ -67,14 +67,14 @@ func (l Lifecycle) EnsureBaseImage(ctx context.Context) error {
 // resolveBaseImage makes the base image the workspace image will build FROM
 // available and returns its reference.
 //
-// For the default, published base (config.DefaultBaseImage) it pulls the image
-// instead of building it: with no user extras the published image is used
-// directly, and with extra packages/commands a thin overlay is built on top of
-// it. For any other (custom) base it falls back to building the full base recipe
-// locally, preserving the prior behavior for users who point baseImage.name at a
-// different distro.
+// For the published ocm-base image (any tag/digest, see
+// config.IsManagedBaseImage) it only pulls: the image already embeds every tool,
+// so with no user extras it is used directly, and with extra packages/commands a
+// thin overlay is built on top of it (no tool reinstall). For any other (custom)
+// base it falls back to building the full base recipe locally, preserving the
+// prior behavior for users who point baseImage.name at a different distro.
 func (l Lifecycle) resolveBaseImage(ctx context.Context, image ImageConfig) (string, error) {
-	prebuilt := image.BaseImage == config.DefaultBaseImage
+	prebuilt := config.IsManagedBaseImage(image.BaseImage)
 
 	if prebuilt {
 		if err := l.ensurePulled(ctx, image.BaseImage); err != nil {

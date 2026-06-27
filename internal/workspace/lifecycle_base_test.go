@@ -59,6 +59,27 @@ func TestResolveBaseImageDefaultNoExtrasPullsAndUsesDirectly(t *testing.T) {
 	}
 }
 
+func TestResolveBaseImageNonLatestTagIsPrebuilt(t *testing.T) {
+	// A non-default tag of the published base (e.g. :dev) must still be treated as
+	// prebuilt: pulled and used directly, never rebuilt with tool installs.
+	rec := &recordingDriver{fakeDriver: &fakeDriver{}}
+	l := newTestLifecycle(rec)
+
+	ref, err := l.resolveBaseImage(context.Background(), ImageConfig{BaseImage: "docker.io/mroger78/ocm-base:dev"})
+	if err != nil {
+		t.Fatalf("resolveBaseImage error: %v", err)
+	}
+	if ref != "docker.io/mroger78/ocm-base:dev" {
+		t.Fatalf("ref = %q, want the dev base used directly", ref)
+	}
+	if len(rec.pulled) != 1 {
+		t.Fatalf("expected the dev base to be pulled, got %v", rec.pulled)
+	}
+	if len(rec.builds) != 0 {
+		t.Fatalf("expected no local build for a published-base tag, got %v", rec.builds)
+	}
+}
+
 func TestResolveBaseImagePresentSkipsPull(t *testing.T) {
 	rec := &recordingDriver{fakeDriver: &fakeDriver{}, present: true}
 	l := newTestLifecycle(rec)
