@@ -34,7 +34,7 @@ function ensureConfig() {
     "runtime: docker",
     "useLocalOpenCodeAuth: false",
     "baseImage:",
-    "  name: docker.io/mroger78/ocm-base:latest",
+    "  name: debian:stable-slim",
     "  packages: []",
     "  commands: []",
     "moduleDirs:",

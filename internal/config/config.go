@@ -155,7 +155,7 @@ func Default() (Config, error) {
 		Runtime:       RuntimeDocker,
 		LogLevel:      LogLevelWarning,
 		BaseImage: BaseImageConfig{
-			Name: "docker.io/mroger78/ocm-base:latest",
+			Name: "debian:stable-slim",
 		},
 		ModuleDirs: []string{filepath.Join(globalDir, "modules")},
 	}, nil
