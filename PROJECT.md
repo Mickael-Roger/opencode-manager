@@ -125,7 +125,7 @@ workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
 baseImage:
-  name: docker.io/mroger78/ocm-base:latest
+  name: debian:stable-slim
   packages:
     - htop
     - unzip
@@ -177,7 +177,7 @@ name: my-project
 runtime: docker
 imageName: opencode-manager/my-project:latest
 image:
-  baseImage: docker.io/mroger78/ocm-base:latest
+  baseImage: debian:stable-slim
   packages:
     - htop
     - unzip

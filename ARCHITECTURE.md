@@ -133,7 +133,7 @@ runtime: docker
 useLocalOpenCodeAuth: false
 logLevel: warning
 baseImage:
-  name: docker.io/mroger78/ocm-base:latest
+  name: debian:stable-slim
   packages:
     - htop
     - unzip
