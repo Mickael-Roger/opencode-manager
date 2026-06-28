@@ -1,0 +1,41 @@
+#!/bin/sh
+# Host-side resolve hook: given the imported endpoint ($OCM_PROFILE), read its
+# API credentials from the host ~/.ovh.conf and emit them as install values, so
+# an imported instance stores only the endpoint name in the manifest while the
+# real keys are pulled from the host on every install/reconcile.
+#
+# Runs on the host (where ~/.ovh.conf lives) before the container install. Emits
+# only when the full credential triplet is present, leaving form-typed values in
+# place for an endpoint not configured on the host.
+set -e
+
+[ -n "$OCM_PROFILE" ] || exit 0
+
+cfg="$HOME/.ovh.conf"
+[ -f "$cfg" ] || exit 0
+
+# get_field KEY prints the value of KEY within this endpoint's [SECTION] block.
+get_field() {
+  awk -v section="[$OCM_PROFILE]" -v key="$1" '
+    $0 == section { cur = 1; next }
+    /^\[/ { cur = 0 }
+    cur && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      v = $0
+      sub(/^[^=]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      print v
+      exit
+    }
+  ' "$cfg"
+}
+
+ak="$(get_field application_key)"
+as="$(get_field application_secret)"
+ck="$(get_field consumer_key)"
+
+[ -n "$ak" ] && [ -n "$as" ] && [ -n "$ck" ] || exit 0
+
+printf 'application_key=%s\n' "$ak"
+printf 'application_secret=%s\n' "$as"
+printf 'consumer_key=%s\n' "$ck"
+exit 0

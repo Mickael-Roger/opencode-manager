@@ -1,0 +1,15 @@
+#!/bin/sh
+# Removes this gcloud configuration, leaving other configurations and the gcloud
+# SDK in place (matching how other modules leave system tools). An active
+# configuration cannot be deleted; gcloud declines it and the `|| true` keeps the
+# uninstall from failing in that case.
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+export CLOUDSDK_CONFIG="$HOME/.config/gcloud"
+command -v gcloud >/dev/null 2>&1 || exit 0
+
+gcloud config configurations delete "$OCM_PROFILE" --quiet >/dev/null 2>&1 || true
+
+echo "gcp configuration '$OCM_PROFILE' removed"

@@ -18,10 +18,16 @@ install, grouped by category.
 | Module | What it does | Multi-instance |
 | --- | --- | --- |
 | **aws** | Installs the AWS CLI and writes an isolated named profile + credentials to `~/.aws`. | Yes (per profile) |
+| **gcp** | Installs the Google Cloud CLI (`gcloud`) and writes a named configuration (project, region, optional service account key) to `~/.config/gcloud`. | Yes (per configuration) |
 | **outscale** | Installs `octl` (the Outscale CLI) and writes a named AK/SK profile to `~/.osc/config.json`. | Yes (per profile) |
+| **ovh** | Installs the OVHcloud CLI (`ovhcloud`) and writes a named endpoint profile with API credentials to `~/.ovh.conf`. | Yes (per endpoint) |
+| **scaleway** | Installs the Scaleway CLI (`scw`) and writes a named profile to `~/.config/scw/config.yaml`. | Yes (per profile) |
 
-Both can list profiles already configured on your host and import them; secrets
-are pulled from the host at install time and never stored in the manifest.
+All can list profiles already configured on your host and import them; secrets
+are pulled from the host at install time and never stored in the manifest. The
+exception is **gcp**: `gcloud` keeps credentials in a separate account store, so
+import resolves only the project/region — the service account key is entered in
+the form.
 
 ### infra
 
@@ -57,7 +63,7 @@ Some modules can be installed more than once per workspace — one AWS profile, 
 SSH host, etc. In the editor's add flow these show an **import picker** listing
 the matching accounts found on your host:
 
-- **aws** / **outscale** — host CLI profiles
+- **aws** / **gcp** / **outscale** / **ovh** / **scaleway** — host CLI profiles
 - **ssh** — host aliases from `~/.ssh/config`
 - **kubernetes** — host kube contexts (selected, not multi-installed)
 

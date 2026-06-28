@@ -125,7 +125,10 @@ jobs:
         # the ocm-base image. Keep in sync with the modules/<category>/<name> tree.
         module:
           - cloud/aws
+          - cloud/gcp
           - cloud/outscale
+          - cloud/ovh
+          - cloud/scaleway
           - infra/kubernetes
           - tools/git
           - tools/ssh

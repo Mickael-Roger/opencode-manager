@@ -1,0 +1,16 @@
+#!/bin/sh
+# Host-side optionsCommand for the `profile` (key) prompt: list the gcloud
+# configurations on the host, one per line, read straight from the config
+# directory (config_<name> files) so it works even when gcloud isn't on the host.
+# Stays silent and exits 0 when no configurations exist, so the picker just shows
+# the manual entry option.
+set -e
+
+dir="${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}/configurations"
+[ -d "$dir" ] || exit 0
+
+for f in "$dir"/config_*; do
+  [ -f "$f" ] || continue
+  name="${f##*/config_}"
+  printf '%s\n' "$name"
+done

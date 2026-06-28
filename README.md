@@ -14,6 +14,8 @@
 > One terminal dashboard to create, attach, edit, and tear down OpenCode
 > sessions — each one running in its own isolated, per-project container.
 
+📖 **[Read the documentation](https://mickael-roger.github.io/opencode-manager/)** — installation, getting started, concepts, TUI/CLI guides, and modules.
+
 <p align="center">
   <img src="docs/assets/ocm-demo.gif" alt="ocm in action" width="100%">
 </p>
@@ -132,5 +134,6 @@ directories. The defaults written on install work out of the box; see
 
 ## Learn more
 
+- [**User documentation**](https://mickael-roger.github.io/opencode-manager/) — installation, getting started, concepts, TUI & CLI guides, modules, and troubleshooting.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — design, workspace & module model, full configuration, security principle.
 - [PROJECT.md](PROJECT.md) — implementation plan and roadmap.

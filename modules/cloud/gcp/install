@@ -1,0 +1,60 @@
+#!/bin/sh
+# Installs the Google Cloud CLI (gcloud) from the official archive and writes an
+# isolated named gcloud *configuration* holding the project/region plus, when a
+# service account key is supplied, its activated credentials. gcloud keeps each
+# configuration under ~/.config/gcloud (nothing in ~/.env), so this never bounces
+# the OpenCode server. Idempotent and instance-scoped by $OCM_PROFILE: re-running
+# edits only that configuration, so reconcile is safe and configurations coexist.
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  # gcloud is a Python program and the base image ships no python3, so install
+  # one (plus curl/ca-certificates) before fetching the SDK archive.
+  if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends python3 curl ca-certificates
+  fi
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) arch=arm ;;
+    *) arch=x86_64 ;;
+  esac
+  curl -fsSL -o /tmp/gcloud.tgz \
+    "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-${arch}.tar.gz"
+  sudo tar -xzf /tmp/gcloud.tgz -C /opt
+  rm -f /tmp/gcloud.tgz
+  # Land the entrypoints on PATH (like other CLIs in /usr/local/bin) so gcloud is
+  # visible without sourcing ~/.env.
+  for bin in gcloud gsutil bq; do
+    sudo ln -sf /opt/google-cloud-sdk/bin/"$bin" /usr/local/bin/"$bin"
+  done
+fi
+
+CLOUDSDK_CONFIG="$HOME/.config/gcloud"
+export CLOUDSDK_CONFIG
+mkdir -p "$CLOUDSDK_CONFIG"
+chmod 700 "$CLOUDSDK_CONFIG"
+
+# Create the named configuration if absent, without activating it (--no-activate
+# keeps the workspace's active configuration unchanged). Targeting it explicitly
+# via CLOUDSDK_ACTIVE_CONFIG_NAME makes the config/auth writes below land in it.
+if ! gcloud config configurations describe "$OCM_PROFILE" >/dev/null 2>&1; then
+  gcloud config configurations create "$OCM_PROFILE" --no-activate
+fi
+export CLOUDSDK_ACTIVE_CONFIG_NAME="$OCM_PROFILE"
+
+[ -n "$OCM_PROJECT" ] && gcloud config set core/project "$OCM_PROJECT"
+[ -n "$OCM_REGION" ] && gcloud config set compute/region "$OCM_REGION"
+
+# Activate the service account key into this configuration when provided. The
+# key is written to a private temp file because gcloud reads it from disk.
+if [ -n "$OCM_SERVICE_ACCOUNT_KEY" ]; then
+  key="$(mktemp)"
+  chmod 600 "$key"
+  printf '%s' "$OCM_SERVICE_ACCOUNT_KEY" >"$key"
+  gcloud auth activate-service-account --key-file="$key"
+  rm -f "$key"
+fi
+
+echo "gcp configuration '$OCM_PROFILE' configured"

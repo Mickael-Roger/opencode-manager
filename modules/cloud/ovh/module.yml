@@ -1,0 +1,23 @@
+name: ovh
+version: 1
+description: Install the OVHcloud CLI (ovhcloud) and write an isolated named endpoint profile with API credentials to ~/.ovh.conf.
+# Only writes ~/.ovh.conf (the INI every OVH SDK reads); nothing in ~/.env, so it
+# never bounces the OpenCode server and can be edited while a task is running.
+restartServer: false
+key: profile
+prompts:
+  - name: profile
+    label: OVH endpoint
+    type: string
+    required: true
+    default: ovh-eu
+    optionsCommand: list-accounts
+  - name: application_key
+    label: Application key
+    type: string
+  - name: application_secret
+    label: Application secret
+    type: secret
+  - name: consumer_key
+    label: Consumer key
+    type: secret

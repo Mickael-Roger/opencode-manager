@@ -1,0 +1,34 @@
+name: scaleway
+version: 1
+description: Install the Scaleway CLI (scw) and write an isolated named profile to ~/.config/scw/config.yaml.
+# Only writes ~/.config/scw/config.yaml; nothing in ~/.env, so it never bounces
+# the OpenCode server and can be edited while a task is running.
+restartServer: false
+key: profile
+prompts:
+  - name: profile
+    label: Scaleway profile name
+    type: string
+    required: true
+    default: default
+    optionsCommand: list-accounts
+  - name: access_key
+    label: Access key
+    type: string
+  - name: secret_key
+    label: Secret key
+    type: secret
+  - name: organization_id
+    label: Default organization ID
+    type: string
+  - name: project_id
+    label: Default project ID
+    type: string
+  - name: region
+    label: Default region
+    type: string
+    default: fr-par
+  - name: zone
+    label: Default zone
+    type: string
+    default: fr-par-1

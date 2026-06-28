@@ -1,0 +1,40 @@
+#!/bin/sh
+# Host-side resolve hook: given the imported configuration name ($OCM_PROFILE),
+# read its project and region from the host gcloud config file and emit them as
+# install values, so an imported instance stores only the configuration name in
+# the manifest while project/region are pulled from the host on every install.
+#
+# Runs on the host (where ~/.config/gcloud lives) before the container install,
+# reading the INI directly so it works even when gcloud isn't on the host. The
+# service account key is NOT host-exportable — gcloud keeps credentials in a
+# separate store keyed by account, not in the per-configuration INI — so the key
+# is left to the form; only project/region are resolved here. Emits nothing for a
+# configuration not present on the host, leaving typed-in values in place.
+set -e
+
+[ -n "$OCM_PROFILE" ] || exit 0
+
+cfg="${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}/configurations/config_$OCM_PROFILE"
+[ -f "$cfg" ] || exit 0
+
+# get_field SECTION KEY prints the value of KEY within the [SECTION] block.
+get_field() {
+  awk -v section="[$1]" -v key="$2" '
+    $0 == section { cur = 1; next }
+    /^\[/ { cur = 0 }
+    cur && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      v = $0
+      sub(/^[^=]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      print v
+      exit
+    }
+  ' "$cfg"
+}
+
+project="$(get_field core project)"
+region="$(get_field compute region)"
+
+[ -n "$project" ] && printf 'project=%s\n' "$project"
+[ -n "$region" ] && printf 'region=%s\n' "$region"
+exit 0

@@ -1,0 +1,85 @@
+#!/bin/sh
+# Installs the OVHcloud CLI (ovhcloud) from its GitHub release and writes an
+# isolated named endpoint profile into ~/.ovh.conf — the INI file every OVH SDK
+# reads, keyed by endpoint (e.g. ovh-eu). Idempotent and instance-scoped by
+# $OCM_PROFILE: re-running edits only that endpoint's section (preserving any
+# credential not supplied this run), so reconcile is safe and endpoints coexist.
+# Writes nothing to ~/.env, so it never bounces the OpenCode server.
+set -e
+
+: "${OCM_PROFILE:=ovh-eu}"
+
+if ! command -v ovhcloud >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) asset=ovhcloud-cli_Linux_arm64.tar.gz ;;
+    *) asset=ovhcloud-cli_Linux_x86_64.tar.gz ;;
+  esac
+  curl -fsSL -o /tmp/ovhcloud.tgz \
+    "https://github.com/ovh/ovhcloud-cli/releases/latest/download/${asset}"
+  tmp="$(mktemp -d)"
+  tar -xzf /tmp/ovhcloud.tgz -C "$tmp" ovhcloud
+  sudo install -m 0755 "$tmp/ovhcloud" /usr/local/bin/ovhcloud
+  rm -rf /tmp/ovhcloud.tgz "$tmp"
+fi
+
+cfg="$HOME/.ovh.conf"
+[ -f "$cfg" ] || : >"$cfg"
+chmod 600 "$cfg"
+
+# get_field KEY prints the current value of KEY within this endpoint's section,
+# so a reconcile that supplies only some credentials preserves the rest.
+get_field() {
+  awk -v section="[$OCM_PROFILE]" -v key="$1" '
+    $0 == section { cur = 1; next }
+    /^\[/ { cur = 0 }
+    cur && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      v = $0
+      sub(/^[^=]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      print v
+      exit
+    }
+  ' "$cfg"
+}
+
+ak="${OCM_APPLICATION_KEY:-$(get_field application_key)}"
+as="${OCM_APPLICATION_SECRET:-$(get_field application_secret)}"
+ck="${OCM_CONSUMER_KEY:-$(get_field consumer_key)}"
+
+# strip_section drops this endpoint's existing [SECTION] block (header through
+# the line before the next section), leaving the rest of the file untouched.
+strip_section() {
+  awk -v section="[$OCM_PROFILE]" '
+    $0 == section { skip = 1; next }
+    /^\[/ { skip = 0 }
+    !skip { print }
+  ' "$cfg"
+}
+
+tmp="$cfg.tmp"
+{
+  strip_section | sed -e '/^[[:space:]]*$/d'
+  printf '[%s]\n' "$OCM_PROFILE"
+  [ -n "$ak" ] && printf 'application_key=%s\n' "$ak"
+  [ -n "$as" ] && printf 'application_secret=%s\n' "$as"
+  [ -n "$ck" ] && printf 'consumer_key=%s\n' "$ck"
+} >"$tmp"
+
+# Ensure a [default] endpoint pointer exists. The first install wins, so the
+# reconcile order never flip-flops which endpoint tools use by default.
+if ! grep -q '^\[default\]' "$tmp"; then
+  {
+    printf '[default]\nendpoint=%s\n\n' "$OCM_PROFILE"
+    cat "$tmp"
+  } >"$tmp.d"
+  mv "$tmp.d" "$tmp"
+fi
+
+mv "$tmp" "$cfg"
+chmod 600 "$cfg"
+
+echo "ovh endpoint '$OCM_PROFILE' configured"

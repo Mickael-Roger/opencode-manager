@@ -1,0 +1,18 @@
+#!/bin/sh
+# Host-side optionsCommand for the `profile` (endpoint) prompt: list the endpoint
+# sections configured in the host ~/.ovh.conf, one per line, skipping the
+# [default] pointer section. Stays silent and exits 0 when the file is missing,
+# so the picker just shows the manual entry option.
+set -e
+
+cfg="$HOME/.ovh.conf"
+[ -f "$cfg" ] || exit 0
+
+awk '
+  /^\[/ {
+    s = $0
+    sub(/^\[/, "", s)
+    sub(/\].*/, "", s)
+    if (s != "default") print s
+  }
+' "$cfg"

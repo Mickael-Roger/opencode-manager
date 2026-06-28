@@ -1,0 +1,15 @@
+#!/bin/sh
+# Removes only this profile from the Scaleway config, leaving other profiles and
+# the scw binary in place (matching how other modules leave system tools).
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+command -v scw >/dev/null 2>&1 || exit 0
+
+scw config profile delete "$OCM_PROFILE" >/dev/null 2>&1 || true
+
+cfg="$HOME/.config/scw/config.yaml"
+[ -f "$cfg" ] && chmod 600 "$cfg"
+
+echo "scaleway profile '$OCM_PROFILE' removed"

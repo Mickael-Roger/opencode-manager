@@ -1,0 +1,48 @@
+#!/bin/sh
+# Installs the Scaleway CLI (scw) from its GitHub release and writes an isolated
+# named profile into ~/.config/scw/config.yaml via `scw config set`, which is
+# idempotent and edits the YAML correctly (per-field, per-profile) so reconcile
+# can re-run safely and profiles coexist. Instance-scoped by $OCM_PROFILE; writes
+# nothing to ~/.env, so it never bounces the OpenCode server.
+set -e
+
+: "${OCM_PROFILE:=default}"
+
+if ! command -v scw >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) arch=arm64 ;;
+    *) arch=amd64 ;;
+  esac
+  # The release assets carry the version in their filename, so resolve the latest
+  # tag from the redirect target of the /releases/latest URL.
+  ver="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    https://github.com/scaleway/scaleway-cli/releases/latest | sed 's#.*/tag/v##')"
+  curl -fsSL -o /tmp/scw \
+    "https://github.com/scaleway/scaleway-cli/releases/download/v${ver}/scaleway-cli_${ver}_linux_${arch}"
+  sudo install -m 0755 /tmp/scw /usr/local/bin/scw
+  rm -f /tmp/scw
+fi
+
+# set_field writes one config key into this profile when a value is provided,
+# leaving the other fields (and other profiles) untouched. scw uses dashed flag
+# names (access-key) that map to the underscored YAML keys (access_key).
+set_field() {
+  [ -n "$2" ] || return 0
+  scw -p "$OCM_PROFILE" config set "$1=$2" >/dev/null
+}
+
+set_field access-key "$OCM_ACCESS_KEY"
+set_field secret-key "$OCM_SECRET_KEY"
+set_field default-organization-id "$OCM_ORGANIZATION_ID"
+set_field default-project-id "$OCM_PROJECT_ID"
+set_field default-region "$OCM_REGION"
+set_field default-zone "$OCM_ZONE"
+
+cfg="$HOME/.config/scw/config.yaml"
+[ -f "$cfg" ] && chmod 600 "$cfg"
+
+echo "scaleway profile '$OCM_PROFILE' configured"

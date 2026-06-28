@@ -1,0 +1,21 @@
+#!/bin/sh
+# Host-side optionsCommand for the `profile` (key) prompt: list the named
+# profiles configured in the host ~/.config/scw/config.yaml, one per line, read
+# straight from the YAML so it works even when scw isn't on the host. Stays
+# silent and exits 0 when the file is missing, so the picker just shows the
+# manual entry option.
+set -e
+
+cfg="${SCW_CONFIG_PATH:-$HOME/.config/scw/config.yaml}"
+[ -f "$cfg" ] || exit 0
+
+awk '
+  /^profiles:[[:space:]]*$/ { inp = 1; next }
+  /^[^[:space:]]/ { inp = 0 }
+  inp && /^  [^ ].*:[[:space:]]*$/ {
+    name = $0
+    sub(/^  /, "", name)
+    sub(/:.*$/, "", name)
+    print name
+  }
+' "$cfg"

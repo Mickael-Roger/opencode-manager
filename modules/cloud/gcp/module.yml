@@ -1,0 +1,25 @@
+name: gcp
+version: 1
+description: Install the Google Cloud CLI (gcloud) and write an isolated named configuration with project, region, and an optional service account key.
+# Only writes ~/.config/gcloud (gcloud configurations + credentials); nothing in
+# ~/.env, so it never bounces the OpenCode server and can be edited while a task
+# is running.
+restartServer: false
+key: profile
+prompts:
+  - name: profile
+    label: GCP configuration name
+    type: string
+    required: true
+    default: default
+    optionsCommand: list-accounts
+  - name: project
+    label: Project ID
+    type: string
+  - name: region
+    label: Default region
+    type: string
+    default: europe-west1
+  - name: service_account_key
+    label: Service account key (JSON)
+    type: secret

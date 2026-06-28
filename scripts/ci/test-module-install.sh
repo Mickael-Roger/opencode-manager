@@ -33,7 +33,10 @@ declare -a ocm_env=()
 verify='true'
 case "$ref" in
   cloud/aws)        ocm_env=(OCM_PROFILE=ci); verify='command -v aws' ;;
+  cloud/gcp)        ocm_env=(OCM_PROFILE=ci); verify='command -v gcloud' ;;
   cloud/outscale)   ocm_env=(OCM_PROFILE=ci); verify='command -v octl' ;;
+  cloud/ovh)        ocm_env=(OCM_PROFILE=ovh-eu); verify='command -v ovhcloud' ;;
+  cloud/scaleway)   ocm_env=(OCM_PROFILE=ci); verify='command -v scw' ;;
   infra/kubernetes) verify='command -v kubectl' ;;
   tools/git)        ocm_env=(OCM_NAME=ci-bot OCM_EMAIL=ci@example.com)
                     verify='command -v git && [ "$(git config --global user.email)" = ci@example.com ]' ;;

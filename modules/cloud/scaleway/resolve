@@ -1,0 +1,62 @@
+#!/bin/sh
+# Host-side resolve hook: given the imported profile name ($OCM_PROFILE), read
+# its credentials from the host ~/.config/scw/config.yaml and emit them as
+# install values, so an imported instance stores only the profile name in the
+# manifest while the real keys are pulled from the host on every install.
+#
+# Runs on the host (where the config lives) before the container install, parsing
+# the YAML directly so it works even when scw isn't on the host. Emits only when
+# both an access key and secret key are found, leaving form-typed values in place
+# for a profile not present on the host. Only named profiles under `profiles:`
+# are read (the top-level default profile is not host-importable by name).
+set -e
+
+[ -n "$OCM_PROFILE" ] || exit 0
+
+cfg="${SCW_CONFIG_PATH:-$HOME/.config/scw/config.yaml}"
+[ -f "$cfg" ] || exit 0
+
+# field KEY prints the value of KEY inside this profile's block. scw writes a
+# 2-space-indented profile name with 4-space-indented fields under `profiles:`.
+field() {
+  awk -v prof="$OCM_PROFILE" -v key="$1" '
+    /^profiles:[[:space:]]*$/ { inp = 1; next }
+    /^[^[:space:]]/ { inp = 0 }
+    inp && /^  [^ ].*:[[:space:]]*$/ {
+      name = $0
+      sub(/^  /, "", name)
+      sub(/:.*$/, "", name)
+      cur = name
+      next
+    }
+    inp && cur == prof {
+      pat = "^    " key ":[[:space:]]*"
+      if ($0 ~ pat) {
+        v = $0
+        sub(pat, "", v)
+        sub(/[[:space:]]+$/, "", v)
+        sub(/^"/, "", v)
+        sub(/"$/, "", v)
+        print v
+        exit
+      }
+    }
+  ' "$cfg"
+}
+
+ak="$(field access_key)"
+sk="$(field secret_key)"
+org="$(field default_organization_id)"
+proj="$(field default_project_id)"
+region="$(field default_region)"
+zone="$(field default_zone)"
+
+[ -n "$ak" ] && [ -n "$sk" ] || exit 0
+
+printf 'access_key=%s\n' "$ak"
+printf 'secret_key=%s\n' "$sk"
+[ -n "$org" ] && printf 'organization_id=%s\n' "$org"
+[ -n "$proj" ] && printf 'project_id=%s\n' "$proj"
+[ -n "$region" ] && printf 'region=%s\n' "$region"
+[ -n "$zone" ] && printf 'zone=%s\n' "$zone"
+exit 0
