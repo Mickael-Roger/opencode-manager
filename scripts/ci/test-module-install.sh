@@ -38,7 +38,7 @@ case "$ref" in
   cloud/ovh)        ocm_env=(OCM_PROFILE=ovh-eu); verify='command -v ovhcloud' ;;
   cloud/scaleway)   ocm_env=(OCM_PROFILE=ci); verify='command -v scw' ;;
   infra/kubernetes) verify='command -v kubectl' ;;
-  tools/git)        ocm_env=(OCM_NAME=ci-bot OCM_EMAIL=ci@example.com)
+  source-code/git)  ocm_env=(OCM_NAME=ci-bot OCM_EMAIL=ci@example.com)
                     verify='command -v git && [ "$(git config --global user.email)" = ci@example.com ]' ;;
   tools/ssh)        ocm_env=(OCM_HOST=example.com)
                     verify='command -v ssh && test -f "$HOME/.ssh/config.d/example.com.conf"' ;;

@@ -51,8 +51,11 @@ ensure_ssh_client() {
   sudo apt-get install -y --no-install-recommends openssh-client
 }
 
+# Clone into the workspace directory (~/workspace, the container's working dir),
+# not the home root, so repos sit alongside the work the agent runs on.
+mkdir -p "$HOME/workspace"
 name="$(basename "$OCM_REPO" .git)"
-dest="$HOME/$name"
+dest="$HOME/workspace/$name"
 if [ -e "$dest" ]; then
   echo "git repo '$name' already present, skipping"
   exit 0

@@ -120,7 +120,7 @@ The whole module directory is bind-mounted read-only into every workspace at
 `/opt/opencode-manager/modules`, mirroring the `category/module` layout (so the
 `aws` module runs from `/opt/opencode-manager/modules/cloud/aws`). Built-in
 modules ship in the top-level `modules/` directory grouped by category —
-`cloud/aws`, `cloud/outscale`, `infra/kubernetes`, `tools/git`, `tools/ssh` — and
+`cloud/aws`, `cloud/outscale`, `infra/kubernetes`, `source-code/git`, `tools/ssh` — and
 are installed into your module directory by the npm postinstall script; drop your
 own module directories under a category alongside them.
 

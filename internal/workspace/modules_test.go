@@ -11,6 +11,68 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/module"
 )
 
+// TestAddModuleAccumulatesAcrossCalls guards against the regression where adding
+// several modules in one editor apply (the loop passes the same workspace snapshot
+// to every AddModule call) left only one entry in the manifest, because each call
+// re-saved a stale snapshot and clobbered the previous add. All instances — here
+// two git repos and one kube context, like the reported scenario — must persist.
+func TestAddModuleAccumulatesAcrossCalls(t *testing.T) {
+	fake := &fakeDriver{output: func(args []string) []byte { return nil }}
+
+	workspacePath := t.TempDir()
+	home := filepath.Join(workspacePath, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := Manifest{
+		Name:          "demo",
+		Runtime:       "docker",
+		ImageName:     "opencode-manager/demo:latest",
+		ContainerName: "opencode-manager-demo",
+		HomeDir:       home,
+	}
+	summary := Summary{Manifest: manifest, Path: workspacePath}
+
+	l := Lifecycle{driver: fake}
+	git := module.Module{Name: "git", Category: "source-code", Version: 3, Key: "repo"}
+	kube := module.Module{Name: "kubernetes", Category: "infra", Version: 2, Key: "context"}
+	calls := []struct {
+		mod  module.Module
+		vals map[string]string
+	}{
+		{git, map[string]string{"repo": "repoA"}},
+		{git, map[string]string{"repo": "repoB"}},
+		{kube, map[string]string{"context": "prod"}},
+	}
+
+	// Pass the SAME summary snapshot to every call, exactly as the editor apply
+	// loop does.
+	for _, c := range calls {
+		if err := l.AddModule(context.Background(), summary, c.mod, c.vals); err != nil {
+			t.Fatalf("AddModule %s: %v", c.mod.InstanceID(c.vals), err)
+		}
+	}
+
+	saved, err := LoadManifest(filepath.Join(workspacePath, ManifestFile))
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, inst := range saved.Modules {
+		got[inst.InstanceID()] = true
+	}
+	for _, want := range []string{"git:repoA", "git:repoB", "kubernetes:prod"} {
+		if !got[want] {
+			t.Fatalf("manifest missing instance %q; got %d entries: %+v", want, len(saved.Modules), saved.Modules)
+		}
+	}
+	if len(saved.Modules) != 3 {
+		t.Fatalf("manifest has %d modules, want 3: %+v", len(saved.Modules), saved.Modules)
+	}
+}
+
 func TestEnvHashChangesWithContent(t *testing.T) {
 	home := t.TempDir()
 	if envHash(home) != "" {

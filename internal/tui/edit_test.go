@@ -13,6 +13,20 @@ func entry(name, category, desc, label string) editEntry {
 	}
 }
 
+func TestCategoryLabel(t *testing.T) {
+	cases := map[string]string{
+		"source-code": "Source code",
+		"tools":       "Tools",
+		"cloud":       "Cloud",
+		"":            "",
+	}
+	for in, want := range cases {
+		if got := categoryLabel(in); got != want {
+			t.Errorf("categoryLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestEditEntryMatches(t *testing.T) {
 	e := entry("aws", "cloud", "Install the AWS CLI and credentials.", "prod")
 	cases := []struct {

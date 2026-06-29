@@ -116,10 +116,18 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 		return err
 	}
 
-	manifest := summary.Manifest
+	// Read the manifest fresh from disk rather than trusting summary.Manifest: it
+	// may be stale (EnsureStarted's port backfill wrote to disk, and a batch of
+	// adds passes the same snapshot to every call). Loading here makes each add
+	// accumulate instead of clobbering the previous one's manifest entry.
+	manifestPath := filepath.Join(summary.Path, ManifestFile)
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		return err
+	}
 	manifest.Modules = upsertModule(manifest.Modules, mod.InstanceID(values), mod.Name, mod.Category, mod.Version, values)
 	manifest.UpdatedAt = time.Now().UTC()
-	if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
+	if err := SaveManifest(manifestPath, manifest); err != nil {
 		return err
 	}
 	if err := l.writeMarker(ctx, manifest.ContainerName, manifest.Modules); err != nil {
@@ -160,10 +168,16 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string)
 		return err
 	}
 
-	manifest := summary.Manifest
+	// Read the manifest fresh from disk so a batch of removes (and the adds that
+	// ran before them) accumulate instead of each clobbering the snapshot.
+	manifestPath := filepath.Join(summary.Path, ManifestFile)
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		return err
+	}
 	manifest.Modules = removeModule(manifest.Modules, id)
 	manifest.UpdatedAt = time.Now().UTC()
-	if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
+	if err := SaveManifest(manifestPath, manifest); err != nil {
 		return err
 	}
 	if err := l.writeMarker(ctx, manifest.ContainerName, manifest.Modules); err != nil {

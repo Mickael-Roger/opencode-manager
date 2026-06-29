@@ -377,6 +377,9 @@ func TestBuiltinModulesAreValid(t *testing.T) {
 	if git.PromptByName("name") != nil || git.PromptByName("email") != nil {
 		t.Fatal("git module should no longer prompt for name/email (imported from host)")
 	}
+	if git.Category != "source-code" {
+		t.Fatalf("git module category = %q, want source-code", git.Category)
+	}
 
 	var kube *Module
 	for i := range mods {

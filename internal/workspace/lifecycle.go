@@ -177,19 +177,18 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 
 	manifest := summary.Manifest
 
-	// Backfill an OpenCode port for workspaces created before per-workspace ports
-	// existed (manifest.OpenCodePort == 0), then persist it so the assignment is
-	// stable across restarts and visible to other workspaces' allocation.
+	// Ensure the workspace has a persisted OpenCode port. This backfills workspaces
+	// created before per-workspace ports existed, but provision runs on every start
+	// (including before each module add/remove), so it must persist via a
+	// read-modify-write against the on-disk manifest rather than re-saving the
+	// possibly-stale in-memory snapshot — otherwise it would clobber modules a prior
+	// operation just wrote.
 	if manifest.OpenCodePort == 0 {
-		port, err := l.registry.AllocateOpenCodePort()
+		port, err := l.ensureOpenCodePort(summary)
 		if err != nil {
 			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 		}
 		manifest.OpenCodePort = port
-		if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
-			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
-		}
-		slog.Info("assigned OpenCode port to workspace", "workspace", manifest.Name, "port", port)
 	}
 
 	baseImageName, err := l.resolveBaseImage(ctx, manifest.Image)
@@ -274,6 +273,46 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	}
 
 	return status, spec, nil
+}
+
+// ensureOpenCodePort returns the workspace's persisted OpenCode port, allocating
+// and persisting one when it is missing. It reads the manifest fresh from disk so
+// it neither reallocates a port already assigned nor overwrites other manifest
+// fields (e.g. modules) that the in-memory snapshot may not yet reflect. When no
+// manifest is persisted yet it falls back to persisting the snapshot with a fresh
+// port so the file exists for subsequent read-modify-write updates.
+func (l Lifecycle) ensureOpenCodePort(summary Summary) (int, error) {
+	path := filepath.Join(summary.Path, ManifestFile)
+
+	onDisk, err := LoadManifest(path)
+	if err != nil {
+		manifest := summary.Manifest
+		port, perr := l.registry.AllocateOpenCodePort()
+		if perr != nil {
+			return 0, perr
+		}
+		manifest.OpenCodePort = port
+		if serr := SaveManifest(path, manifest); serr != nil {
+			return 0, serr
+		}
+		slog.Info("assigned OpenCode port to workspace", "workspace", manifest.Name, "port", port)
+		return port, nil
+	}
+
+	if onDisk.OpenCodePort != 0 {
+		return onDisk.OpenCodePort, nil
+	}
+
+	port, err := l.registry.AllocateOpenCodePort()
+	if err != nil {
+		return 0, err
+	}
+	onDisk.OpenCodePort = port
+	if err := SaveManifest(path, onDisk); err != nil {
+		return 0, err
+	}
+	slog.Info("assigned OpenCode port to workspace", "workspace", onDisk.Name, "port", port)
+	return port, nil
 }
 
 // openCodeHomeDir is the workspace user's home directory inside the container.

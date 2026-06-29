@@ -7,7 +7,7 @@ set -e
 
 if [ -n "$OCM_REPO" ]; then
   name="$(basename "$OCM_REPO" .git)"
-  echo "git repo '$name' unregistered (left on disk at ~/$name)"
+  echo "git repo '$name' unregistered (left on disk at ~/workspace/$name)"
 else
   echo "git identity left in place"
 fi

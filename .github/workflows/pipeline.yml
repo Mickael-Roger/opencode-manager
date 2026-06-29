@@ -130,7 +130,7 @@ jobs:
           - cloud/ovh
           - cloud/scaleway
           - infra/kubernetes
-          - tools/git
+          - source-code/git
           - tools/ssh
           - tools/github
           - tools/gitlab

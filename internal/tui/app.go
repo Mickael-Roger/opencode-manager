@@ -1694,11 +1694,13 @@ func (m model) describeFields(selected workspace.Summary) []describeField {
 
 	modules := "none"
 	if len(manifest.Modules) > 0 {
-		names := make([]string, 0, len(manifest.Modules))
+		lines := make([]string, 0, len(manifest.Modules))
 		for _, mod := range manifest.Modules {
-			names = append(names, mod.InstanceID())
+			lines = append(lines, "• "+mod.InstanceID())
 		}
-		modules = strings.Join(names, ", ")
+		// One module per line as a bullet list; renderDescribePage splits on
+		// newlines and indents the continuation lines under the value column.
+		modules = strings.Join(lines, "\n")
 	}
 
 	fields := []describeField{
@@ -1793,14 +1795,22 @@ func (m model) renderDescribePage(width, height int) string {
 	rows := make([]string, 0, height-1)
 	rows = append(rows, blank)
 	for _, f := range fields {
-		key := infoKeyStyle.Render(fit(f.key+":", labelWidth))
 		valWidth := contentWidth - labelWidth - 1
-		valRaw := fit(f.value, valWidth)
-		val := infoValStyle.Render(valRaw)
-		if f.color != "" {
-			val = lipgloss.NewStyle().Foreground(f.color).Render(valRaw)
+		// A value may span multiple lines (e.g. the Modules bullet list): the label
+		// shows on the first line, continuation lines align under the value column.
+		for i, line := range strings.Split(f.value, "\n") {
+			label := f.key + ":"
+			if i > 0 {
+				label = ""
+			}
+			key := infoKeyStyle.Render(fit(label, labelWidth))
+			valRaw := fit(line, valWidth)
+			val := infoValStyle.Render(valRaw)
+			if f.color != "" {
+				val = lipgloss.NewStyle().Foreground(f.color).Render(valRaw)
+			}
+			rows = append(rows, " "+key+" "+val+" ")
 		}
-		rows = append(rows, " "+key+" "+val+" ")
 	}
 	for len(rows) < height-1 {
 		rows = append(rows, blank)

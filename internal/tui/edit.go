@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -1009,14 +1010,28 @@ func (m model) renderEditPage(width, height int) string {
 	return m.boxWithTitle(title, rows, width)
 }
 
+// categoryLabel turns a category directory slug into a display label: dashes and
+// underscores become spaces and the first letter is capitalized, so "source-code"
+// shows as "Source code" and "tools" as "Tools".
+func categoryLabel(slug string) string {
+	if slug == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(slug, "-", " ")
+	s = strings.ReplaceAll(s, "_", " ")
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
 // renderEditCategoryHeader renders a category section heading (the top level of
 // the module browser). The arrow shows whether the category is collapsed ("▸")
 // or expanded ("▾"); a filtered browser ignores collapse and always shows it
 // expanded. The header is highlighted when the cursor rests on it.
 func (m model) renderEditCategoryHeader(e editEntry, selectedRow bool, contentWidth int) string {
-	label := e.category
+	label := categoryLabel(e.category)
 	if label == "" {
-		label = "uncategorized"
+		label = "Uncategorized"
 	}
 	arrow := "▾"
 	if m.editFilter == "" && m.editCollapsed[e.category] {

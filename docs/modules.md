@@ -48,11 +48,16 @@ Language modules that put a toolchain on `PATH` write to `~/.env`, so installing
 or removing them restarts the OpenCode server (and is blocked while a task is
 running). The `c` module only installs system packages, so it does not.
 
+### source code
+
+| Module | What it does | Multi-instance |
+| --- | --- | --- |
+| **git** | Clones a git repository into `~/workspace` (one entry per repo). The git identity (`user.name` / `user.email`) is imported from your host automatically. | Yes (per repo) |
+
 ### tools
 
 | Module | What it does | Multi-instance |
 | --- | --- | --- |
-| **git** | Clones a git repository into the workspace (one entry per repo). The git identity (`user.name` / `user.email`) is imported from your host automatically. | Yes (per repo) |
 | **github** | Installs the GitHub CLI (`gh`) and optionally imports this host's `gh` auth (or takes a token). | No |
 | **gitlab** | Installs the GitLab CLI (`glab`) and optionally imports this host's `glab` auth (or takes a token). | No |
 | **ssh** | Adds an SSH key and host alias (written to `~/.ssh`) for this workspace. | Yes (per host) |
@@ -72,11 +77,13 @@ to fill in an account that isn't on your host. Imported instances store only the
 account name in the workspace manifest; their secrets are read from the host at
 install time and never persisted.
 
-The **git** module is also multi-instance (one entry per repository) but has no
-host list to import from, so its add flow goes straight to a form where you enter
-the repository URL (ssh or https). Each repo is added and removed independently;
-removing an entry stops the manager from re-cloning it but leaves the cloned
-working tree on disk, so uncommitted work is never lost. The git identity is
+The **git** module (in the **source code** category) is also multi-instance (one
+entry per repository) but has no host list to import from, so its add flow goes
+straight to a form where you enter the repository URL (ssh or https). Each repo is
+cloned into `~/workspace` (the container's working directory) and is added and
+removed independently; removing an entry stops the manager from re-cloning it but
+leaves the cloned working tree on disk, so uncommitted work is never lost. SSH
+clones auto-accept the remote host key on first contact. The git identity is
 imported from your host's global `git config` (`user.name` / `user.email`) on
 every install — nothing to type, and nothing is set when the host has no
 identity.

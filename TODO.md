@@ -18,13 +18,14 @@
 - [x] Make sure the ci create the github release
 - [x] Add a user documentation (detailled)
 - [x] Add gcp, ovh, scaleway modules
-
-- [/] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
+- [x] The deletion: Improve OK/Cancel button color contrast + by default the preselect is on Cancel
+- [x] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
+- [x] Add a podman/docker extra option in config.yml
 - [/] Git module: remove "value" in field; Retreive the user and user email or do not set it; Add repo is a different stuff
 - [/] Module: remove description + for kubernetes: add entries
-- [/] Add a podman/docker extra option in config.yml
-- [/] The deletion: Impove OK/Cancel button color contrast + by default the preselect is on Cancel
+- [/] Bug: It seems only one module is installed when multiple is added
 
+- [ ] Bug in description modules list (only one module is displayed)
 - [ ] Update the gif image with the new interface
 - [ ] Review the module page: remove description and "Add", just the list, then enter
 - [ ] In the readme, add the main features: including modules, templates, ...
