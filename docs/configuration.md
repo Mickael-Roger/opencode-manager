@@ -15,6 +15,7 @@ documents every option.
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
+hostNetwork: false
 logLevel: warning
 baseImage:
   name: docker.io/mroger78/ocm-base:latest
@@ -45,6 +46,31 @@ When `true`, the host file `~/.local/share/opencode/auth.json` is mounted
 **read-write** into the same path in every workspace container, so workspaces
 share your host OpenCode login. Default `false` keeps auth isolated from the host
 — in keeping with the [security principle](concepts.md#security-principle).
+
+### `hostNetwork`
+
+When `true`, each workspace container shares the **host's network namespace**
+(`docker`/`podman --network host`) instead of getting an isolated one. Default
+`false`.
+
+Enable it when the agent (or its tools) needs to reach services listening on the
+host's loopback — a local model server, a database, a dev server, etc. With an
+isolated network those `127.0.0.1` services are unreachable from inside the
+container.
+
+Inside every container an OpenCode server runs on the loopback interface. With
+isolated networking they could all share one port, but under host networking they
+share the host's loopback, so a fixed port would collide. To avoid that, each
+workspace is assigned a **unique loopback port** (range `4096–4999`), recorded as
+`openCodePort` in its `workspace.yaml` and reused across restarts. Existing
+workspaces created before this option are assigned a port automatically on their
+next start. The assignment happens regardless of `hostNetwork`, so toggling the
+option never requires a migration.
+
+> **Note:** host networking is opt-in because it weakens isolation — the
+> container can reach (and bind) anything on the host's network interfaces. It
+> also has limited support on Docker Desktop (macOS/Windows); on Linux with
+> docker/podman it works as expected.
 
 ### `logLevel`
 

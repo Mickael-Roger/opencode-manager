@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"context"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/mickael-menu/opencode-manager/internal/config"
@@ -129,5 +131,92 @@ func TestResolveBaseImageCustomBaseBuildsFullRecipe(t *testing.T) {
 	}
 	if len(rec.builds) != 1 || rec.builds[0].Prebuilt {
 		t.Fatalf("custom base must build the full recipe (Prebuilt=false), got %v", rec.builds)
+	}
+}
+
+// specRecordingDriver captures the spec passed to CreateContainer and reports the
+// container as missing so provision always creates it.
+type specRecordingDriver struct {
+	*fakeDriver
+	created runtime.ContainerSpec
+}
+
+func (d *specRecordingDriver) ContainerStatus(context.Context, string) (string, error) {
+	return runtime.StatusMissing, nil
+}
+
+func (d *specRecordingDriver) CreateContainer(_ context.Context, spec runtime.ContainerSpec) error {
+	d.created = spec
+	return nil
+}
+
+func TestProvisionInjectsPortAndHostNetwork(t *testing.T) {
+	rec := &specRecordingDriver{fakeDriver: &fakeDriver{}}
+	cfg := config.Config{
+		WorkspaceRoot: t.TempDir(),
+		Runtime:       config.RuntimeDocker,
+		HostNetwork:   true,
+		BaseImage:     config.BaseImageConfig{Name: "debian:stable-slim"},
+	}
+	l := Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: rec}
+
+	created, err := l.registry.Create("demo")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, spec, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	if !spec.HostNetwork {
+		t.Fatal("spec.HostNetwork = false, want true (config.HostNetwork enabled)")
+	}
+
+	want := strconv.Itoa(created.Manifest.OpenCodePort)
+	if got := spec.Env[OpenCodePortEnv]; got != want {
+		t.Fatalf("spec.Env[%s] = %q, want %q", OpenCodePortEnv, got, want)
+	}
+	if got := rec.created.Env[OpenCodePortEnv]; got != want {
+		t.Fatalf("created container spec env[%s] = %q, want %q", OpenCodePortEnv, got, want)
+	}
+
+	// The manifest env must not be polluted with the runtime-only port var.
+	if _, ok := created.Manifest.Env[OpenCodePortEnv]; ok {
+		t.Fatal("manifest env should not contain the OpenCode port variable")
+	}
+}
+
+func TestProvisionBackfillsMissingPort(t *testing.T) {
+	rec := &specRecordingDriver{fakeDriver: &fakeDriver{}}
+	cfg := config.Config{
+		WorkspaceRoot: t.TempDir(),
+		Runtime:       config.RuntimeDocker,
+		BaseImage:     config.BaseImageConfig{Name: "debian:stable-slim"},
+	}
+	l := Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: rec}
+
+	created, err := l.registry.Create("demo")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Simulate a pre-port manifest: clear the port and persist it back.
+	created.Manifest.OpenCodePort = 0
+	if err := SaveManifest(filepath.Join(created.Path, ManifestFile), created.Manifest); err != nil {
+		t.Fatalf("SaveManifest: %v", err)
+	}
+
+	if _, _, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path}); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	saved, err := LoadManifest(filepath.Join(created.Path, ManifestFile))
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if saved.OpenCodePort < OpenCodePortMin || saved.OpenCodePort > OpenCodePortMax {
+		t.Fatalf("backfilled port = %d, want within [%d, %d]", saved.OpenCodePort, OpenCodePortMin, OpenCodePortMax)
 	}
 }

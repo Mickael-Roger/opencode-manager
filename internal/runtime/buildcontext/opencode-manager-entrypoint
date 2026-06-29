@@ -16,7 +16,7 @@ while true; do
   set -a
   [ -f "$HOME/.env" ] && . "$HOME/.env"
   set +a
-  opencode serve --hostname 127.0.0.1 --port 4096 &
+  opencode serve --hostname 127.0.0.1 --port "${OCM_OPENCODE_PORT:-4096}" &
   child=$!
   wait "$child"
   child=""

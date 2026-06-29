@@ -80,6 +80,37 @@ func TestCreateArgsUserNamespace(t *testing.T) {
 	}
 }
 
+func TestCreateArgsHostNetwork(t *testing.T) {
+	spec := ContainerSpec{
+		Name:      "opencode-manager-demo",
+		ImageName: "opencode-manager/demo:latest",
+		HomeDir:   "/data/demo/home",
+		UID:       501,
+		GID:       20,
+		Command:   []string{"opencode"},
+	}
+
+	// Off by default: no --network flag.
+	if off := strings.Join(createArgs("docker", spec), " "); strings.Contains(off, "--network") {
+		t.Fatalf("create args must not include --network when HostNetwork is false:\n%s", off)
+	}
+
+	// On: shares the host network namespace.
+	spec.HostNetwork = true
+	if on := strings.Join(createArgs("docker", spec), " "); !strings.Contains(on, "--network host") {
+		t.Fatalf("create args missing --network host when HostNetwork is true:\n%s", on)
+	}
+}
+
+func TestEntrypointAndAttachUseConfigurablePort(t *testing.T) {
+	for _, name := range []string{"opencode-manager-entrypoint", "opencode-manager-attach"} {
+		content := readBuildFile(t, name)
+		if !strings.Contains(content, "OCM_OPENCODE_PORT:-4096") {
+			t.Fatalf("%s should read the port from OCM_OPENCODE_PORT (default 4096):\n%s", name, content)
+		}
+	}
+}
+
 func readBuildFile(t *testing.T, name string) string {
 	t.Helper()
 	data, err := buildContextFS.ReadFile("buildcontext/" + name)

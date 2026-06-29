@@ -28,6 +28,24 @@ func TestLoadUsesDefaultsWhenConfigDoesNotExist(t *testing.T) {
 	if cfg.LogLevel != LogLevelWarning {
 		t.Fatalf("LogLevel = %q, want %q", cfg.LogLevel, LogLevelWarning)
 	}
+
+	if cfg.HostNetwork {
+		t.Fatal("HostNetwork should default to false")
+	}
+}
+
+func TestLoadParsesHostNetwork(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("hostNetwork: true\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.HostNetwork {
+		t.Fatal("HostNetwork = false, want true")
+	}
 }
 
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {

@@ -14,20 +14,21 @@
 - [x] Add langage modules category + python
 - [x] Add github, gitlab modules
 - [x] Add a display of token per container -> Miss the cache part
+- [x] Create templates of workspace (modules, ...)
+- [x] Make sure the ci create the github release
+- [x] Add a user documentation (detailled)
+- [x] Add gcp, ovh, scaleway modules
 
-- [/] Create templates of workspace (modules, ...)
-- [/] Make sure the ci create the github release
+- [/] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
 
 - [ ] Update the gif image with the new interface
-- [ ] Add a user documentation (detailled)
 - [ ] Review the module page: remove description and "Add", just the list, then enter
 - [ ] In the readme, add the main features: including modules, templates, ...
-- [ ] Add gcp, ovh, scaleway modules
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [ ] Add a config.yaml edition part in the TUI
-- [ ] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
 - [ ] CLI with more commands
 - [ ] Protect main branch
 - [ ] Not sure: Create a function to create a new workspace by copying an existing one
 - [ ] Add remote kubernetes cluster as backend support
 - [ ] Add a sort feature in the display of workspace (per name, status)
+- [ ] The deletion: Impove OK/Cancel button color contrast + by default the preselect is on Cancel

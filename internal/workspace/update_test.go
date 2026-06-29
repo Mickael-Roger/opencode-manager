@@ -15,7 +15,7 @@ func TestUpdateOpenCodeRunsNpmAndRestarts(t *testing.T) {
 	}}
 
 	l := Lifecycle{driver: fake}
-	version, err := l.UpdateOpenCode(context.Background(), Summary{Manifest: Manifest{ContainerName: "c", HomeDir: t.TempDir()}})
+	version, err := l.UpdateOpenCode(context.Background(), Summary{Manifest: Manifest{ContainerName: "c", HomeDir: t.TempDir(), OpenCodePort: 4096}})
 	if err != nil {
 		t.Fatalf("UpdateOpenCode error: %v", err)
 	}

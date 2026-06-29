@@ -84,6 +84,11 @@ func (r Registry) NewManifest(name string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("check workspace path %q: %w", r.WorkspaceDir(safeName), err)
 	}
 
+	port, err := r.AllocateOpenCodePort()
+	if err != nil {
+		return Manifest{}, err
+	}
+
 	return Manifest{
 		Name:          name,
 		Runtime:       r.cfg.Runtime,
@@ -91,6 +96,7 @@ func (r Registry) NewManifest(name string) (Manifest, error) {
 		Image:         imageConfigFromConfig(r.cfg),
 		ContainerName: "opencode-manager-" + safeName,
 		HomeDir:       filepath.Join(r.WorkspaceDir(safeName), "home"),
+		OpenCodePort:  port,
 		Env:           map[string]string{},
 		Modules:       nil,
 		CreatedAt:     now,

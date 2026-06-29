@@ -169,6 +169,9 @@ type ContainerSpec struct {
 	Env       map[string]string
 	Mounts    []Mount
 	Command   []string
+	// HostNetwork runs the container in the host's network namespace
+	// (`--network host`) instead of an isolated one.
+	HostNetwork bool
 }
 
 // Mount is an additional bind mount layered on top of the workspace home
@@ -362,6 +365,10 @@ func createArgs(binary string, spec ContainerSpec) []string {
 
 	if binary == "podman" {
 		args = append(args, "--userns", "keep-id")
+	}
+
+	if spec.HostNetwork {
+		args = append(args, "--network", "host")
 	}
 
 	for _, mount := range spec.Mounts {

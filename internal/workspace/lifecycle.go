@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,6 +176,22 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	}
 
 	manifest := summary.Manifest
+
+	// Backfill an OpenCode port for workspaces created before per-workspace ports
+	// existed (manifest.OpenCodePort == 0), then persist it so the assignment is
+	// stable across restarts and visible to other workspaces' allocation.
+	if manifest.OpenCodePort == 0 {
+		port, err := l.registry.AllocateOpenCodePort()
+		if err != nil {
+			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+		}
+		manifest.OpenCodePort = port
+		if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
+			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+		}
+		slog.Info("assigned OpenCode port to workspace", "workspace", manifest.Name, "port", port)
+	}
+
 	baseImageName, err := l.resolveBaseImage(ctx, manifest.Image)
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
@@ -208,15 +225,25 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		}
 	}
 
+	// Carry the workspace's manifest env plus the assigned OpenCode port into the
+	// container without mutating the persisted env map. The entrypoint binds the
+	// server to this port and the attach client connects to it.
+	env := make(map[string]string, len(manifest.Env)+1)
+	for k, v := range manifest.Env {
+		env[k] = v
+	}
+	env[OpenCodePortEnv] = strconv.Itoa(manifest.OpenCodePort)
+
 	spec := runtime.ContainerSpec{
-		Name:      manifest.ContainerName,
-		ImageName: manifest.ImageName,
-		HomeDir:   manifest.HomeDir,
-		UID:       uid,
-		GID:       gid,
-		Env:       manifest.Env,
-		Mounts:    mounts,
-		Command:   openCodeServeCommand(),
+		Name:        manifest.ContainerName,
+		ImageName:   manifest.ImageName,
+		HomeDir:     manifest.HomeDir,
+		UID:         uid,
+		GID:         gid,
+		Env:         env,
+		Mounts:      mounts,
+		Command:     openCodeServeCommand(),
+		HostNetwork: l.cfg.HostNetwork,
 	}
 
 	status, err := l.driver.ContainerStatus(ctx, manifest.ContainerName)
@@ -591,8 +618,10 @@ func (l Lifecycle) Shell(ctx context.Context, summary Summary) (tea.Cmd, error) 
 // entrypoint, which sources the per-workspace ~/.env and then runs a persistent,
 // headless OpenCode server. The server keeps the container alive, runs the agent
 // (so work continues while no client is attached), and loads the status-reporter
-// plugin so the dashboard reflects activity server-side. Each workspace container
-// is network-isolated, so binding 127.0.0.1:4096 is private to that container.
+// plugin so the dashboard reflects activity server-side. The server binds the
+// workspace's assigned loopback port (manifest.OpenCodePort, passed in as
+// OCM_OPENCODE_PORT); the port is unique per workspace so the servers do not
+// collide when config.HostNetwork makes containers share the host loopback.
 // Sourcing ~/.env lets module-provided environment variables reach the server
 // and the tools it spawns; bouncing only the server child reloads them without
 // recreating the container.

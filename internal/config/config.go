@@ -53,12 +53,18 @@ func IsManagedBaseImage(name string) bool {
 }
 
 type Config struct {
-	WorkspaceRoot        string          `yaml:"workspaceRoot"`
-	Runtime              string          `yaml:"runtime"`
-	UseLocalOpenCodeAuth bool            `yaml:"useLocalOpenCodeAuth"`
-	LogLevel             string          `yaml:"logLevel"`
-	BaseImage            BaseImageConfig `yaml:"baseImage"`
-	ModuleDirs           []string        `yaml:"moduleDirs"`
+	WorkspaceRoot        string `yaml:"workspaceRoot"`
+	Runtime              string `yaml:"runtime"`
+	UseLocalOpenCodeAuth bool   `yaml:"useLocalOpenCodeAuth"`
+	// HostNetwork shares the host's network namespace with each workspace
+	// container (docker/podman `--network host`) instead of giving it an isolated
+	// one. Off by default. Because every workspace then shares the host loopback,
+	// each workspace's OpenCode server is bound to its own port (see
+	// workspace.Manifest.OpenCodePort) so the servers do not collide.
+	HostNetwork bool            `yaml:"hostNetwork"`
+	LogLevel    string          `yaml:"logLevel"`
+	BaseImage   BaseImageConfig `yaml:"baseImage"`
+	ModuleDirs  []string        `yaml:"moduleDirs"`
 }
 
 type BaseImageConfig struct {

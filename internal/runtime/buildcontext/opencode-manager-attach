@@ -3,7 +3,7 @@
 # attaching runs a TUI client against it over HTTP. Ctrl-C exits only the client,
 # leaving the server running. Wait for the server to listen, then attach to the
 # last session if one exists, otherwise start a fresh session.
-url="http://127.0.0.1:4096"
+url="http://127.0.0.1:${OCM_OPENCODE_PORT:-4096}"
 dir="/home/debian/workspace"
 i=0
 while [ "$i" -lt 150 ]; do

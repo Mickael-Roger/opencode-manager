@@ -13,16 +13,22 @@ import (
 const ManifestFile = "workspace.yaml"
 
 type Manifest struct {
-	Name          string            `yaml:"name"`
-	Runtime       string            `yaml:"runtime"`
-	ImageName     string            `yaml:"imageName"`
-	Image         ImageConfig       `yaml:"image"`
-	ContainerName string            `yaml:"containerName"`
-	HomeDir       string            `yaml:"homeDir"`
-	Env           map[string]string `yaml:"env"`
-	Modules       []ModuleInstance  `yaml:"modules"`
-	CreatedAt     time.Time         `yaml:"createdAt"`
-	UpdatedAt     time.Time         `yaml:"updatedAt"`
+	Name          string      `yaml:"name"`
+	Runtime       string      `yaml:"runtime"`
+	ImageName     string      `yaml:"imageName"`
+	Image         ImageConfig `yaml:"image"`
+	ContainerName string      `yaml:"containerName"`
+	HomeDir       string      `yaml:"homeDir"`
+	// OpenCodePort is the loopback TCP port the workspace's OpenCode server binds
+	// to (and that the attach client connects to). It is assigned a unique value
+	// per workspace so the servers do not collide when config.HostNetwork makes
+	// every container share the host loopback. Zero in manifests written before
+	// this field existed; the lifecycle assigns and persists one on next start.
+	OpenCodePort int               `yaml:"openCodePort,omitempty"`
+	Env          map[string]string `yaml:"env"`
+	Modules      []ModuleInstance  `yaml:"modules"`
+	CreatedAt    time.Time         `yaml:"createdAt"`
+	UpdatedAt    time.Time         `yaml:"updatedAt"`
 }
 
 type ImageConfig struct {

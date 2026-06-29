@@ -168,6 +168,7 @@ Example:
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
+hostNetwork: false
 logLevel: warning
 baseImage:
   name: docker.io/mroger78/ocm-base:latest
@@ -185,6 +186,15 @@ moduleDirs:
 Set `useLocalOpenCodeAuth: true` to mount the host file
 `~/.local/share/opencode/auth.json` read-write into the same path in each
 workspace container. The default `false` keeps auth isolated from the host.
+
+Set `hostNetwork: true` to run each container in the host's network namespace
+(`--network host`) instead of an isolated one, so the agent and its tools can
+reach services on the host loopback. The default `false` keeps each container
+network-isolated. Because every container runs an OpenCode server on the loopback
+interface, each workspace is assigned a unique loopback port (range `4096–4999`,
+recorded as `openCodePort` in `workspace.yaml`) so the servers never collide when
+they share the host loopback. The entrypoint and attach client read this port
+from the `OCM_OPENCODE_PORT` environment variable.
 
 `logLevel` controls how much is written to the log file. It must be one of
 `debug`, `info`, `warning` (default), or `error`. Logs are appended to
