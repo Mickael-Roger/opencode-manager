@@ -1,19 +1,14 @@
 name: git
-version: 2
-description: Configure the git identity (user.name / user.email) and optionally clone repositories into the workspace.
-# Writes ~/.gitconfig and clones any requested repos into the workspace home
-# directory; nothing in ~/.env, so it never bounces the OpenCode server and can
-# be edited while a task is running.
+version: 3
+description: Clone a git repository into the workspace. The git identity (user.name / user.email) is imported from the host automatically when set.
+# Multi-instance: one entry per repository. Each install writes ~/.gitconfig
+# (identity resolved from the host) and clones the repo into the workspace home
+# directory; nothing in ~/.env, so it never bounces the OpenCode server and can be
+# edited while a task is running.
 restartServer: false
+key: repo
 prompts:
-  - name: name
-    label: Git user name
+  - name: repo
+    label: Repository URL (ssh or https)
     type: string
     required: true
-  - name: email
-    label: Git email
-    type: string
-    required: true
-  - name: repos
-    label: Repositories to clone (ssh or https URLs, space- or comma-separated)
-    type: string

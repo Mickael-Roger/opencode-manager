@@ -102,6 +102,45 @@ func TestCreateArgsHostNetwork(t *testing.T) {
 	}
 }
 
+func TestCreateArgsAppendsExtraArgsBeforeImage(t *testing.T) {
+	spec := ContainerSpec{
+		Name:      "opencode-manager-demo",
+		ImageName: "opencode-manager/demo:latest",
+		HomeDir:   "/data/demo/home",
+		UID:       501,
+		GID:       20,
+		Command:   []string{"opencode"},
+		ExtraArgs: []string{"--dns", "1.1.1.1", "--add-host=db:10.0.0.5"},
+	}
+
+	args := createArgs("docker", spec)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--dns 1.1.1.1 --add-host=db:10.0.0.5") {
+		t.Fatalf("create args missing extra args in order:\n%s", joined)
+	}
+
+	// Every extra arg must appear before the image name (i.e. in the options
+	// section), and the image+command stay last.
+	imageIdx := indexOf(args, "opencode-manager/demo:latest")
+	for _, extra := range spec.ExtraArgs {
+		if i := indexOf(args, extra); i < 0 || i > imageIdx {
+			t.Fatalf("extra arg %q must come before the image (image at %d, arg at %d):\n%s", extra, imageIdx, i, joined)
+		}
+	}
+	if args[len(args)-1] != "opencode" || args[len(args)-2] != "opencode-manager/demo:latest" {
+		t.Fatalf("expected image then command at end of args, got: %v", args)
+	}
+}
+
+func indexOf(args []string, want string) int {
+	for i, a := range args {
+		if a == want {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestEntrypointAndAttachUseConfigurablePort(t *testing.T) {
 	for _, name := range []string{"opencode-manager-entrypoint", "opencode-manager-attach"} {
 		content := readBuildFile(t, name)

@@ -339,3 +339,63 @@ func TestEnvVarName(t *testing.T) {
 		t.Fatalf("EnvVarName = %q, want OCM_ACCESS_KEY", got)
 	}
 }
+
+// TestBuiltinModulesAreValid loads every shipped built-in module from the repo's
+// modules/ directory so a malformed module.yml or a non-executable script is
+// caught here rather than only when a workspace tries to install it.
+func TestBuiltinModulesAreValid(t *testing.T) {
+	root := filepath.Join("..", "..", "modules")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("built-in modules directory not found: %v", err)
+	}
+
+	mods, err := Catalog([]string{root})
+	if err != nil {
+		t.Fatalf("Catalog of built-in modules: %v", err)
+	}
+	if len(mods) == 0 {
+		t.Fatal("expected built-in modules, found none")
+	}
+
+	var git *Module
+	for i := range mods {
+		if mods[i].Name == "git" {
+			git = &mods[i]
+		}
+	}
+	if git == nil {
+		t.Fatal("built-in git module not found")
+	}
+	// git is now a multi-instance module: one entry per repository, keyed on the
+	// repo URL, with the identity imported from the host via a resolve hook.
+	if !git.Multi() || git.Key != "repo" {
+		t.Fatalf("git module should be multi-instance keyed on repo, got Key=%q", git.Key)
+	}
+	if !git.HasResolveHook() {
+		t.Fatal("git module should ship a host-side resolve hook for the identity")
+	}
+	if git.PromptByName("name") != nil || git.PromptByName("email") != nil {
+		t.Fatal("git module should no longer prompt for name/email (imported from host)")
+	}
+
+	var kube *Module
+	for i := range mods {
+		if mods[i].Name == "kubernetes" {
+			kube = &mods[i]
+		}
+	}
+	if kube == nil {
+		t.Fatal("built-in kubernetes module not found")
+	}
+	// kubernetes is now multi-instance: one entry per kube context, imported from
+	// the host via the key prompt's optionsCommand and a resolve hook.
+	if !kube.Multi() || kube.Key != "context" {
+		t.Fatalf("kubernetes module should be multi-instance keyed on context, got Key=%q", kube.Key)
+	}
+	if !kube.HasResolveHook() {
+		t.Fatal("kubernetes module should ship a host-side resolve hook")
+	}
+	if p := kube.PromptByName("context"); p == nil || p.OptionsCommand == "" {
+		t.Fatal("kubernetes context prompt should expose an optionsCommand for the import picker")
+	}
+}

@@ -33,7 +33,7 @@ the form.
 
 | Module | What it does | Multi-instance |
 | --- | --- | --- |
-| **kubernetes** | Installs `kubectl` and copies selected host kube contexts into the workspace `~/.kube/config`. | Selects one or many contexts |
+| **kubernetes** | Imports host kube contexts into the workspace `~/.kube/config` (one entry per context). `kubectl` is installed when the first context is added. | Yes (per context) |
 
 ### language
 
@@ -52,7 +52,7 @@ running). The `c` module only installs system packages, so it does not.
 
 | Module | What it does | Multi-instance |
 | --- | --- | --- |
-| **git** | Configures the git identity (`user.name` / `user.email`) and optionally clones repositories into the workspace. | No |
+| **git** | Clones a git repository into the workspace (one entry per repo). The git identity (`user.name` / `user.email`) is imported from your host automatically. | Yes (per repo) |
 | **github** | Installs the GitHub CLI (`gh`) and optionally imports this host's `gh` auth (or takes a token). | No |
 | **gitlab** | Installs the GitLab CLI (`glab`) and optionally imports this host's `glab` auth (or takes a token). | No |
 | **ssh** | Adds an SSH key and host alias (written to `~/.ssh`) for this workspace. | Yes (per host) |
@@ -65,12 +65,21 @@ the matching accounts found on your host:
 
 - **aws** / **gcp** / **outscale** / **ovh** / **scaleway** — host CLI profiles
 - **ssh** — host aliases from `~/.ssh/config`
-- **kubernetes** — host kube contexts (selected, not multi-installed)
+- **kubernetes** — host kube contexts from `~/.kube/config` (one instance per context)
 
 Select one or more to import as separate instances, or choose **Add manually…**
 to fill in an account that isn't on your host. Imported instances store only the
 account name in the workspace manifest; their secrets are read from the host at
 install time and never persisted.
+
+The **git** module is also multi-instance (one entry per repository) but has no
+host list to import from, so its add flow goes straight to a form where you enter
+the repository URL (ssh or https). Each repo is added and removed independently;
+removing an entry stops the manager from re-cloning it but leaves the cloned
+working tree on disk, so uncommitted work is never lost. The git identity is
+imported from your host's global `git config` (`user.name` / `user.email`) on
+every install — nothing to type, and nothing is set when the host has no
+identity.
 
 ## Server restart behaviour
 

@@ -169,6 +169,9 @@ workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
 hostNetwork: false
+runtimeArgs:
+  - --dns
+  - 1.1.1.1
 logLevel: warning
 baseImage:
   name: docker.io/mroger78/ocm-base:latest
@@ -195,6 +198,14 @@ interface, each workspace is assigned a unique loopback port (range `4096–4999
 recorded as `openCodePort` in `workspace.yaml`) so the servers never collide when
 they share the host loopback. The entrypoint and attach client read this port
 from the `OCM_OPENCODE_PORT` environment variable.
+
+`runtimeArgs` is an optional list of extra flags passed verbatim to the
+`docker`/`podman create` command for every workspace container, inserted just
+before the image name (`ContainerSpec.ExtraArgs`, appended last in the options
+section of `createArgs`). It is an escape hatch for runtime options the manager
+does not model natively (e.g. `--dns`, `--add-host`, `--device`, extra
+`--volume`s); values are not validated, so a flag the runtime rejects surfaces as
+a container-create error.
 
 `logLevel` controls how much is written to the log file. It must be one of
 `debug`, `info`, `warning` (default), or `error`. Logs are appended to

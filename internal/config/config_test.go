@@ -48,6 +48,36 @@ func TestLoadParsesHostNetwork(t *testing.T) {
 	}
 }
 
+func TestLoadParsesRuntimeArgs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("runtimeArgs:\n  - --dns\n  - 1.1.1.1\n  - --add-host=db:10.0.0.5\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	want := []string{"--dns", "1.1.1.1", "--add-host=db:10.0.0.5"}
+	if len(cfg.RuntimeArgs) != len(want) {
+		t.Fatalf("RuntimeArgs = %#v, want %#v", cfg.RuntimeArgs, want)
+	}
+	for i, w := range want {
+		if cfg.RuntimeArgs[i] != w {
+			t.Fatalf("RuntimeArgs[%d] = %q, want %q", i, cfg.RuntimeArgs[i], w)
+		}
+	}
+}
+
+func TestLoadRejectsEmptyRuntimeArg(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("runtimeArgs:\n  - --dns\n  - \"\"\n"))
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject an empty runtimeArgs entry")
+	}
+}
+
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

@@ -1072,9 +1072,6 @@ func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int, in
 	}
 
 	left := rowIndent + box + " " + e.label
-	if !e.mod.Multi() && e.mod.Description != "" {
-		left += "  " + e.mod.Description
-	}
 
 	badge, badgeColor := editStateBadge(e)
 	badgeW := len([]rune(badge))
@@ -1095,8 +1092,7 @@ func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int, in
 		return cursorStyle.Render(" " + fit(row, contentWidth) + " ")
 	}
 
-	// Recolor the checkbox glyph and (for singletons) the trailing description
-	// without disturbing the fixed column widths.
+	// Recolor the checkbox glyph without disturbing the fixed column widths.
 	colored := colorizeEditLeft(leftFitted, len([]rune(rowIndent)), e)
 	row := colored
 	if badge != "" {

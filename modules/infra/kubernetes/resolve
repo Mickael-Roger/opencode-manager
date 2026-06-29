@@ -1,33 +1,15 @@
 #!/bin/sh
-# Host-side resolve hook: turn the selected context names ($OCM_CONTEXTS,
-# comma-separated) into a self-contained kubeconfig and emit it as a base64
-# value for the container install script. Runs on the host, where ~/.kube/config
-# lives; the workspace container never sees the full host config. Only the
-# selected contexts are extracted (--minify) with their credentials inlined
-# (--flatten), then merged into one document. Prints "kubeconfig=<base64>".
+# Host-side resolve hook: turn the selected context name ($OCM_CONTEXT) into a
+# self-contained, single-context kubeconfig and emit it as a base64 value for the
+# container install script. Runs on the host, where ~/.kube/config lives; the
+# workspace container never sees the full host config. The context is extracted
+# with its credentials inlined (--minify --flatten). Prints "kubeconfig=<base64>".
 set -e
 
-[ -n "$OCM_CONTEXTS" ] || exit 0
+[ -n "$OCM_CONTEXT" ] || exit 0
 command -v kubectl >/dev/null 2>&1 || exit 0
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+cfg="$(kubectl config view --minify --flatten --context "$OCM_CONTEXT" 2>/dev/null)" || exit 0
+[ -n "$cfg" ] || exit 0
 
-list=""
-IFS=','
-for ctx in $OCM_CONTEXTS; do
-  # Trim surrounding whitespace.
-  ctx="$(printf '%s' "$ctx" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  [ -n "$ctx" ] || continue
-  safe="$(printf '%s' "$ctx" | tr -c 'A-Za-z0-9._-' '_')"
-  part="$tmpdir/$safe"
-  if kubectl config view --minify --flatten --context "$ctx" >"$part" 2>/dev/null; then
-    if [ -z "$list" ]; then list="$part"; else list="$list:$part"; fi
-  fi
-done
-unset IFS
-
-[ -n "$list" ] || exit 0
-
-merged="$(KUBECONFIG="$list" kubectl config view --flatten)"
-printf 'kubeconfig=%s\n' "$(printf '%s' "$merged" | base64 | tr -d '\n')"
+printf 'kubeconfig=%s\n' "$(printf '%s' "$cfg" | base64 | tr -d '\n')"

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
@@ -170,6 +171,29 @@ func updateTestModel(activity workspace.Activity) model {
 		statuses: map[string]workspace.Status{
 			"app": {Activity: activity},
 		},
+	}
+}
+
+// requestDelete must open the confirmation focused on Cancel (dialogFocus 1), so
+// an accidental Enter does not delete the workspace.
+func TestRequestDeleteDefaultsToCancel(t *testing.T) {
+	m := model{workspaces: []workspace.Summary{{Manifest: workspace.Manifest{Name: "app"}}}}
+
+	m.requestDelete()
+	if !m.confirmDelete {
+		t.Fatal("requestDelete should open the confirmation dialog")
+	}
+	if m.dialogFocus != 1 {
+		t.Fatalf("dialogFocus = %d, want 1 (Cancel)", m.dialogFocus)
+	}
+
+	// Enter on the default focus cancels rather than deletes.
+	updated, _ := m.updateDeleteConfirmation(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.(model).confirmDelete {
+		t.Fatal("Enter on the default (Cancel) should dismiss the dialog")
+	}
+	if updated.(model).message != "Delete cancelled." {
+		t.Fatalf("message = %q, want %q", updated.(model).message, "Delete cancelled.")
 	}
 }
 

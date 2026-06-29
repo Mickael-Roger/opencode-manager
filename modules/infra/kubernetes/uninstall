@@ -1,8 +1,33 @@
 #!/bin/sh
-# Removes the workspace kubeconfig. kubectl itself is left installed, matching
-# how other modules leave system packages in place.
+# Removes a single kube context (and its now-unreferenced cluster/user) from the
+# workspace ~/.kube/config, leaving any other imported contexts intact. kubectl
+# itself is left installed, matching how other modules leave system packages in
+# place. Best-effort: a missing config is not an error.
 set -e
 
-rm -f "$HOME/.kube/config"
+ctx="$OCM_CONTEXT"
+cfg="$HOME/.kube/config"
+[ -n "$ctx" ] || exit 0
+[ -f "$cfg" ] || exit 0
 
-echo "kubernetes kubeconfig removed"
+# Without kubectl we cannot edit the config surgically; if this is the only place
+# the config came from, just drop the file.
+command -v kubectl >/dev/null 2>&1 || { rm -f "$cfg"; echo "kubernetes config removed"; exit 0; }
+
+cluster="$(kubectl --kubeconfig "$cfg" config view -o "jsonpath={.contexts[?(@.name=='$ctx')].context.cluster}" 2>/dev/null || true)"
+user="$(kubectl --kubeconfig "$cfg" config view -o "jsonpath={.contexts[?(@.name=='$ctx')].context.user}" 2>/dev/null || true)"
+
+kubectl --kubeconfig "$cfg" config delete-context "$ctx" >/dev/null 2>&1 || true
+
+# Drop the cluster/user only when no remaining context references them, so a
+# context that shares a cluster or user with another import is not broken.
+if [ -n "$cluster" ]; then
+  others="$(kubectl --kubeconfig "$cfg" config view -o "jsonpath={.contexts[?(@.context.cluster=='$cluster')].name}" 2>/dev/null || true)"
+  [ -n "$others" ] || kubectl --kubeconfig "$cfg" config delete-cluster "$cluster" >/dev/null 2>&1 || true
+fi
+if [ -n "$user" ]; then
+  others="$(kubectl --kubeconfig "$cfg" config view -o "jsonpath={.contexts[?(@.context.user=='$user')].name}" 2>/dev/null || true)"
+  [ -n "$others" ] || kubectl --kubeconfig "$cfg" config unset "users.$user" >/dev/null 2>&1 || true
+fi
+
+echo "kubernetes context removed: $ctx"

@@ -16,6 +16,9 @@ workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
 hostNetwork: false
+runtimeArgs:
+  - --dns
+  - 1.1.1.1
 logLevel: warning
 baseImage:
   name: docker.io/mroger78/ocm-base:latest
@@ -71,6 +74,30 @@ option never requires a migration.
 > container can reach (and bind) anything on the host's network interfaces. It
 > also has limited support on Docker Desktop (macOS/Windows); on Linux with
 > docker/podman it works as expected.
+
+### `runtimeArgs`
+
+Optional list of extra flags passed **verbatim** to the `docker`/`podman create`
+command used to create each workspace container. They are inserted in the options
+section, just before the image name, so they can extend (or override) anything the
+manager sets itself. This is an escape hatch for runtime options the manager does
+not model natively — no code change required. For example:
+
+```yaml
+runtimeArgs:
+  - --dns
+  - 1.1.1.1
+  - --add-host=db:10.0.0.5
+  - --device=/dev/fuse
+```
+
+Each entry is one argument token, exactly as you would type it on the command
+line: a flag and its value are **separate list items** (`- --dns` then
+`- 1.1.1.1`), or combined with `=` in a single item (`- --add-host=db:10.0.0.5`).
+The list is applied to every workspace; an empty entry is rejected.
+
+> **Note:** values are passed through untouched and are not validated by the
+> manager — a flag your runtime rejects will surface as a container-create error.
 
 ### `logLevel`
 

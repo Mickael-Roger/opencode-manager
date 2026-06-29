@@ -172,6 +172,10 @@ type ContainerSpec struct {
 	// HostNetwork runs the container in the host's network namespace
 	// (`--network host`) instead of an isolated one.
 	HostNetwork bool
+	// ExtraArgs are extra flags passed verbatim to `create`, inserted just before
+	// the image name. They come from config.RuntimeArgs and are an escape hatch for
+	// options the manager does not model natively.
+	ExtraArgs []string
 }
 
 // Mount is an additional bind mount layered on top of the workspace home
@@ -382,6 +386,10 @@ func createArgs(binary string, spec ContainerSpec) []string {
 	for key, value := range spec.Env {
 		args = append(args, "--env", key+"="+value)
 	}
+
+	// User-supplied extras last in the options section (just before the image), so
+	// they can extend or override anything the manager set above.
+	args = append(args, spec.ExtraArgs...)
 
 	args = append(args, spec.ImageName)
 	args = append(args, spec.Command...)

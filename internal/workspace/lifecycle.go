@@ -244,6 +244,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		Mounts:      mounts,
 		Command:     openCodeServeCommand(),
 		HostNetwork: l.cfg.HostNetwork,
+		ExtraArgs:   l.cfg.RuntimeArgs,
 	}
 
 	status, err := l.driver.ContainerStatus(ctx, manifest.ContainerName)

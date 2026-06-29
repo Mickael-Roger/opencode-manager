@@ -20,6 +20,10 @@
 - [x] Add gcp, ovh, scaleway modules
 
 - [/] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
+- [/] Git module: remove "value" in field; Retreive the user and user email or do not set it; Add repo is a different stuff
+- [/] Module: remove description + for kubernetes: add entries
+- [/] Add a podman/docker extra option in config.yml
+- [/] The deletion: Impove OK/Cancel button color contrast + by default the preselect is on Cancel
 
 - [ ] Update the gif image with the new interface
 - [ ] Review the module page: remove description and "Add", just the list, then enter
@@ -31,4 +35,3 @@
 - [ ] Not sure: Create a function to create a new workspace by copying an existing one
 - [ ] Add remote kubernetes cluster as backend support
 - [ ] Add a sort feature in the display of workspace (per name, status)
-- [ ] The deletion: Impove OK/Cancel button color contrast + by default the preselect is on Cancel

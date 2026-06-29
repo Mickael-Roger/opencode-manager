@@ -278,6 +278,14 @@ var (
 	dialogButton    = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#483d8b")).Padding(0, 2) // darkslateblue
 	dialogButtonHot = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colBorder).Bold(true).Padding(0, 2)      // dodgerblue focus
 	dialogButtonOff = lipgloss.NewStyle().Foreground(lipgloss.Color("#777777")).Background(lipgloss.Color("#333333")).Padding(0, 2) // disabled/greyed
+
+	// Confirm-delete buttons: a destructive OK (red) versus a safe Cancel (green),
+	// so the two read as clearly different and the dangerous choice stands out. The
+	// focused button is the bright, bold variant; the unfocused one is dimmed.
+	dialogButtonDanger    = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#5f0000")).Padding(0, 2) // dim red
+	dialogButtonDangerHot = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colError).Bold(true).Padding(0, 2)       // bright red focus
+	dialogButtonSafe      = lipgloss.NewStyle().Foreground(lipgloss.Color("#cccccc")).Background(lipgloss.Color("#2f4f4f")).Padding(0, 2) // dim slate
+	dialogButtonSafeHot   = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colRunning).Bold(true).Padding(0, 2)     // bright green focus
 )
 
 var logoLines = []string{
@@ -1822,7 +1830,7 @@ func (m model) renderDeleteConfirmation() string {
 		dialogText.Render("Delete "+noun+" ")+dialogLabel.Render(name)+dialogText.Render("?"),
 		dialogText.Render("This action cannot be undone."),
 		"",
-		dialogButtons([]string{"OK", "Cancel"}, m.dialogFocus),
+		deleteDialogButtons(m.dialogFocus),
 	)
 
 	return k9sDialog("Confirm Delete", content, colBorder)
@@ -1924,19 +1932,21 @@ func k9sDialog(title, content string, border lipgloss.Color) string {
 	return b.String()
 }
 
-// dialogButtons renders k9s-style buttons; the button at focused index is
-// highlighted with the focus colors.
-func dialogButtons(labels []string, focused int) string {
-	parts := make([]string, len(labels))
-	for i, label := range labels {
-		if i == focused {
-			parts[i] = dialogButtonHot.Render(label)
-		} else {
-			parts[i] = dialogButton.Render(label)
-		}
+// deleteDialogButtons renders the confirm-delete buttons with strong contrast: a
+// red, destructive OK and a green/neutral Cancel, so the two are clearly distinct
+// and the dangerous choice stands out. The focused button (index 0 = OK, 1 =
+// Cancel) is the bright, bold variant.
+func deleteDialogButtons(focused int) string {
+	ok := dialogButtonDanger.Render("OK")
+	if focused == 0 {
+		ok = dialogButtonDangerHot.Render("OK")
+	}
+	cancel := dialogButtonSafe.Render("Cancel")
+	if focused == 1 {
+		cancel = dialogButtonSafeHot.Render("Cancel")
 	}
 
-	return strings.Join(parts, "  ")
+	return ok + "  " + cancel
 }
 
 func overlayCentered(base string, popup string, width int, height int) string {
@@ -2102,7 +2112,9 @@ func (m *model) requestDelete() {
 		return
 	}
 
-	m.dialogFocus = 0
+	// Default to Cancel: deleting is destructive, so an accidental Enter on the
+	// confirmation should not delete.
+	m.dialogFocus = 1
 	m.confirmDelete = true
 }
 

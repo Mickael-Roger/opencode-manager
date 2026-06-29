@@ -61,7 +61,12 @@ type Config struct {
 	// one. Off by default. Because every workspace then shares the host loopback,
 	// each workspace's OpenCode server is bound to its own port (see
 	// workspace.Manifest.OpenCodePort) so the servers do not collide.
-	HostNetwork bool            `yaml:"hostNetwork"`
+	HostNetwork bool `yaml:"hostNetwork"`
+	// RuntimeArgs are extra flags passed verbatim to the `docker`/`podman create`
+	// command for every workspace container, inserted just before the image name.
+	// Optional escape hatch for options the manager does not model natively (e.g.
+	// `--dns`, `--add-host`, `--device`, extra `--volume`s) without code changes.
+	RuntimeArgs []string        `yaml:"runtimeArgs"`
 	LogLevel    string          `yaml:"logLevel"`
 	BaseImage   BaseImageConfig `yaml:"baseImage"`
 	ModuleDirs  []string        `yaml:"moduleDirs"`
@@ -258,6 +263,12 @@ func (c Config) Validate() error {
 	for _, command := range c.BaseImage.Commands {
 		if command == "" {
 			return errors.New("baseImage.commands cannot contain empty commands")
+		}
+	}
+
+	for _, arg := range c.RuntimeArgs {
+		if arg == "" {
+			return errors.New("runtimeArgs cannot contain empty arguments")
 		}
 	}
 

@@ -1,6 +1,13 @@
 #!/bin/sh
+# Removing a repo entry only stops the manager from re-cloning it when the
+# container is recreated; the cloned working tree is left in place so uncommitted
+# or unpushed work is never destroyed. Delete the directory by hand if you want it
+# gone.
+set -e
 
-git config --global --unset user.name 2>/dev/null || true
-git config --global --unset user.email 2>/dev/null || true
-
-echo "git identity removed"
+if [ -n "$OCM_REPO" ]; then
+  name="$(basename "$OCM_REPO" .git)"
+  echo "git repo '$name' unregistered (left on disk at ~/$name)"
+else
+  echo "git identity left in place"
+fi

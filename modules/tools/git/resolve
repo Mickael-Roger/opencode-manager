@@ -1,0 +1,19 @@
+#!/bin/sh
+# Host-side resolve hook: emit the host's global git identity (user.name /
+# user.email) as install values so the workspace is configured with the same
+# identity as the host, without the user typing it. A value the host has not set
+# is simply not emitted, leaving that identity field unset in the container (git
+# then falls back to its own behaviour). The identity is pulled from the host on
+# every install/reconcile and never persisted to the manifest.
+#
+# Runs on the host (where ~/.gitconfig lives) before the container install.
+set -e
+
+command -v git >/dev/null 2>&1 || exit 0
+
+name="$(git config --global user.name 2>/dev/null || true)"
+email="$(git config --global user.email 2>/dev/null || true)"
+
+[ -n "$name" ] && printf 'name=%s\n' "$name"
+[ -n "$email" ] && printf 'email=%s\n' "$email"
+exit 0
