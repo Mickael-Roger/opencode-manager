@@ -270,7 +270,6 @@ var (
 	editCategoryStyle = lipgloss.NewStyle().Foreground(colFilter).Bold(true)
 	editGroupStyle    = lipgloss.NewStyle().Foreground(colTitle).Bold(true)
 	editAddStyle      = lipgloss.NewStyle().Foreground(colInfoKey)
-	editDescStyle     = lipgloss.NewStyle().Foreground(colMuted).Italic(true)
 
 	// k9s dialog ("Dialog") skin.
 	dialogText      = lipgloss.NewStyle().Foreground(colBody)                                                                       // cadetblue

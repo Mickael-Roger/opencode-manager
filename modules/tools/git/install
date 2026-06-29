@@ -58,6 +58,14 @@ if [ -e "$dest" ]; then
   exit 0
 fi
 
-is_ssh_url "$OCM_REPO" && ensure_ssh_client
-git clone "$OCM_REPO" "$dest"
+if is_ssh_url "$OCM_REPO"; then
+  ensure_ssh_client
+  # Auto-accept the host key on first contact so an SSH clone never hangs on the
+  # interactive "authenticity of host ... can't be established" prompt. accept-new
+  # records an unknown key in ~/.ssh/known_hosts but still refuses a *changed* key,
+  # so it does not blindly trust a key swap.
+  GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone "$OCM_REPO" "$dest"
+else
+  git clone "$OCM_REPO" "$dest"
+fi
 echo "git repo cloned: $OCM_REPO -> $dest"

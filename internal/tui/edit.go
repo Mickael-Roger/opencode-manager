@@ -1030,22 +1030,10 @@ func (m model) renderEditCategoryHeader(e editEntry, selectedRow bool, contentWi
 }
 
 // renderEditGroupHeader renders the section heading for a multi-instance module:
-// an accented name followed by its dimmed description, indented under its category.
+// the accented module name, indented under its category.
 func (m model) renderEditGroupHeader(mod module.Module, contentWidth int, indent string) string {
 	head := indent + "▸ " + mod.Name
-	full := head
-	if mod.Description != "" {
-		full += "  " + mod.Description
-	}
-	fitted := []rune(fit(full, contentWidth))
-
-	n := len([]rune(head))
-	if n > len(fitted) {
-		n = len(fitted)
-	}
-	name := editGroupStyle.Render(string(fitted[:n]))
-	desc := editDescStyle.Render(string(fitted[n:]))
-	return " " + name + desc + " "
+	return " " + editGroupStyle.Render(fit(head, contentWidth)) + " "
 }
 
 func (m model) renderEditRow(e editEntry, selectedRow bool, contentWidth int, indent string) string {
@@ -1153,11 +1141,9 @@ func (m model) renderEditPrompt() string {
 	}
 	shown := dialogLabel.Render(display) + "▏"
 	if m.editPromptInput == "" {
-		placeholder := "value"
-		if cur.Default != "" {
-			placeholder = cur.Default
-		}
-		shown = mutedStyle.Render(placeholder) + "▏"
+		// Empty field: show the prompt's default as a muted hint, or nothing when
+		// there is no default (rather than a literal "value" placeholder).
+		shown = mutedStyle.Render(cur.Default) + "▏"
 	}
 
 	field := lipgloss.NewStyle().
@@ -1285,11 +1271,9 @@ func (m model) renderEditForm() string {
 		focused := i == m.editFormCursor
 		var field string
 		if display == "" {
-			placeholder := "value"
-			if p.Default != "" {
-				placeholder = p.Default
-			}
-			field = mutedStyle.Render(placeholder)
+			// Empty field: show the prompt's default as a muted hint, or nothing
+			// when there is no default (rather than a literal "value" placeholder).
+			field = mutedStyle.Render(p.Default)
 		} else {
 			field = dialogLabel.Render(display)
 		}
