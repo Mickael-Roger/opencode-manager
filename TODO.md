@@ -24,8 +24,11 @@
 - [/] Git module: remove "value" in field; Retreive the user and user email or do not set it; Add repo is a different stuff
 - [/] Module: remove description + for kubernetes: add entries
 - [/] Bug: It seems only one module is installed when multiple is added
+- [/] Bug in description modules list (only one module is displayed)
 
-- [ ] Bug in description modules list (only one module is displayed)
+- [ ] Bug in opencode.json. It is mounted has 100000 with podman
+
+- [ ] create an image for each template: This way it will be faster to create from template
 - [ ] Update the gif image with the new interface
 - [ ] Review the module page: remove description and "Add", just the list, then enter
 - [ ] In the readme, add the main features: including modules, templates, ...

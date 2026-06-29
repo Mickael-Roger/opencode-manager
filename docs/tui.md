@@ -80,9 +80,12 @@ plus an **Add manually…** option:
 
 ### Create (`c`)
 
-Prompts for a name, then — if you have templates — an optional **Pick Template**
-step. Choose a template to start with its modules pre-installed, or *None* to
-start empty.
+Opens the **New Workspace** dialog. Type a name; if you have templates, a
+**Template (optional)** selector appears under the name — press `Tab` to focus it
+and `←`/`→` to choose a template (or *None*). Choosing a template starts the
+workspace with its modules pre-installed. `Tab`/`Shift+Tab` (or `↑`/`↓`) move
+between the name, selector, and the OK/Cancel buttons; `Enter` creates, `Esc`
+cancels.
 
 ## Filtering
 

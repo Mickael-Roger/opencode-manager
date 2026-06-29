@@ -49,7 +49,8 @@ On first run the base image is pulled or built. When it is ready you land on the
 ## 4. Create a workspace
 
 Press `c` (or type `:create`). Name the workspace; if you already have
-[templates](templates.md), you'll get an optional **Pick Template** step.
+[templates](templates.md), an optional template selector appears under the name
+(`Tab` to focus it, `←`/`→` to choose, or leave it on *None*).
 
 ![create](assets/ocm-create.png)
 

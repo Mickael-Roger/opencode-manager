@@ -174,6 +174,73 @@ func updateTestModel(activity workspace.Activity) model {
 	}
 }
 
+func TestCreateFocusOrderSkipsTemplateWhenNone(t *testing.T) {
+	m := model{}
+	if got := m.createFocusOrder(); len(got) != 3 {
+		t.Fatalf("focus order without templates = %v, want 3 elements (name, OK, cancel)", got)
+	}
+
+	m.createTemplates = []workspace.Template{{Name: "a"}}
+	if got := m.createFocusOrder(); len(got) != 4 {
+		t.Fatalf("focus order with templates = %v, want 4 elements", got)
+	}
+}
+
+func TestMoveCreateFocus(t *testing.T) {
+	// Without templates, Tab from the name field skips straight to OK.
+	m := model{createFocus: createFocusName}
+	m.moveCreateFocus(1)
+	if m.createFocus != createFocusOK {
+		t.Fatalf("focus after move (no templates) = %d, want OK (%d)", m.createFocus, createFocusOK)
+	}
+	m.moveCreateFocus(-1)
+	if m.createFocus != createFocusName {
+		t.Fatalf("focus after move back = %d, want Name", m.createFocus)
+	}
+
+	// With templates, the selector sits between name and OK.
+	m = model{createFocus: createFocusName, createTemplates: []workspace.Template{{Name: "a"}}}
+	m.moveCreateFocus(1)
+	if m.createFocus != createFocusTemplate {
+		t.Fatalf("focus after move (with templates) = %d, want Template (%d)", m.createFocus, createFocusTemplate)
+	}
+
+	// Wrapping: previous from Name lands on the last element (Cancel).
+	m.createFocus = createFocusName
+	m.moveCreateFocus(-1)
+	if m.createFocus != createFocusCancel {
+		t.Fatalf("focus wrapping backwards = %d, want Cancel", m.createFocus)
+	}
+}
+
+func TestCycleCreateTemplate(t *testing.T) {
+	m := model{createTemplates: []workspace.Template{{Name: "a"}, {Name: "b"}}}
+
+	if m.selectedCreateTemplate() != nil {
+		t.Fatal("position 0 must mean None (nil template)")
+	}
+
+	m.cycleCreateTemplate(1)
+	if got := m.selectedCreateTemplate(); got == nil || got.Name != "a" {
+		t.Fatalf("after one step = %+v, want template a", got)
+	}
+
+	m.cycleCreateTemplate(1)
+	if got := m.selectedCreateTemplate(); got == nil || got.Name != "b" {
+		t.Fatalf("after two steps = %+v, want template b", got)
+	}
+
+	m.cycleCreateTemplate(1) // clamp at the last template
+	if got := m.selectedCreateTemplate(); got == nil || got.Name != "b" {
+		t.Fatalf("past the end should clamp to b, got %+v", got)
+	}
+
+	m.cycleCreateTemplate(-5) // clamp back to None
+	if m.selectedCreateTemplate() != nil {
+		t.Fatal("below zero should clamp to None (nil)")
+	}
+}
+
 // requestDelete must open the confirmation focused on Cancel (dialogFocus 1), so
 // an accidental Enter does not delete the workspace.
 func TestRequestDeleteDefaultsToCancel(t *testing.T) {

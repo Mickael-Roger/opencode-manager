@@ -85,14 +85,14 @@ type model struct {
 	templateCreateMode bool
 	templateCreateName string
 
-	// create-workspace template picker: the optional "Pick Template" step shown
-	// after the name dialog when at least one template exists. createPendingName
-	// carries the entered workspace name into the picker; createTemplatePos == 0
-	// means "no template".
-	createPicking     bool
-	createPendingName string
+	// New Workspace dialog template selector: createTemplates are the templates
+	// available to optionally seed the workspace, shown as an inline selector under
+	// the name field. createTemplatePos == 0 means "no template"; i means
+	// createTemplates[i-1]. createFocus tracks which dialog element has focus (see
+	// the createFocus* constants).
 	createTemplates   []workspace.Template
 	createTemplatePos int
+	createFocus       int
 
 	// installing holds workspaces whose module install/uninstall job is still
 	// running. Interactive container access (attach/shell) is frozen for these
@@ -656,9 +656,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirmDelete {
 		return m.updateDeleteConfirmation(msg)
 	}
-	if m.createPicking {
-		return m.updateCreatePick(msg)
-	}
 	if m.createMode {
 		return m.updateCreate(msg)
 	}
@@ -828,39 +825,120 @@ func (m model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// Focusable elements of the New Workspace dialog, in tab order. The template
+// element is skipped when no templates exist (see createFocusOrder).
+const (
+	createFocusName = iota
+	createFocusTemplate
+	createFocusOK
+	createFocusCancel
+)
+
+// createFocusOrder is the cycle of focusable elements for the current dialog
+// state: the template selector is included only when templates are available.
+func (m model) createFocusOrder() []int {
+	if len(m.createTemplates) > 0 {
+		return []int{createFocusName, createFocusTemplate, createFocusOK, createFocusCancel}
+	}
+	return []int{createFocusName, createFocusOK, createFocusCancel}
+}
+
+// moveCreateFocus advances the dialog focus by delta (+1 next, -1 previous),
+// wrapping around and skipping elements not in the current order.
+func (m *model) moveCreateFocus(delta int) {
+	order := m.createFocusOrder()
+	cur := 0
+	for i, f := range order {
+		if f == m.createFocus {
+			cur = i
+			break
+		}
+	}
+	next := (cur + delta + len(order)) % len(order)
+	m.createFocus = order[next]
+}
+
+// cycleCreateTemplate moves the inline template selection by delta, clamped to
+// [0, len(createTemplates)] where 0 is "None".
+func (m *model) cycleCreateTemplate(delta int) {
+	pos := m.createTemplatePos + delta
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(m.createTemplates) {
+		pos = len(m.createTemplates)
+	}
+	m.createTemplatePos = pos
+}
+
 func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc":
-		m.createMode = false
-		m.createName = ""
-		m.message = "Create cancelled."
-	case "tab", "shift+tab":
-		m.dialogFocus = (m.dialogFocus + 1) % 2
+		m.cancelCreate()
+		return m, nil
+	case "tab", "down":
+		m.moveCreateFocus(1)
+		return m, nil
+	case "shift+tab", "up":
+		m.moveCreateFocus(-1)
+		return m, nil
+	case "left":
+		if m.createFocus == createFocusTemplate {
+			m.cycleCreateTemplate(-1)
+		}
+		return m, nil
+	case "right":
+		if m.createFocus == createFocusTemplate {
+			m.cycleCreateTemplate(1)
+		}
+		return m, nil
 	case "enter":
-		if m.dialogFocus == 1 {
-			m.createMode = false
-			m.createName = ""
-			m.message = "Create cancelled."
+		if m.createFocus == createFocusCancel {
+			m.cancelCreate()
 			return m, nil
 		}
-		// OK is disabled while the name is invalid; ignore Enter on it.
+		// Create is disabled while the name is invalid; ignore Enter otherwise.
 		if _, ok := m.validateCreateName(); !ok {
 			return m, nil
 		}
-		return m.startCreatePick(strings.TrimSpace(m.createName))
+		name := strings.TrimSpace(m.createName)
+		tmpl := m.selectedCreateTemplate()
+		return m.createWorkspace(name, tmpl)
 	case "backspace", "ctrl+h":
-		if len(m.createName) > 0 {
+		if m.createFocus == createFocusName && len(m.createName) > 0 {
 			m.createName = m.createName[:len(m.createName)-1]
 		}
+		return m, nil
 	default:
-		if len(msg.Runes) > 0 {
+		// Typing edits the name only while the name field has focus.
+		if m.createFocus == createFocusName && len(msg.Runes) > 0 {
 			m.createName += string(msg.Runes)
 		}
 	}
 
 	return m, nil
+}
+
+// selectedCreateTemplate returns the template chosen in the dialog, or nil for
+// the "None" option.
+func (m model) selectedCreateTemplate() *workspace.Template {
+	if m.createTemplatePos <= 0 || m.createTemplatePos > len(m.createTemplates) {
+		return nil
+	}
+	tmpl := m.createTemplates[m.createTemplatePos-1]
+	return &tmpl
+}
+
+// cancelCreate closes the New Workspace dialog and resets its state.
+func (m *model) cancelCreate() {
+	m.createMode = false
+	m.createName = ""
+	m.createTemplates = nil
+	m.createTemplatePos = 0
+	m.createFocus = createFocusName
+	m.message = "Create cancelled."
 }
 
 // executeCommand handles the ":" prompt. k9s-style, it only switches the visible
@@ -946,9 +1024,10 @@ func (m model) createWorkspace(name string, tmpl *workspace.Template) (tea.Model
 	}
 
 	m.createMode = false
-	m.createPicking = false
 	m.createName = ""
-	m.createPendingName = ""
+	m.createTemplates = nil
+	m.createTemplatePos = 0
+	m.createFocus = createFocusName
 	if tmpl != nil && len(tmpl.Modules) > 0 {
 		m.message = fmt.Sprintf("Created workspace %s from template %q. Building image, starting container, installing modules...", result.Manifest.Name, tmpl.Name)
 	} else {
@@ -1168,8 +1247,17 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 	case "create":
 		m.createMode = true
 		m.createName = ""
-		m.dialogFocus = 0
-		m.message = "Enter a workspace name. Press Enter to create, Esc to cancel."
+		m.createFocus = createFocusName
+		m.createTemplatePos = 0
+		// Load templates so the dialog can offer them as an optional selector under
+		// the name. A load failure is non-fatal: the dialog just omits the selector.
+		if templates, err := m.templateRegistry.List(); err == nil {
+			m.createTemplates = templates
+		} else {
+			m.createTemplates = nil
+			slog.Warn("failed to load templates for create dialog", "error", err)
+		}
+		m.message = "Enter a workspace name. Tab to pick a template. Enter to create, Esc to cancel."
 	case "edit":
 		return m.editSelected()
 	case "update":
@@ -1250,9 +1338,6 @@ func (m model) View() string {
 	}
 	if m.createMode {
 		view = overlayCentered(view, m.renderCreatePrompt(), width, height)
-	}
-	if m.createPicking {
-		view = overlayCentered(view, m.renderCreatePick(), width, height)
 	}
 	if m.templateCreateMode {
 		view = overlayCentered(view, m.renderTemplateCreatePrompt(), width, height)
@@ -1846,14 +1931,22 @@ func (m model) renderDeleteConfirmation() string {
 }
 
 func (m model) renderCreatePrompt() string {
-	display := dialogLabel.Render(m.createName) + "▏"
-
+	// Name field: a focus caret only while the name has focus, so it is clear which
+	// element is active.
+	nameText := dialogLabel.Render(m.createName)
+	if m.createFocus == createFocusName {
+		nameText += "▏"
+	}
+	nameBorder := colBorder
+	if m.createFocus == createFocusName {
+		nameBorder = colBorderFocus
+	}
 	field := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(colBorder).
+		BorderForeground(nameBorder).
 		Padding(0, 1).
 		Width(34).
-		Render(display)
+		Render(nameText)
 
 	reason, ok := m.validateCreateName()
 	// Keep a blank line where the reason goes so the dialog height is stable.
@@ -1862,34 +1955,76 @@ func (m model) renderCreatePrompt() string {
 		hint = errorStyle.Render(reason)
 	}
 
-	content := lipgloss.JoinVertical(
-		lipgloss.Center,
+	parts := []string{
 		dialogText.Render("Enter a name for the new workspace."),
 		"",
+		dialogText.Render("Name"),
 		field,
 		hint,
-		"",
-		createDialogButtons(m.dialogFocus, ok),
-	)
+	}
 
+	// Optional template selector, shown only when templates exist.
+	if len(m.createTemplates) > 0 {
+		parts = append(parts,
+			dialogText.Render("Template (optional)"),
+			m.renderCreateTemplateSelector(),
+			"",
+		)
+	} else {
+		parts = append(parts, "")
+	}
+
+	parts = append(parts, createDialogButtons(m.createFocus, ok))
+
+	content := lipgloss.JoinVertical(lipgloss.Center, parts...)
 	return k9sDialog("New Workspace", content, colBorder)
+}
+
+// renderCreateTemplateSelector renders the inline ‹ name › template chooser under
+// the name field: ‹ / › arrows cycle through "None" plus each template. The box is
+// highlighted when the selector has focus.
+func (m model) renderCreateTemplateSelector() string {
+	label := "None"
+	if t := m.selectedCreateTemplate(); t != nil {
+		label = fmt.Sprintf("%s  (%d module%s)", t.Name, len(t.Modules), plural(len(t.Modules), "", "s"))
+	}
+
+	focused := m.createFocus == createFocusTemplate
+	leftArrow := mutedStyle.Render("‹ ")
+	rightArrow := mutedStyle.Render(" ›")
+	value := dialogText.Render(label)
+	if focused {
+		value = dialogLabel.Render(label)
+	}
+
+	border := colBorder
+	if focused {
+		border = colBorderFocus
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(34).
+		Align(lipgloss.Center).
+		Render(leftArrow + value + rightArrow)
 }
 
 // createDialogButtons renders the create dialog's OK/Cancel row. OK is greyed
 // out and unfocusable-looking when okEnabled is false (invalid name).
-func createDialogButtons(focused int, okEnabled bool) string {
+func createDialogButtons(focus int, okEnabled bool) string {
 	var okBtn string
 	switch {
 	case !okEnabled:
 		okBtn = dialogButtonOff.Render("OK")
-	case focused == 0:
+	case focus == createFocusOK:
 		okBtn = dialogButtonHot.Render("OK")
 	default:
 		okBtn = dialogButton.Render("OK")
 	}
 
 	cancelBtn := dialogButton.Render("Cancel")
-	if focused == 1 {
+	if focus == createFocusCancel {
 		cancelBtn = dialogButtonHot.Render("Cancel")
 	}
 

@@ -174,6 +174,46 @@ func TestEnsureGlobalConfigCreatesTemplates(t *testing.T) {
 	}
 }
 
+// AGENTS.md and opencode.json are bind-mounted read-only into workspace
+// containers; under rootless podman the workspace user's UID may not map to the
+// file owner, so they must be world-readable or the container cannot read them.
+func TestEnsureGlobalConfigMakesMountedFilesWorldReadable(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	if err := EnsureGlobalConfig(); err != nil {
+		t.Fatalf("EnsureGlobalConfig returned error: %v", err)
+	}
+
+	dir := filepath.Join(configHome, "opencode-manager")
+	for _, name := range []string{"AGENTS.md", "opencode.json"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Mode().Perm()&0o004 == 0 {
+			t.Fatalf("%s mode = %o, want world-readable", name, info.Mode().Perm())
+		}
+	}
+
+	// An older, 0600 file from before this fix is healed to world-readable on the
+	// next ensure (EnsureGlobalConfig runs on every launch).
+	stale := filepath.Join(dir, "opencode.json")
+	if err := os.Chmod(stale, 0o600); err != nil {
+		t.Fatalf("chmod stale: %v", err)
+	}
+	if err := EnsureGlobalConfig(); err != nil {
+		t.Fatalf("EnsureGlobalConfig (re-heal) returned error: %v", err)
+	}
+	info, err := os.Stat(stale)
+	if err != nil {
+		t.Fatalf("stat after re-heal: %v", err)
+	}
+	if info.Mode().Perm()&0o004 == 0 {
+		t.Fatalf("opencode.json mode after re-heal = %o, want world-readable", info.Mode().Perm())
+	}
+}
+
 func TestEnsureGlobalConfigPreservesExistingFiles(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

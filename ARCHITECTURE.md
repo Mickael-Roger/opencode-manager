@@ -144,8 +144,8 @@ the same `SafeName` slugging used for workspace directories. The file holds the
 template name and a list of module instances identical in shape to a workspace
 manifest's `modules:` entries (name, id, category, version, values).
 
-When creating a workspace, the New Workspace name dialog is followed by an
-optional **Pick Template** step (skipped when no templates exist). Choosing a
+When creating a workspace, the New Workspace dialog shows an optional template
+selector under the name field (omitted when no templates exist). Choosing a
 template copies its module instances into the new workspace's `workspace.yaml`
 *before* the workspace is provisioned; the lifecycle's existing reconcile step
 then installs those modules on first start — the same path that converges a freshly

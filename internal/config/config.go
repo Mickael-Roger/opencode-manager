@@ -165,15 +165,29 @@ func EnsureGlobalConfig() error {
 	return nil
 }
 
-// ensureFile writes content to path only if the file does not already exist.
+// ensureFile writes content to path when the file does not already exist, and in
+// all cases makes the file world-readable.
+//
+// AGENTS.md and opencode.json are bind-mounted read-only into every workspace
+// container. Under rootless Podman's user namespace, the workspace process's UID
+// usually does not map to the host file's owner (the file appears owned by root /
+// a sub-UID / nobody inside the container), so a 0600 file is unreadable there.
+// 0644 keeps the file private on the host (it lives in the 0700 config dir) while
+// guaranteeing the container can read it regardless of the UID mapping. Existing
+// 0600 files from older installs are healed here on the next launch.
 func ensureFile(path, content string) error {
-	if _, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(path); err == nil {
+		if perm := info.Mode().Perm(); perm&0o044 != 0o044 {
+			if err := os.Chmod(path, perm|0o044); err != nil {
+				return fmt.Errorf("make global template file %q readable: %w", path, err)
+			}
+		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("check global template file %q: %w", path, err)
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write global template file %q: %w", path, err)
 	}
 
