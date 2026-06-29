@@ -104,7 +104,7 @@ jobs:
           mkdir -p dist
           VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
           go build -trimpath \
-            -ldflags "-s -w -X github.com/mickael-menu/opencode-manager/internal/tui.appVersion=${VERSION}" \
+            -ldflags "-s -w -X github.com/mickael-menu/opencode-manager/internal/tui.appVersion=${VERSION} -X github.com/mickael-menu/opencode-manager/internal/cli.version=${VERSION}" \
             -o dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }} ./cmd/opencode-manager
           chmod 755 dist/opencode-manager-${{ matrix.goos }}-${{ matrix.node_arch }}
       - uses: actions/upload-artifact@v4
@@ -202,6 +202,24 @@ jobs:
           npm pack
       - name: Install package globally
         run: npm install -g ./*.tgz
+
+      # --- CLI smoke test: the resource-oriented commands run end-to-end -----
+      # Uses the default config (no workspaces yet), so these never touch the
+      # container runtime; they verify the command tree, flags, and JSON output.
+      - name: CLI smoke test
+        run: |
+          set -euo pipefail
+          opencode-manager version
+          opencode-manager --help >/dev/null
+          opencode-manager workspaces list
+          opencode-manager workspaces list -o json
+          opencode-manager templates list
+          opencode-manager modules list
+          opencode-manager config path
+          # An unknown command must fail (non-zero exit).
+          if opencode-manager bogus-command >/dev/null 2>&1; then
+            echo "::error::unknown command unexpectedly succeeded"; exit 1
+          fi
 
       - name: Write runtime config
         run: |

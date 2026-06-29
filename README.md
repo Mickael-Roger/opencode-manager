@@ -95,13 +95,22 @@ directory on your `PATH`.
 ## Usage
 
 ```sh
-ocm                      # launch the TUI dashboard
-ocm list                 # list workspaces
-ocm attach <workspace>   # attach to a workspace session
+ocm                              # launch the TUI dashboard
+ocm workspaces list              # list workspaces (alias: ocm ws ls)
+ocm workspaces attach <ws>       # attach to a workspace session
+ocm workspaces create <name> --template backend --start
+ocm ws exec <ws> -- go test ./... # run a command in the sandbox
+ocm ws run <ws> --prompt "..."   # headless OpenCode run (CI/scripts)
 ```
 
 From the dashboard you create, attach, edit (`e`), stop, delete, and update
 workspaces — all from the keyboard.
+
+The CLI mirrors the dashboard with a `kubectl`-style `ocm <resource> <verb>`
+surface (`workspaces`/`ws`, `templates`/`tmpl`, `modules`/`mod`, plus `config`,
+`doctor`, and `version`), with `-o json` on read commands for scripting. See the
+**[CLI reference](https://mickael-roger.github.io/opencode-manager/cli/)** for the
+full command list.
 
 The dashboard table includes a **TOKENS I/O/C** column showing each workspace's
 all-time input / output / cache-read token usage (compacted as `k`/`M`/`B`, e.g.

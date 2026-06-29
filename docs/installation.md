@@ -41,8 +41,9 @@ directory and seeds defaults.
 ## Verify the install
 
 ```sh
-ocm list      # should print an (empty) workspace table or "no workspaces"
-ocm           # launches the dashboard
+ocm version           # prints the installed version
+ocm workspaces list   # prints an (empty) workspace table or "No workspaces"
+ocm                   # launches the dashboard
 ```
 
 On first launch `ocm` ensures the base container image is available and shows

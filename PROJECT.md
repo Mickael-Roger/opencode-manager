@@ -10,7 +10,7 @@ The problem it solves is excessive host access. Running OpenCode directly on a d
 
 ## Goals
 
-- Provide a TUI application written in Go, with a minimal CLI for automation.
+- Provide a TUI application written in Go, with a resource-oriented CLI (`ocm <resource> <verb>`) for automation.
 - Support Linux and macOS.
 - Manage multiple named OpenCode workspaces.
 - Run OpenCode interactively inside an isolated per-workspace container.

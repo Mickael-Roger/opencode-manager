@@ -49,6 +49,12 @@ const (
 // container's main process.
 const EntrypointPath = "/usr/local/bin/" + entrypointScriptName
 
+// ContainerWorkspaceDir is the project working directory inside every workspace
+// container (the home of the unprivileged workspace user). It is where exec'd
+// commands and headless OpenCode runs operate, mirroring the WORKDIR baked into
+// Dockerfile.workspace and the --workdir used for container creation.
+const ContainerWorkspaceDir = "/home/debian/workspace"
+
 // writeBuildContext materializes the embedded build context (Dockerfiles +
 // scripts) into dir so the container builder can run against it. The binary ships
 // these files embedded, so they must be written to disk before a build.
@@ -361,7 +367,7 @@ func createArgs(binary string, spec ContainerSpec) []string {
 		"--tty",
 		"--name", spec.Name,
 		"--user", fmt.Sprintf("%d:%d", spec.UID, spec.GID),
-		"--workdir", "/home/debian/workspace",
+		"--workdir", ContainerWorkspaceDir,
 		"--env", "HOME=/home/debian",
 		"--env", "TERM=xterm-256color",
 		"--volume", spec.HomeDir + ":/home/debian",

@@ -55,6 +55,12 @@ func NewLifecycle(cfg config.Config) (Lifecycle, error) {
 	return Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: driver}, nil
 }
 
+// RuntimeAvailable reports whether the configured container runtime (docker or
+// podman) is installed and responding. Used by `ocm doctor` for preflight.
+func (l Lifecycle) RuntimeAvailable(ctx context.Context) error {
+	return l.driver.Available(ctx)
+}
+
 func (l Lifecycle) EnsureBaseImage(ctx context.Context) error {
 	slog.Debug("ensuring base image is available")
 	if err := l.driver.Available(ctx); err != nil {
@@ -641,6 +647,37 @@ func (l Lifecycle) ShellCommand(ctx context.Context, summary Summary) (*exec.Cmd
 	}
 
 	return l.driver.ExecCommand(summary.Manifest.ContainerName, []string{"/bin/bash"}), nil
+}
+
+// ExecCommand ensures the workspace container is running and returns a command
+// that runs argv inside it as the workspace user, wired to a TTY. The caller is
+// responsible for attaching stdio and running it. Used by `ocm workspaces exec`.
+func (l Lifecycle) ExecCommand(ctx context.Context, summary Summary, argv []string) (*exec.Cmd, error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("exec requires a command")
+	}
+	slog.Info("exec in workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName, "argv", argv)
+	if err := l.EnsureStarted(ctx, summary); err != nil {
+		return nil, err
+	}
+	return l.driver.ExecCommand(summary.Manifest.ContainerName, argv), nil
+}
+
+// RunCommand ensures the workspace container is running and returns a command
+// that runs OpenCode non-interactively against the given prompt, inside the
+// workspace project directory. It is the headless counterpart to AttachCommand:
+// the agent executes one turn and exits, printing its result, which makes
+// workspaces usable from scripts, CI, and pipelines. Used by `ocm workspaces run`.
+func (l Lifecycle) RunCommand(ctx context.Context, summary Summary, prompt string) (*exec.Cmd, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return nil, fmt.Errorf("run requires a non-empty prompt")
+	}
+	slog.Info("headless run in workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
+	if err := l.EnsureStarted(ctx, summary); err != nil {
+		return nil, err
+	}
+	argv := []string{"opencode", "run", "--dir", runtime.ContainerWorkspaceDir, prompt}
+	return l.driver.ExecCommand(summary.Manifest.ContainerName, argv), nil
 }
 
 func (l Lifecycle) Shell(ctx context.Context, summary Summary) (tea.Cmd, error) {

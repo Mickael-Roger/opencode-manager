@@ -21,12 +21,13 @@
 - [x] The deletion: Improve OK/Cancel button color contrast + by default the preselect is on Cancel
 - [x] Think about exposing a port (in the TUI action: expose port) OR add a config.yml option to use the host network namespace
 - [x] Add a podman/docker extra option in config.yml
-- [/] Git module: remove "value" in field; Retreive the user and user email or do not set it; Add repo is a different stuff
-- [/] Module: remove description + for kubernetes: add entries
-- [/] Bug: It seems only one module is installed when multiple is added
-- [/] Bug in description modules list (only one module is displayed)
+- [x] Git module: remove "value" in field; Retreive the user and user email or do not set it; Add repo is a different stuff
+- [x] Module: remove description + for kubernetes: add entries
+- [x] Bug: It seems only one module is installed when multiple is added
+- [x] Bug in description modules list (only one module is displayed)
+- [/] Bug in opencode.json. It is mounted has 100000 with podman
 
-- [ ] Bug in opencode.json. It is mounted has 100000 with podman
+- [x] CLI with more commands
 
 - [ ] create an image for each template: This way it will be faster to create from template
 - [ ] Update the gif image with the new interface
@@ -34,7 +35,6 @@
 - [ ] In the readme, add the main features: including modules, templates, ...
 - [ ] Add flake.nix of nix something to add this project to my nixos configuration
 - [ ] Add a config.yaml edition part in the TUI
-- [ ] CLI with more commands
 - [ ] Protect main branch
 - [ ] Not sure: Create a function to create a new workspace by copying an existing one
 - [ ] Add remote kubernetes cluster as backend support

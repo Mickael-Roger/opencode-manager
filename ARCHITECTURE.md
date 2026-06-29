@@ -13,7 +13,7 @@ See [PROJECT.md](PROJECT.md) for the implementation plan.
 
 ## Planned Features
 
-- TUI application written in Go, with a minimal CLI for automation.
+- TUI application written in Go, with a resource-oriented CLI (`ocm <resource> <verb>`) for automation.
 - Linux and macOS support.
 - Docker and Podman support.
 - Global configuration for workspace root, runtime, base image, and module directories.
