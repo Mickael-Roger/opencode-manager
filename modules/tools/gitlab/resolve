@@ -1,26 +1,27 @@
 #!/bin/sh
-# Host-side resolve hook: when import is requested and no token was typed in, read
-# this host's glab authentication token and emit it as the install `token` value,
-# so the container imports the host's glab auth without the token ever being
-# persisted to the manifest (resolve output is not stored). Runs on every
-# install/reconcile, so an imported token always reflects the current host auth.
+# Host-side resolve hook: when the user opts in, copy this host's glab CLI
+# configuration into the workspace so the container's glab is signed in to the
+# same GitLab instance(s). It reads the host's config.yml (which holds the hosts
+# and their tokens) and emits it base64-encoded as a single `config_b64` value;
+# the install script decodes it into the workspace's glab config. Nothing is
+# typed and nothing is persisted to the manifest — resolve output is not stored,
+# and it runs on every install/reconcile, so the imported config tracks the
+# host's current auth.
 #
-# Stays silent and exits 0 when import is off, a manual token is set, glab is not
-# on the host, or the host is not authenticated — leaving the install
-# unauthenticated rather than failing.
+# Stays silent and exits 0 when import is off or the host has no glab config,
+# leaving the workspace's glab unconfigured rather than failing.
 set -e
 
-case "$OCM_IMPORT_AUTH" in
-  yes | true | 1) ;;
+case "$OCM_IMPORT_CONFIG" in
+  yes | true | 1 | on) ;;
   *) exit 0 ;;
 esac
 
-# A manually-entered token wins; don't override it with the host's.
-[ -n "$OCM_TOKEN" ] && exit 0
+cfg="${GLAB_CONFIG_DIR:-$HOME/.config/glab-cli}/config.yml"
+[ -f "$cfg" ] || exit 0
 
-command -v glab >/dev/null 2>&1 || exit 0
-
-host="${OCM_HOSTNAME:-gitlab.com}"
-tok="$(glab config get token --host "$host" 2>/dev/null || true)"
-[ -n "$tok" ] && printf 'token=%s\n' "$tok"
+# base64 with newlines stripped: portable across GNU (wraps at 76 columns) and
+# BSD/macOS, decoded as one line by the container's `base64 -d`.
+b64="$(base64 < "$cfg" | tr -d '\n')"
+[ -n "$b64" ] && printf 'config_b64=%s\n' "$b64"
 exit 0

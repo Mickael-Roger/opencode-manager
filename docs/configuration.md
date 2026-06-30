@@ -29,6 +29,11 @@ baseImage:
     - update-ca-certificates
 moduleDirs:
   - /home/user/.config/opencode-manager/modules
+workspacePostCreateCommands:
+  - git clone git@github.com:me/project.git .
+  - npm install
+workspacePreDeleteCommands:
+  - git push
 ```
 
 ## Options
@@ -118,6 +123,45 @@ interfere with the TUI:
 List of directories scanned for [modules](modules.md). The built-in modules are
 installed into the first one on package install; add your own module directories
 here to extend the catalogue.
+
+### `workspacePostCreateCommands`
+
+Optional list of shell commands run **inside the workspace container** the first
+time the workspace is started, after its modules are installed. Each command runs
+as the workspace user, in the project directory (`/home/debian/workspace`), with
+the workspace's `~/.env` sourced — so module-provided environment variables are
+available, exactly as the agent sees them. They are a one-shot per workspace
+setup hook: clone the project repo, install dependencies, prime a cache, etc.
+
+```yaml
+workspacePostCreateCommands:
+  - git clone git@github.com:me/project.git .
+  - npm install
+```
+
+A completion marker is stored in the workspace directory after the first run, so
+the commands never re-run on later starts (attach, shell, module edits…). A
+command that exits non-zero is logged and skipped — it never blocks the
+workspace from starting, and the workspace is still marked as set up.
+
+### `workspacePreDeleteCommands`
+
+Optional list of shell commands run **inside the workspace container** just before
+a workspace is deleted, while it still exists. Same execution environment as
+`workspacePostCreateCommands` (workspace user, project directory, `~/.env`
+sourced). Use them for teardown — push pending commits, archive work, deregister
+from a service:
+
+```yaml
+workspacePreDeleteCommands:
+  - git push
+```
+
+If the container is stopped it is started first; if no container exists the hook
+is skipped. A failing command is logged and **never blocks the deletion** — a
+broken command can't make a workspace undeletable. As with all destructive
+actions, the deletion confirmation still applies; these commands run only once
+you confirm.
 
 ## Base image
 

@@ -26,8 +26,9 @@
 - [x] Bug: It seems only one module is installed when multiple is added
 - [x] Bug in description modules list (only one module is displayed)
 - [/] Bug in opencode.json. It is mounted has 100000 with podman
-
 - [x] CLI with more commands
+- [x] Hook post create
+- [x] Hook pre delete
 
 - [ ] create an image for each template: This way it will be faster to create from template
 - [ ] Update the gif image with the new interface

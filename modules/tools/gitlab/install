@@ -1,13 +1,11 @@
 #!/bin/sh
 # Runs inside the workspace container. Installs the GitLab CLI (glab) from the
 # latest official release (no apt repo exists; the release binary is fetched for
-# this arch) and, when a token is available (imported from the host by the resolve
-# hook, or typed in), authenticates glab for the chosen host. Idempotent: the glab
-# install is guarded and `glab auth login` overwrites the stored token, so
-# reconcile can re-run this safely.
+# this arch) and, when the user opted in, drops this host's glab configuration
+# (shipped base64-encoded by the resolve hook) into place so glab is signed in to
+# the same GitLab instance(s). Idempotent: the glab install is guarded and the
+# config is overwritten, so reconcile can re-run this safely.
 set -e
-
-: "${OCM_HOSTNAME:=gitlab.com}"
 
 if ! command -v glab >/dev/null 2>&1; then
   for bin in curl jq; do
@@ -48,11 +46,15 @@ fi
 
 echo "glab installed: $(glab --version | head -n1)"
 
-# Authenticate when a token is present: $OCM_TOKEN comes either from the host
-# resolve hook (imported glab auth) or from the manual token prompt.
-if [ -n "$OCM_TOKEN" ]; then
-  printf '%s' "$OCM_TOKEN" | glab auth login --hostname "$OCM_HOSTNAME" --stdin
-  echo "glab authenticated for ${OCM_HOSTNAME}"
+# Import the host's glab configuration when provided. $OCM_CONFIG_B64 is the
+# host's ~/.config/glab-cli/config.yml, base64-encoded by the resolve hook; it
+# carries the hosts and tokens that sign glab in, and is never persisted to the
+# manifest.
+if [ -n "$OCM_CONFIG_B64" ]; then
+  mkdir -p "$HOME/.config/glab-cli"
+  printf '%s' "$OCM_CONFIG_B64" | base64 -d > "$HOME/.config/glab-cli/config.yml"
+  chmod 600 "$HOME/.config/glab-cli/config.yml"
+  echo "glab configured from this host's glab configuration"
 else
-  echo "glab installed without authentication"
+  echo "glab installed without imported configuration"
 fi

@@ -43,7 +43,7 @@ case "$ref" in
   tools/ssh)        ocm_env=(OCM_HOST=example.com)
                     verify='command -v ssh && test -f "$HOME/.ssh/config.d/example.com.conf"' ;;
   tools/github)     ocm_env=(OCM_HOSTNAME=github.com OCM_IMPORT_AUTH=no); verify='command -v gh' ;;
-  tools/gitlab)     ocm_env=(OCM_HOSTNAME=gitlab.com OCM_IMPORT_AUTH=no); verify='command -v glab' ;;
+  tools/gitlab)     verify='command -v glab' ;;
   language/c)       verify='command -v gcc && command -v make && command -v gdb && command -v clangd' ;;
   language/golang)  ocm_env=(OCM_VERSION=1.23); verify='command -v go && command -v gopls && command -v dlv' ;;
   language/nodejs)  ocm_env=(OCM_VERSION=lts); verify='command -v node && command -v npm && command -v typescript-language-server' ;;

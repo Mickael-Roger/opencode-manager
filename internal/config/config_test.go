@@ -78,6 +78,35 @@ func TestLoadRejectsEmptyRuntimeArg(t *testing.T) {
 	}
 }
 
+func TestLoadParsesWorkspaceHookCommands(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte(
+		"workspacePostCreateCommands:\n  - git clone git@example.com:me/repo .\n  - npm install\n"+
+			"workspacePreDeleteCommands:\n  - git push\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(cfg.WorkspacePostCreateCommands) != 2 || cfg.WorkspacePostCreateCommands[1] != "npm install" {
+		t.Fatalf("WorkspacePostCreateCommands = %#v", cfg.WorkspacePostCreateCommands)
+	}
+	if len(cfg.WorkspacePreDeleteCommands) != 1 || cfg.WorkspacePreDeleteCommands[0] != "git push" {
+		t.Fatalf("WorkspacePreDeleteCommands = %#v", cfg.WorkspacePreDeleteCommands)
+	}
+}
+
+func TestLoadRejectsEmptyWorkspaceHookCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("workspacePreDeleteCommands:\n  - git push\n  - \"   \"\n"))
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject a blank workspacePreDeleteCommands entry")
+	}
+}
+
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

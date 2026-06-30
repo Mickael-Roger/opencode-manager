@@ -182,6 +182,10 @@ baseImage:
     - update-ca-certificates
 moduleDirs:
   - /home/user/.config/opencode-manager/modules
+workspacePostCreateCommands:
+  - git clone git@github.com:me/project.git .
+workspacePreDeleteCommands:
+  - git push
 ```
 
 `runtime` must be either `docker` or `podman`.
@@ -206,6 +210,16 @@ section of `createArgs`). It is an escape hatch for runtime options the manager
 does not model natively (e.g. `--dns`, `--add-host`, `--device`, extra
 `--volume`s); values are not validated, so a flag the runtime rejects surfaces as
 a container-create error.
+
+`workspacePostCreateCommands` and `workspacePreDeleteCommands` are optional lists
+of shell commands run inside a workspace container at lifecycle boundaries: the
+former once, the first time the workspace starts (after modules install, guarded
+by a host-side `.ocm-postcreate-done` marker in the workspace directory); the
+latter just before deletion, while the container still exists (it is started if
+stopped). Each command runs as the workspace user in the project directory with
+`~/.env` sourced. Both are best-effort — a non-zero exit is logged and never
+blocks the start or the deletion. They are applied by the lifecycle (`hooks.go`),
+so both the TUI and the CLI honor them.
 
 `logLevel` controls how much is written to the log file. It must be one of
 `debug`, `info`, `warning` (default), or `error`. Logs are appended to

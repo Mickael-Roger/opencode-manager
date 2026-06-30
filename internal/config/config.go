@@ -70,6 +70,19 @@ type Config struct {
 	LogLevel    string          `yaml:"logLevel"`
 	BaseImage   BaseImageConfig `yaml:"baseImage"`
 	ModuleDirs  []string        `yaml:"moduleDirs"`
+	// WorkspacePostCreateCommands are shell commands run inside a workspace
+	// container the first time it is started (after modules are installed). Each
+	// runs as the workspace user in the project directory with ~/.env sourced.
+	// Optional, one-shot per workspace — e.g. clone a repo or install
+	// dependencies. A failing command is logged and does not block startup.
+	WorkspacePostCreateCommands []string `yaml:"workspacePostCreateCommands"`
+	// WorkspacePreDeleteCommands are shell commands run inside a workspace
+	// container just before the workspace is deleted, while it still exists (the
+	// container is started first if stopped). Each runs as the workspace user in
+	// the project directory with ~/.env sourced. Optional teardown — e.g. push
+	// pending commits or deregister. A failing command is logged and does not
+	// block deletion.
+	WorkspacePreDeleteCommands []string `yaml:"workspacePreDeleteCommands"`
 }
 
 type BaseImageConfig struct {
@@ -283,6 +296,18 @@ func (c Config) Validate() error {
 	for _, arg := range c.RuntimeArgs {
 		if arg == "" {
 			return errors.New("runtimeArgs cannot contain empty arguments")
+		}
+	}
+
+	for _, command := range c.WorkspacePostCreateCommands {
+		if strings.TrimSpace(command) == "" {
+			return errors.New("workspacePostCreateCommands cannot contain empty commands")
+		}
+	}
+
+	for _, command := range c.WorkspacePreDeleteCommands {
+		if strings.TrimSpace(command) == "" {
+			return errors.New("workspacePreDeleteCommands cannot contain empty commands")
 		}
 	}
 

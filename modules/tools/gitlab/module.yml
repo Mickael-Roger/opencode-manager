@@ -1,22 +1,11 @@
 name: gitlab
-version: 1
-description: Install the GitLab CLI (glab) and optionally import this host's glab authentication.
+version: 2
+description: Install the GitLab CLI (glab) and optionally import this host's glab configuration so the workspace is signed in to the same GitLab instance(s).
 # Writes only glab's own config (~/.config/glab-cli), which tools read live;
 # nothing in ~/.env, so it never bounces the OpenCode server and can be edited mid-task.
 restartServer: false
 prompts:
-  - name: hostname
-    label: GitLab host (gitlab.com or a self-managed GitLab host)
-    type: string
-    default: gitlab.com
-  - name: import_auth
-    label: Import glab authentication from this host?
-    type: select
-    required: true
-    default: "yes"
-    options:
-      - "yes"
-      - "no"
-  - name: token
-    label: GitLab token (optional — overrides host import; blank stays unauthenticated)
-    type: secret
+  - name: import_config
+    label: Import this host's glab configuration (sign in to the same GitLab instances)?
+    type: bool
+    default: "true"

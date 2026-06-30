@@ -168,6 +168,10 @@ func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
 		slog.Warn("module reconcile failed", "workspace", summary.Manifest.Name, "container", name, "error", err)
 	}
 
+	// Run the one-shot post-create commands the first time this workspace starts,
+	// after modules are in place. Best-effort: failures are logged, not fatal.
+	l.runPostCreateHook(ctx, summary)
+
 	return nil
 }
 
@@ -558,6 +562,10 @@ func (l Lifecycle) openCodeVersion(ctx context.Context, containerName string) (s
 
 func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {
 	slog.Info("deleting workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName, "image", summary.Manifest.ImageName)
+
+	// Run the pre-delete commands while the workspace still exists. Best-effort:
+	// failures are logged and never block the deletion that follows.
+	l.runPreDeleteHook(ctx, summary)
 
 	if err := l.driver.RemoveContainer(ctx, summary.Manifest.ContainerName); err != nil {
 		return err

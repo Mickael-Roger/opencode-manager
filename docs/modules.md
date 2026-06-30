@@ -59,7 +59,7 @@ running). The `c` module only installs system packages, so it does not.
 | Module | What it does | Multi-instance |
 | --- | --- | --- |
 | **github** | Installs the GitHub CLI (`gh`) and optionally imports this host's `gh` auth (or takes a token). | No |
-| **gitlab** | Installs the GitLab CLI (`glab`) and optionally imports this host's `glab` auth (or takes a token). | No |
+| **gitlab** | Installs the GitLab CLI (`glab`) and, with one checkbox, copies this host's `glab` configuration in so the workspace is signed in to the same GitLab instance(s). | No |
 | **ssh** | Adds an SSH key and host alias (written to `~/.ssh`) for this workspace. | Yes (per host) |
 
 ## Multi-instance modules
