@@ -1276,10 +1276,11 @@ func (m model) renderEditForm() string {
 		case p.Secret():
 			display = strings.Repeat("•", len([]rune(val)))
 		case p.Type == module.PromptBool:
+			// Render as a checkbox toggled with space, not a literal true/false.
 			if val == "true" {
-				display = "true"
+				display = "[x]"
 			} else {
-				display = "false"
+				display = "[ ]"
 			}
 		}
 
@@ -1307,6 +1308,6 @@ func (m model) renderEditForm() string {
 		}
 	}
 
-	lines = append(lines, "", mutedStyle.Render("↑/↓ or Tab move · type to edit · Enter save · Esc cancel"))
+	lines = append(lines, "", mutedStyle.Render("↑/↓ or Tab move · type to edit · space toggles checkboxes · Enter save · Esc cancel"))
 	return k9sDialog("Add "+mod.Name, strings.Join(lines, "\n"), colBorder)
 }
