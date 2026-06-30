@@ -445,6 +445,9 @@ func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if cur.Type == module.PromptSelect || cur.Type == module.PromptMultiSelect {
 		return m.updateEditPromptSelect(msg, cur)
 	}
+	if cur.Type == module.PromptBool {
+		return m.updateEditPromptBool(msg, cur)
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -472,6 +475,31 @@ func (m model) updateEditPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+// updateEditPromptBool handles key input for a bool prompt: a checkbox toggled
+// with space (or x) and confirmed with Enter, rather than a typed value.
+func (m model) updateEditPromptBool(msg tea.KeyMsg, cur module.Prompt) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		return m.cancelEditPrompt()
+	case " ", "x":
+		if m.editPromptInput == "true" {
+			m.editPromptInput = "false"
+		} else {
+			m.editPromptInput = "true"
+		}
+		return m, nil
+	case "enter":
+		val := "false"
+		if m.editPromptInput == "true" {
+			val = "true"
+		}
+		return m.commitEditPromptValue(cur, val)
+	}
+	return m, nil
 }
 
 // updateEditPromptSelect handles key input for select/multiselect prompts:
@@ -1149,6 +1177,9 @@ func (m model) renderEditPrompt() string {
 	if cur.Type == module.PromptSelect || cur.Type == module.PromptMultiSelect {
 		return m.renderEditPromptSelect(cur)
 	}
+	if cur.Type == module.PromptBool {
+		return m.renderEditPromptBool(cur)
+	}
 
 	display := m.editPromptInput
 	if cur.Secret() {
@@ -1181,6 +1212,23 @@ func (m model) renderEditPrompt() string {
 	}
 	lines = append(lines, "", field, "", mutedStyle.Render("Enter to continue, Esc to cancel."))
 
+	return k9sDialog("Module value", strings.Join(lines, "\n"), colBorder)
+}
+
+// renderEditPromptBool renders a bool prompt as a single checkbox toggled with
+// space, instead of a free-text field.
+func (m model) renderEditPromptBool(cur module.Prompt) string {
+	box := "[ ]"
+	if m.editPromptInput == "true" {
+		box = "[x]"
+	}
+	lines := []string{
+		dialogText.Render(fmt.Sprintf("%s  (%d/%d)", m.editPromptMod.Name, m.editPromptIdx+1, len(m.editPromptMod.Prompts))),
+		"",
+		cursorStyle.Render(box + " " + cur.Label),
+		"",
+		mutedStyle.Render("space toggles · Enter confirm · Esc cancel"),
+	}
 	return k9sDialog("Module value", strings.Join(lines, "\n"), colBorder)
 }
 

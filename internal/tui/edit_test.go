@@ -3,8 +3,15 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/mickael-menu/opencode-manager/internal/module"
 )
+
+func spaceKey() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}} }
+func runeKey(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+}
 
 func entry(name, category, desc, label string) editEntry {
 	return editEntry{
@@ -145,5 +152,49 @@ func TestSnapEditPosMovesToVisible(t *testing.T) {
 	m.snapEditPos()
 	if m.editPos != 1 {
 		t.Fatalf("snapEditPos = %d, want 1 (first visible)", m.editPos)
+	}
+}
+
+func TestEditPromptBoolTogglesAsCheckbox(t *testing.T) {
+	mod := module.Module{
+		Name:    "gitlab",
+		Prompts: []module.Prompt{{Name: "import_config", Label: "Import?", Type: module.PromptBool, Default: "true"}},
+	}
+
+	// Default "true" starts the checkbox checked.
+	started, _ := model{}.startEditPrompt(mod, 0)
+	m := started.(model)
+	if m.editPromptInput != "true" {
+		t.Fatalf("initial bool value = %q, want true (from default)", m.editPromptInput)
+	}
+
+	// Space toggles it off, then on again — never typed as text.
+	toggled, _ := m.updateEditPrompt(spaceKey())
+	m = toggled.(model)
+	if m.editPromptInput != "false" {
+		t.Fatalf("after one toggle = %q, want false", m.editPromptInput)
+	}
+	toggled, _ = m.updateEditPrompt(spaceKey())
+	m = toggled.(model)
+	if m.editPromptInput != "true" {
+		t.Fatalf("after two toggles = %q, want true", m.editPromptInput)
+	}
+}
+
+func TestEditPromptBoolDefaultsUnchecked(t *testing.T) {
+	mod := module.Module{
+		Name:    "demo",
+		Prompts: []module.Prompt{{Name: "flag", Type: module.PromptBool}},
+	}
+	started, _ := model{}.startEditPrompt(mod, 0)
+	m := started.(model)
+	if m.editPromptInput != "" {
+		t.Fatalf("bool without default = %q, want empty (unchecked)", m.editPromptInput)
+	}
+	// Typing a rune must not turn the checkbox into a text field.
+	typed, _ := m.updateEditPrompt(runeKey('y'))
+	m = typed.(model)
+	if m.editPromptInput != "" {
+		t.Fatalf("bool ignored typed input, got %q", m.editPromptInput)
 	}
 }
