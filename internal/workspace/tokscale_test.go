@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -24,6 +25,9 @@ func (f *fakeDriver) BuildBaseImage(context.Context, runtime.BaseBuildSpec) erro
 func (f *fakeDriver) BuildImage(context.Context, runtime.BuildSpec) error         { return nil }
 func (f *fakeDriver) ContainerStatus(context.Context, string) (string, error) {
 	return runtime.StatusRunning, nil
+}
+func (f *fakeDriver) ContainerRuntimeConfig(context.Context, string) (runtime.ContainerRuntimeConfig, error) {
+	return runtime.ContainerRuntimeConfig{}, errors.New("not implemented")
 }
 func (f *fakeDriver) ContainerImageID(context.Context, string) (string, error)     { return "", nil }
 func (f *fakeDriver) ImageID(context.Context, string) (string, error)              { return "", nil }

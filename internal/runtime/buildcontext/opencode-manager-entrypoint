@@ -6,6 +6,16 @@
 # does after a module edits ~/.env) makes the loop re-source ~/.env and relaunch
 # it, so an env change needs only a cheap in-place bounce, not a container
 # recreate. A SIGTERM from `docker stop` is forwarded to the child for a clean stop.
+
+# Every workspace is assigned its own loopback port by the manager (passed in as
+# OCM_OPENCODE_PORT). There is no shared default: under host networking a fallback
+# port would collide with another workspace, so a missing value is a manager bug
+# we fail loudly on rather than silently bind the wrong port.
+if [ -z "$OCM_OPENCODE_PORT" ]; then
+  echo "opencode-manager: OCM_OPENCODE_PORT is not set; the manager must assign each workspace its own port" >&2
+  exit 1
+fi
+
 child=""
 shutdown() {
   [ -n "$child" ] && kill -TERM "$child" 2>/dev/null
@@ -16,7 +26,7 @@ while true; do
   set -a
   [ -f "$HOME/.env" ] && . "$HOME/.env"
   set +a
-  opencode serve --hostname 127.0.0.1 --port "${OCM_OPENCODE_PORT:-4096}" &
+  opencode serve --hostname 127.0.0.1 --port "$OCM_OPENCODE_PORT" &
   child=$!
   wait "$child"
   child=""

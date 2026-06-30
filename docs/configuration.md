@@ -75,6 +75,13 @@ workspaces created before this option are assigned a port automatically on their
 next start. The assignment happens regardless of `hostNetwork`, so toggling the
 option never requires a migration.
 
+Toggling `hostNetwork` (or otherwise changing a workspace's network namespace or
+assigned port) takes effect the next time the workspace starts: the manager
+recreates a container whose live network mode or `OCM_OPENCODE_PORT` no longer
+matches, so it can never keep serving on the stale fallback port (`4096`) and
+collide with another workspace under host networking. Recreation preserves the
+workspace (the home is bind-mounted and modules reinstall idempotently).
+
 > **Note:** host networking is opt-in because it weakens isolation — the
 > container can reach (and bind) anything on the host's network interfaces. It
 > also has limited support on Docker Desktop (macOS/Windows); on Linux with

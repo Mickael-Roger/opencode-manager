@@ -112,6 +112,18 @@ func workspaceBuildArgs(spec BuildSpec) []string {
 	}
 }
 
+// ContainerRuntimeConfig captures the bits of an existing container's runtime
+// configuration the manager compares against the desired spec to detect drift
+// that requires recreation: its network namespace and its environment.
+type ContainerRuntimeConfig struct {
+	// NetworkMode is the container's network namespace ("host" when sharing the
+	// host's, otherwise a runtime-specific value such as "bridge").
+	NetworkMode string
+	// Env maps the container's creation-time environment variables to their
+	// values (image ENV plus the --env flags passed at create).
+	Env map[string]string
+}
+
 type Driver interface {
 	Name() string
 	Available(context.Context) error
@@ -119,6 +131,7 @@ type Driver interface {
 	BuildBaseImage(context.Context, BaseBuildSpec) error
 	BuildImage(context.Context, BuildSpec) error
 	ContainerStatus(context.Context, string) (string, error)
+	ContainerRuntimeConfig(context.Context, string) (ContainerRuntimeConfig, error)
 	ContainerImageID(context.Context, string) (string, error)
 	ImageID(context.Context, string) (string, error)
 	CreateContainer(context.Context, ContainerSpec) error
@@ -333,6 +346,36 @@ func (d CLIDriver) ContainerStatus(ctx context.Context, name string) (string, er
 
 	slog.Debug("container status", "container", name, "status", status)
 	return status, nil
+}
+
+// ContainerRuntimeConfig inspects an existing container and returns its network
+// mode and environment, so the lifecycle can detect when a running container no
+// longer matches the desired spec (e.g. hostNetwork was toggled, or its assigned
+// OpenCode port changed) and recreate it.
+func (d CLIDriver) ContainerRuntimeConfig(ctx context.Context, name string) (ContainerRuntimeConfig, error) {
+	if name == "" {
+		return ContainerRuntimeConfig{}, fmt.Errorf("container name is required")
+	}
+
+	// First line is the network mode; each remaining line is a KEY=VALUE env var.
+	const format = `{{println .HostConfig.NetworkMode}}{{range .Config.Env}}{{println .}}{{end}}`
+	cmd := exec.CommandContext(ctx, d.binary, "inspect", "-f", format, name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return ContainerRuntimeConfig{}, fmt.Errorf("inspect container %q: %w: %s", name, err, strings.TrimSpace(string(output)))
+	}
+
+	rc := ContainerRuntimeConfig{Env: map[string]string{}}
+	lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
+	if len(lines) > 0 {
+		rc.NetworkMode = strings.TrimSpace(lines[0])
+		for _, line := range lines[1:] {
+			if i := strings.IndexByte(line, '='); i > 0 {
+				rc.Env[line[:i]] = line[i+1:]
+			}
+		}
+	}
+	return rc, nil
 }
 
 func (d CLIDriver) CreateContainer(ctx context.Context, spec ContainerSpec) error {

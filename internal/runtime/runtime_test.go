@@ -141,11 +141,20 @@ func indexOf(args []string, want string) int {
 	return -1
 }
 
-func TestEntrypointAndAttachUseConfigurablePort(t *testing.T) {
+func TestEntrypointAndAttachUseAssignedPort(t *testing.T) {
+	// Each workspace is assigned its own port; the scripts must read it from
+	// OCM_OPENCODE_PORT with no shared fallback (a 4096 default would collide with
+	// another workspace under host networking) and fail loudly when it is unset.
 	for _, name := range []string{"opencode-manager-entrypoint", "opencode-manager-attach"} {
 		content := readBuildFile(t, name)
-		if !strings.Contains(content, "OCM_OPENCODE_PORT:-4096") {
-			t.Fatalf("%s should read the port from OCM_OPENCODE_PORT (default 4096):\n%s", name, content)
+		if !strings.Contains(content, "OCM_OPENCODE_PORT") {
+			t.Fatalf("%s should read the port from OCM_OPENCODE_PORT:\n%s", name, content)
+		}
+		if strings.Contains(content, "4096") {
+			t.Fatalf("%s must not hardcode the 4096 fallback port:\n%s", name, content)
+		}
+		if !strings.Contains(content, `[ -z "$OCM_OPENCODE_PORT" ]`) {
+			t.Fatalf("%s should fail loudly when OCM_OPENCODE_PORT is unset:\n%s", name, content)
 		}
 	}
 }

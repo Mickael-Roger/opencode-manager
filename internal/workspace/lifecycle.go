@@ -261,12 +261,25 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 
-	// Recreate a container that was built from a now-outdated image (e.g. after
-	// a base-image revision bump or an OpenCode update) so it picks up the new
-	// image and run command.
+	// Recreate a container when it no longer matches the desired spec, so the new
+	// settings actually take effect:
+	//   - a now-outdated image (after a base-image bump or an OpenCode update), or
+	//   - drift in network mode / assigned OpenCode port (e.g. hostNetwork was
+	//     toggled, or the workspace was backfilled a unique port). Without this the
+	//     container keeps its old namespace and stale/missing OCM_OPENCODE_PORT,
+	//     falling back to the shared default 4096 — which collides with other
+	//     workspaces under host networking.
 	if status != runtime.StatusMissing {
-		if stale, serr := l.containerImageStale(ctx, manifest); serr == nil && stale {
-			slog.Warn("container image is stale, recreating", "workspace", manifest.Name, "container", manifest.ContainerName)
+		stale, serr := l.containerImageStale(ctx, manifest)
+		if serr != nil {
+			stale = false
+		}
+		if stale || l.containerSpecDrift(ctx, manifest, spec) {
+			reason := "config drift"
+			if stale {
+				reason = "stale image"
+			}
+			slog.Warn("recreating workspace container", "workspace", manifest.Name, "container", manifest.ContainerName, "reason", reason)
 			if err := l.driver.RemoveContainer(ctx, manifest.ContainerName); err != nil {
 				return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 			}
@@ -628,6 +641,33 @@ func (l Lifecycle) containerImageStale(ctx context.Context, manifest Manifest) (
 		slog.Debug("container image differs from current workspace image", "workspace", manifest.Name, "containerImage", containerImage, "currentImage", currentImage)
 	}
 	return stale, nil
+}
+
+// containerSpecDrift reports whether the existing container's runtime config no
+// longer matches the desired spec in ways that require recreation: a changed
+// network namespace (config.HostNetwork toggled) or a stale/missing assigned
+// OpenCode port. Either leaves the workspace's OpenCode server and attach client
+// on the wrong port — under host networking that means the shared default 4096,
+// colliding with another workspace. A failed inspect returns false so a transient
+// error never churns containers.
+func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, spec runtime.ContainerSpec) bool {
+	rc, err := l.driver.ContainerRuntimeConfig(ctx, manifest.ContainerName)
+	if err != nil {
+		return false
+	}
+
+	if (rc.NetworkMode == "host") != spec.HostNetwork {
+		slog.Debug("container network mode differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName, "have", rc.NetworkMode, "wantHost", spec.HostNetwork)
+		return true
+	}
+
+	want := strconv.Itoa(manifest.OpenCodePort)
+	if rc.Env[OpenCodePortEnv] != want {
+		slog.Debug("container OpenCode port differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName, "have", rc.Env[OpenCodePortEnv], "want", want)
+		return true
+	}
+
+	return false
 }
 
 func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error) {

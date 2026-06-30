@@ -3,7 +3,15 @@
 # attaching runs a TUI client against it over HTTP. Ctrl-C exits only the client,
 # leaving the server running. Wait for the server to listen, then attach to the
 # last session if one exists, otherwise start a fresh session.
-url="http://127.0.0.1:${OCM_OPENCODE_PORT:-4096}"
+
+# The server binds this workspace's own assigned port (OCM_OPENCODE_PORT); there
+# is no shared default, so connecting to a fallback port could reach a different
+# workspace under host networking. A missing value is a manager bug — fail loudly.
+if [ -z "$OCM_OPENCODE_PORT" ]; then
+  echo "opencode-manager: OCM_OPENCODE_PORT is not set" >&2
+  exit 1
+fi
+url="http://127.0.0.1:${OCM_OPENCODE_PORT}"
 dir="/home/debian/workspace"
 i=0
 while [ "$i" -lt 150 ]; do
