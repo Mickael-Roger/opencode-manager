@@ -879,7 +879,17 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 //
 // Revision 8: added the openssh-client package so SSH remotes (e.g. ssh-style
 // git clone URLs) work without a per-module install.
-const baseImageRevision = 8
+//
+// Revision 9: grant passwordless sudo to ALL users instead of the sudo group.
+// The server/install processes run under a numeric --user UID:GID, which loads
+// no supplementary groups, so a %sudo group rule never matched the live process
+// (sudo prompted for a password); a user-agnostic rule works regardless of the
+// process's group set.
+//
+// Revision 10: put /home/debian/.local/bin on the default PATH so per-user
+// installs (pip --user, pipx, uv tool, curl|sh installers) are visible to the
+// OpenCode server without each module having to export PATH into ~/.env.
+const baseImageRevision = 10
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {

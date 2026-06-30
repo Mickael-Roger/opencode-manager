@@ -193,7 +193,7 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 		"command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai",
 		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
 		"RUN chmod 0755 /usr/local/bin/opencode-manager-attach",
-		"ENV PATH=/usr/local/bin",
+		"ENV PATH=/home/debian/.local/bin:/usr/local/bin",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("base Dockerfile missing %q:\n%s", want, content)
@@ -233,7 +233,7 @@ func TestBaseDockerfileModuleSupport(t *testing.T) {
 	for _, want := range []string{
 		"COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint",
 		"chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint",
-		"%sudo ALL=(ALL) NOPASSWD:ALL",
+		"ALL ALL=(ALL) NOPASSWD:ALL",
 		"/etc/sudoers.d/opencode-manager",
 		"/etc/bash.bashrc",
 	} {
@@ -286,7 +286,6 @@ func TestWorkspaceDockerfileUsesBaseAndHostUIDGIDArgs(t *testing.T) {
 		"ARG GID",
 		"getent group ${GID}",
 		"useradd -m -u ${UID} -g ${GID}",
-		"usermod -aG sudo ${user_name}",
 		"/home/debian/workspace",
 		"chown -R ${UID}:${GID} /home/debian",
 	} {

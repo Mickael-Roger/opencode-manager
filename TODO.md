@@ -25,11 +25,15 @@
 - [x] Module: remove description + for kubernetes: add entries
 - [x] Bug: It seems only one module is installed when multiple is added
 - [x] Bug in description modules list (only one module is displayed)
-- [/] Bug in opencode.json. It is mounted has 100000 with podman
+- [x] Bug in opencode.json. It is mounted has 100000 with podman
 - [x] CLI with more commands
-- [x] Hook post create
-- [x] Hook pre delete
+- [/] Hook post create
+- [/] Hook pre delete
+- [/] Bug in outscale module: octl profile use tg-test-auto
 
+- [ ] Add a delete protection on workspace
+- [ ] Addan option for adding or or many CA
+- [ ] Add in image PATH: ~/.local/bin + consign
 - [ ] create an image for each template: This way it will be faster to create from template
 - [ ] Update the gif image with the new interface
 - [ ] Review the module page: remove description and "Add", just the list, then enter

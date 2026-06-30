@@ -74,11 +74,21 @@ COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach
 COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint
 RUN chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint
 
-# Passwordless sudo for the sudo group: module install scripts run as the
-# unprivileged workspace user but need root for system packages.
-RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager
+# Passwordless sudo for everyone: the workspace user (and the OpenCode server)
+# run under a numeric --user UID:GID, which does NOT load supplementary groups
+# from /etc/group, so a %sudo group rule never matches the live process. Grant
+# NOPASSWD to ALL users so sudo works regardless of the process's group set,
+# without needing newgrp/sg or a runtime --group-add flag. Safe here: this is a
+# single-user, ephemeral dev container whose workspace user is root-capable by
+# design, and the container boundary — not in-container uid separation — is the
+# isolation.
+RUN echo 'ALL ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager
 
 # Source the per-workspace ~/.env from interactive shells, mirroring the server.
 RUN grep -qF '[ -f "$HOME/.env" ]' /etc/bash.bashrc || echo '[ -f "$HOME/.env" ] && . "$HOME/.env"' >> /etc/bash.bashrc
 
-ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+# ~/.local/bin first so per-user installs (pip --user, pipx, uv tool, many
+# curl|sh installers) are visible to the OpenCode server and everything it
+# spawns. HOME is always /home/debian for the workspace user, so the path is
+# hardcoded here ($HOME is not /home/debian at image-build time).
+ENV PATH=/home/debian/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
