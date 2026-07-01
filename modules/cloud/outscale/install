@@ -3,6 +3,8 @@
 # named profile into ~/.osc/config.json — the JSON file octl reads, keyed by
 # profile name. Idempotent and instance-scoped by $OCM_PROFILE: re-running edits
 # only that profile (via jq), so reconcile is safe and multiple profiles coexist.
+# The first profile configured is also marked active via `octl profile use`, so a
+# fresh setup always has a usable default.
 set -e
 
 : "${OCM_PROFILE:=default}"
@@ -40,5 +42,15 @@ set_field access_key "$OCM_ACCESS_KEY"
 set_field secret_key "$OCM_SECRET_KEY"
 set_field region "$OCM_REGION"
 chmod 600 "$cfg"
+
+# Mark this profile active when none is yet selected, so the first profile added
+# wins (later profiles, and reconciles of the others, leave the choice alone).
+# octl records the active profile as a `default: true` flag on the profile object
+# inside config.json; `octl profile use` flips it. Guard on the profile existing
+# (a creds-less run writes nothing) and on no profile being flagged yet.
+if jq -e --arg p "$OCM_PROFILE" 'has($p) and (any(.[]; .default == true) | not)' "$cfg" >/dev/null 2>&1; then
+  octl profile use "$OCM_PROFILE"
+  chmod 600 "$cfg"
+fi
 
 echo "outscale profile '$OCM_PROFILE' configured"
