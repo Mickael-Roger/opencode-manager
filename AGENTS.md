@@ -32,6 +32,7 @@
 - Generated workspace images must include `npx`, `uvx`, `git`, `ripgrep`, and `jq` by default.
 - Managed base images are tagged from a stable hash of `baseImage` definition and reused until that definition changes.
 - The TUI ensures the managed base image exists at startup and shows `Creating the base image...` while it is built.
+- Passwordless sudo must work for the numeric `--user UID:GID` workspace process without relying on supplementary groups. Keep the sudoers rule user-agnostic (`ALL ALL=(ALL:ALL) NOPASSWD:ALL`) and present in both the base and workspace image layers.
 
 ## Implementation Notes
 

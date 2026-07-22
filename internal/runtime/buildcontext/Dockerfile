@@ -82,7 +82,7 @@ RUN chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-ma
 # single-user, ephemeral dev container whose workspace user is root-capable by
 # design, and the container boundary — not in-container uid separation — is the
 # isolation.
-RUN echo 'ALL ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager
+RUN echo 'ALL ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager
 
 # Source the per-workspace ~/.env from interactive shells, mirroring the server.
 RUN grep -qF '[ -f "$HOME/.env" ]' /etc/bash.bashrc || echo '[ -f "$HOME/.env" ] && . "$HOME/.env"' >> /etc/bash.bashrc

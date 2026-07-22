@@ -233,7 +233,7 @@ func TestBaseDockerfileModuleSupport(t *testing.T) {
 	for _, want := range []string{
 		"COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint",
 		"chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint",
-		"ALL ALL=(ALL) NOPASSWD:ALL",
+		"ALL ALL=(ALL:ALL) NOPASSWD:ALL",
 		"/etc/sudoers.d/opencode-manager",
 		"/etc/bash.bashrc",
 	} {
@@ -288,6 +288,8 @@ func TestWorkspaceDockerfileUsesBaseAndHostUIDGIDArgs(t *testing.T) {
 		"useradd -m -u ${UID} -g ${GID}",
 		"/home/debian/workspace",
 		"chown -R ${UID}:${GID} /home/debian",
+		"ALL ALL=(ALL:ALL) NOPASSWD:ALL",
+		"/etc/sudoers.d/opencode-manager",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("workspace Dockerfile missing %q:\n%s", want, content)

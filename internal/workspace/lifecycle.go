@@ -889,7 +889,11 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 // Revision 10: put /home/debian/.local/bin on the default PATH so per-user
 // installs (pip --user, pipx, uv tool, curl|sh installers) are visible to the
 // OpenCode server without each module having to export PATH into ~/.env.
-const baseImageRevision = 10
+//
+// Revision 11: make the passwordless sudoers rule explicit for target user and
+// group with (ALL:ALL), and repeat it in the workspace image layer so older
+// cached base images cannot reintroduce password prompts.
+const baseImageRevision = 11
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {
