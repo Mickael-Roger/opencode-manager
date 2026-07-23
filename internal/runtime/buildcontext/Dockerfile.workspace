@@ -11,4 +11,8 @@ ARG GID
 
 RUN set -eux; if getent group ${GID}; then group_name=$(getent group ${GID} | cut -d: -f1); else groupadd -g ${GID} debian && group_name=debian; fi; if getent passwd ${UID}; then user_name=$(getent passwd ${UID} | cut -d: -f1); usermod -d /home/debian -s /bin/bash ${user_name}; else useradd -m -u ${UID} -g ${GID} -s /bin/bash debian; user_name=debian; fi; mkdir -p /home/debian/workspace && chown -R ${UID}:${GID} /home/debian
 RUN echo 'ALL ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && chmod 0440 /etc/sudoers.d/opencode-manager
+# Refresh manager-owned scripts even when the resolved base image is cached.
+COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach
+COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint
+RUN chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint
 WORKDIR /home/debian/workspace
