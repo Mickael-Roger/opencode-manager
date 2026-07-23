@@ -47,6 +47,8 @@ type model struct {
 	runtimeError     string
 	loadError        string
 	message          string
+	errorTitle       string
+	errorMessage     string
 
 	// baseImageReady gates the whole dashboard: until the managed base image
 	// finishes building (baseImageReadyMsg), the UI shows a blocking overlay and
@@ -108,6 +110,7 @@ type model struct {
 	// createWorkspace kicks off provisioning and removed when its
 	// provisionWorkspaceMsg arrives.
 	provisioning map[string]bool
+	updating     map[string]bool
 
 	// set when the npm registry reports a newer release than appVersion; the
 	// header shows an "update available" notice (see checkForUpdate).
@@ -435,6 +438,7 @@ func newModel(cfg config.Config) model {
 		versions:         map[string]versionState{},
 		installing:       map[string]bool{},
 		provisioning:     map[string]bool{},
+		updating:         map[string]bool{},
 		width:            100,
 		height:           30,
 		message:          "Creating the base image...",
@@ -456,6 +460,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			slog.Error("failed to load workspaces", "error", msg.err)
 			m.loadError = msg.err.Error()
+			m.showError("Load Workspaces", fmt.Sprintf("Failed to load workspaces: %v", msg.err))
 			m.workspaces = nil
 			return m, nil
 		}
@@ -534,7 +539,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case lifecycleActionMsg:
 		if msg.err != nil {
 			slog.Error("lifecycle action failed", "action", msg.action, "workspace", msg.name, "error", msg.err)
-			m.message = fmt.Sprintf("%s failed for %s: %v", msg.action, msg.name, msg.err)
+			m.showError(msg.action, fmt.Sprintf("%s failed for %s: %v", msg.action, msg.name, msg.err))
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		slog.Info("lifecycle action completed", "action", msg.action, "workspace", msg.name)
@@ -544,16 +549,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.provisioning, msg.name)
 		if msg.err != nil {
 			slog.Error("workspace provisioning failed", "workspace", msg.name, "error", msg.err)
-			m.message = fmt.Sprintf("Create runtime provisioning failed for %s: %v", msg.name, msg.err)
+			m.showError("Create Workspace", fmt.Sprintf("Create runtime provisioning failed for %s: %v", msg.name, msg.err))
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		slog.Info("workspace provisioned", "workspace", msg.name)
 		m.message = fmt.Sprintf("Created workspace %s — container is up and running.", msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case updateActionMsg:
+		delete(m.updating, msg.name)
 		if msg.err != nil {
 			slog.Error("OpenCode update failed", "workspace", msg.name, "error", msg.err)
-			m.message = fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err)
+			m.showError("Update OpenCode", fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err))
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		slog.Info("OpenCode updated", "workspace", msg.name, "version", msg.version)
@@ -564,7 +570,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.installing, msg.name)
 		if msg.err != nil {
 			slog.Error("module edit failed", "workspace", msg.name, "error", msg.err)
-			m.message = fmt.Sprintf("Module edit failed for %s: %v", msg.name, msg.err)
+			m.showError("Edit Modules", fmt.Sprintf("Module edit failed for %s: %v", msg.name, msg.err))
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
 		slog.Info("module edit completed", "workspace", msg.name, "summary", msg.summary)
@@ -585,7 +591,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case attachReadyMsg:
 		if msg.err != nil {
 			slog.Error("session start failed", "kind", msg.noun, "workspace", msg.name, "error", msg.err)
-			m.message = fmt.Sprintf("%s failed for %s: %v", msg.noun, msg.name, msg.err)
+			m.showError(msg.noun, fmt.Sprintf("%s failed for %s: %v", msg.noun, msg.name, msg.err))
 			return m, m.loadStatuses
 		}
 		slog.Info("session started", "kind", msg.noun, "workspace", msg.name)
@@ -600,7 +606,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Detached (Ctrl-C). Container still running in the background."
 		case msg.Err != nil:
 			slog.Error("attach session failed", "error", msg.Err)
-			m.message = fmt.Sprintf("Attach session failed: %v", msg.Err)
+			m.showError("Attach Session", fmt.Sprintf("Attach session failed: %v", msg.Err))
 		default:
 			slog.Debug("attach session closed, container stopped")
 			m.message = "Attach session closed; container stopped."
@@ -609,7 +615,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workspace.ShellResultMsg:
 		if msg.Err != nil {
 			slog.Error("shell session failed", "error", msg.Err)
-			m.message = fmt.Sprintf("Shell session failed: %v", msg.Err)
+			m.showError("Shell Session", fmt.Sprintf("Shell session failed: %v", msg.Err))
 		} else {
 			slog.Debug("shell session closed")
 			m.message = "Shell session closed."
@@ -649,6 +655,16 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	if m.errorMessage != "" {
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		case "esc", "enter":
+			m.clearError()
 		}
 		return m, nil
 	}
@@ -997,14 +1013,14 @@ func (m model) validateCreateName() (string, bool) {
 
 func (m model) createWorkspace(name string, tmpl *workspace.Template) (tea.Model, tea.Cmd) {
 	if name == "" {
-		m.message = "Workspace name is required."
+		m.showError("Create Workspace", "Workspace name is required.")
 		return m, nil
 	}
 
 	result, err := m.registry.Create(name)
 	if err != nil {
 		slog.Error("failed to create workspace", "name", name, "error", err)
-		m.message = fmt.Sprintf("Create failed: %v", err)
+		m.showError("Create Workspace", fmt.Sprintf("Create failed: %v", err))
 		return m, nil
 	}
 
@@ -1017,7 +1033,7 @@ func (m model) createWorkspace(name string, tmpl *workspace.Template) (tea.Model
 		manifest.UpdatedAt = time.Now().UTC()
 		if err := workspace.SaveManifest(filepath.Join(result.Path, workspace.ManifestFile), manifest); err != nil {
 			slog.Error("failed to apply template to workspace", "name", name, "template", tmpl.Name, "error", err)
-			m.message = fmt.Sprintf("Created workspace %s but applying template %q failed: %v", result.Manifest.Name, tmpl.Name, err)
+			m.showError("Create Workspace", fmt.Sprintf("Created workspace %s but applying template %q failed: %v", result.Manifest.Name, tmpl.Name, err))
 			return m, m.loadWorkspaces
 		}
 		result.Manifest = manifest
@@ -1077,7 +1093,7 @@ func (m model) stopSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Stop failed: " + m.lifecycleErr
+		m.showError("Stop Workspace", "Stop failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
@@ -1096,7 +1112,7 @@ func (m model) deleteSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Delete failed: " + m.lifecycleErr
+		m.showError("Delete Workspace", "Delete failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
@@ -1115,7 +1131,7 @@ func (m model) attachSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Attach failed: " + m.lifecycleErr
+		m.showError("Attach Workspace", "Attach failed: "+m.lifecycleErr)
 		return m, nil
 	}
 	if m.installing[selected.Manifest.Name] {
@@ -1139,7 +1155,7 @@ func (m model) shellSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Shell failed: " + m.lifecycleErr
+		m.showError("Shell Workspace", "Shell failed: "+m.lifecycleErr)
 		return m, nil
 	}
 	if m.installing[selected.Manifest.Name] {
@@ -1179,7 +1195,7 @@ func (m model) startSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Start failed: " + m.lifecycleErr
+		m.showError("Start Workspace", "Start failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
@@ -1202,7 +1218,7 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Update failed: " + m.lifecycleErr
+		m.showError("Update OpenCode", "Update failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
@@ -1213,6 +1229,10 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.updating == nil {
+		m.updating = map[string]bool{}
+	}
+	m.updating[name] = true
 	m.message = "Updating OpenCode in " + name + " (this restarts the container)..."
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -1347,6 +1367,9 @@ func (m model) View() string {
 	}
 	if m.showHelp {
 		view = overlayCentered(view, m.renderHelp(), width, height)
+	}
+	if m.errorMessage != "" {
+		view = overlayCentered(view, m.renderErrorDialog(), width, height)
 	}
 
 	// The base-image gate sits on top of everything: while it is up the rest of
@@ -1930,6 +1953,35 @@ func (m model) renderDeleteConfirmation() string {
 	return k9sDialog("Confirm Delete", content, colBorder)
 }
 
+func (m model) renderErrorDialog() string {
+	title := m.errorTitle
+	if title == "" {
+		title = "Error"
+	}
+	width := clamp(m.width-16, 40, 96)
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		errorStyle.Render(title),
+		"",
+		dialogText.Render(wrapText(m.errorMessage, width)),
+		"",
+		mutedStyle.Render("Press Enter or Esc to close."),
+	)
+	return k9sDialog("Error", content, colError)
+}
+
+func (m *model) showError(title, message string) {
+	m.errorTitle = title
+	m.errorMessage = message
+	m.message = "Error: " + title + ". Press Enter or Esc to view the dashboard."
+}
+
+func (m *model) clearError() {
+	m.errorTitle = ""
+	m.errorMessage = ""
+	m.message = ""
+}
+
 func (m model) renderCreatePrompt() string {
 	// Name field: a focus caret only while the name has focus, so it is clear which
 	// element is active.
@@ -2158,6 +2210,10 @@ func (m model) runtimeStatus() string {
 
 // workspaceStatus returns the display text and color for a workspace container.
 func (m model) workspaceStatus(ws workspace.Summary) (string, lipgloss.Color) {
+	if m.updating[ws.Manifest.Name] {
+		return "updating", colStarting
+	}
+
 	// A freshly created workspace has no container yet (the runtime reports it
 	// "missing") while its image builds and the container is created. Surface
 	// that in-progress work as "creating" until provisioning completes.
@@ -2582,6 +2638,34 @@ func fit(s string, w int) string {
 	}
 
 	return s + strings.Repeat(" ", w-len(r))
+}
+
+func wrapText(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+
+	var lines []string
+	for _, raw := range strings.Split(s, "\n") {
+		words := strings.Fields(raw)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+
+		line := words[0]
+		for _, word := range words[1:] {
+			if lipgloss.Width(line)+1+lipgloss.Width(word) <= width {
+				line += " " + word
+				continue
+			}
+			lines = append(lines, line)
+			line = word
+		}
+		lines = append(lines, line)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func clamp(value, minValue, maxValue int) int {
