@@ -155,6 +155,9 @@ func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
 				return fmt.Errorf("start failed: %w; recreate failed: %v", err, recreateErr)
 			}
 		}
+		if err := l.verifyStarted(ctx, name); err != nil {
+			return err
+		}
 		slog.Info("workspace container started", "workspace", summary.Manifest.Name, "container", name)
 	} else {
 		slog.Debug("workspace container already running", "workspace", summary.Manifest.Name, "container", name)
@@ -173,6 +176,38 @@ func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
 	l.runPostCreateHook(ctx, summary)
 
 	return nil
+}
+
+const (
+	startupGracePeriod  = time.Second
+	startupPollInterval = 50 * time.Millisecond
+)
+
+// verifyStarted catches entrypoint failures that occur just after the runtime
+// accepts start, including failed CA trust-store installation.
+func (l Lifecycle) verifyStarted(ctx context.Context, name string) error {
+	timer := time.NewTimer(startupGracePeriod)
+	defer timer.Stop()
+	ticker := time.NewTicker(startupPollInterval)
+	defer ticker.Stop()
+
+	for {
+		status, err := l.driver.ContainerStatus(ctx, name)
+		if err != nil {
+			return fmt.Errorf("verify started container: %w", err)
+		}
+		if status != runtime.StatusRunning {
+			return fmt.Errorf("workspace container exited during startup: %s", status)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runtime.ContainerSpec, error) {
@@ -225,6 +260,13 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
+	extraCAMount, extraCAFingerprint, err := extraCACertificateMount(l.cfg.ExtraCACertificate)
+	if err != nil {
+		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+	if extraCAMount != nil {
+		mounts = append(mounts, *extraCAMount)
+	}
 	// Mount the host module directory read-only so module install/uninstall
 	// scripts are runnable inside the container.
 	mounts = append(mounts, moduleMounts(l.cfg)...)
@@ -237,11 +279,14 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	// Carry the workspace's manifest env plus the assigned OpenCode port into the
 	// container without mutating the persisted env map. The entrypoint binds the
 	// server to this port and the attach client connects to it.
-	env := make(map[string]string, len(manifest.Env)+1)
+	env := make(map[string]string, len(manifest.Env)+2)
 	for k, v := range manifest.Env {
 		env[k] = v
 	}
 	env[OpenCodePortEnv] = strconv.Itoa(manifest.OpenCodePort)
+	if extraCAFingerprint != "" {
+		env[extraCACertificateFingerprintEnv] = extraCAFingerprint
+	}
 
 	spec := runtime.ContainerSpec{
 		Name:        manifest.ContainerName,
@@ -346,6 +391,38 @@ const openCodeHomeDir = "/home/debian"
 const openCodeConfigDir = openCodeHomeDir + "/.config/opencode"
 
 const openCodeAuthRelPath = ".local/share/opencode/auth.json"
+
+const (
+	extraCACertificateContainerPath  = "/run/opencode-manager-extra-ca.crt"
+	extraCACertificateFingerprintEnv = "OCM_EXTRA_CA_CERTIFICATE_SHA256"
+)
+
+// extraCACertificateMount returns the mount and content fingerprint for an
+// optional host CA certificate. The fingerprint recreates containers after a
+// certificate update.
+func extraCACertificateMount(path string) (*runtime.Mount, string, error) {
+	if path == "" {
+		return nil, "", nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("check extra CA certificate %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("extra CA certificate %q must be a regular file", path)
+	}
+	if err := config.ValidateCACertificate(path); err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read extra CA certificate %q: %w", path, err)
+	}
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256(data))
+
+	return &runtime.Mount{Source: path, Target: extraCACertificateContainerPath, ReadOnly: true}, fingerprint, nil
+}
 
 // openCodeMounts returns the read-only bind mounts that expose the global
 // OpenCode templates (~/.config/opencode-manager) inside the workspace at
@@ -645,11 +722,9 @@ func (l Lifecycle) containerImageStale(ctx context.Context, manifest Manifest) (
 
 // containerSpecDrift reports whether the existing container's runtime config no
 // longer matches the desired spec in ways that require recreation: a changed
-// network namespace (config.HostNetwork toggled) or a stale/missing assigned
-// OpenCode port. Either leaves the workspace's OpenCode server and attach client
-// on the wrong port — under host networking that means the shared default 4096,
-// colliding with another workspace. A failed inspect returns false so a transient
-// error never churns containers.
+// network namespace (config.HostNetwork toggled), a stale/missing assigned
+// OpenCode port, or a changed extra CA certificate. A failed inspect returns
+// false so a transient error never churns containers.
 func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, spec runtime.ContainerSpec) bool {
 	rc, err := l.driver.ContainerRuntimeConfig(ctx, manifest.ContainerName)
 	if err != nil {
@@ -664,6 +739,11 @@ func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, sp
 	want := strconv.Itoa(manifest.OpenCodePort)
 	if rc.Env[OpenCodePortEnv] != want {
 		slog.Debug("container OpenCode port differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName, "have", rc.Env[OpenCodePortEnv], "want", want)
+		return true
+	}
+
+	if rc.Env[extraCACertificateFingerprintEnv] != spec.Env[extraCACertificateFingerprintEnv] {
+		slog.Debug("container extra CA certificate differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
 		return true
 	}
 

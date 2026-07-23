@@ -16,6 +16,13 @@ if [ -z "$OCM_OPENCODE_PORT" ]; then
   exit 1
 fi
 
+# The manager mounts an optional host CA certificate read-only. Install it into
+# the Debian trust store before starting OpenCode so all workspace tools trust it.
+if [ -f /run/opencode-manager-extra-ca.crt ]; then
+  sudo install -m 0644 /run/opencode-manager-extra-ca.crt /usr/local/share/ca-certificates/opencode-manager-extra-ca.crt || exit 1
+  sudo update-ca-certificates || exit 1
+fi
+
 child=""
 shutdown() {
   [ -n "$child" ] && kill -TERM "$child" 2>/dev/null

@@ -168,6 +168,7 @@ Example:
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
+extraCACertificate: ""
 hostNetwork: false
 runtimeArgs:
   - --dns
@@ -193,6 +194,11 @@ workspacePreDeleteCommands:
 Set `useLocalOpenCodeAuth: true` to mount the host file
 `~/.local/share/opencode/auth.json` read-write into the same path in each
 workspace container. The default `false` keeps auth isolated from the host.
+
+Set `extraCACertificate` to an absolute path to an existing host CA certificate
+file to mount it read-only and install it in each workspace container's Debian
+system trust store. The option is empty by default. A certificate change takes
+effect when the workspace next starts, which recreates its container.
 
 Set `hostNetwork: true` to run each container in the host's network namespace
 (`--network host`) instead of an isolated one, so the agent and its tools can
