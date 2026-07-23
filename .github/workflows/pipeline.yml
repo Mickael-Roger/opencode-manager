@@ -63,8 +63,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Test
-        run: go test ./...
+        run: npm test
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
