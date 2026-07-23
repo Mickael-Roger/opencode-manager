@@ -34,7 +34,7 @@ function ensureConfig() {
     `workspaceRoot: ${yamlString(workspaceRoot)}`,
     "runtime: docker",
     "useLocalOpenCodeAuth: false",
-    'extraCACertificate: ""',
+    "extraCACertificate: []",
     "baseImage:",
     "  name: docker.io/mroger78/ocm-base:latest",
     "  packages: []",

@@ -58,9 +58,9 @@ type Config struct {
 	WorkspaceRoot        string `yaml:"workspaceRoot"`
 	Runtime              string `yaml:"runtime"`
 	UseLocalOpenCodeAuth bool   `yaml:"useLocalOpenCodeAuth"`
-	// ExtraCACertificate is an optional absolute path to a host CA certificate
+	// ExtraCACertificates are optional absolute paths to host CA certificates
 	// installed into every workspace container's system trust store.
-	ExtraCACertificate string `yaml:"extraCACertificate"`
+	ExtraCACertificates CACertificates `yaml:"extraCACertificate"`
 	// HostNetwork shares the host's network namespace with each workspace
 	// container (docker/podman `--network host`) instead of giving it an isolated
 	// one. Off by default. Because every workspace then shares the host loopback,
@@ -88,6 +88,29 @@ type Config struct {
 	// pending commits or deregister. A failing command is logged and does not
 	// block deletion.
 	WorkspacePreDeleteCommands []string `yaml:"workspacePreDeleteCommands"`
+}
+
+// CACertificates accepts the current YAML list form and the single-string form
+// used by existing configs before multiple certificates were supported.
+type CACertificates []string
+
+func (c *CACertificates) UnmarshalYAML(unmarshal func(any) error) error {
+	var paths []string
+	if err := unmarshal(&paths); err == nil {
+		*c = paths
+		return nil
+	}
+
+	var path string
+	if err := unmarshal(&path); err != nil {
+		return err
+	}
+	if path == "" {
+		*c = nil
+		return nil
+	}
+	*c = []string{path}
+	return nil
 }
 
 type BaseImageConfig struct {
@@ -286,18 +309,21 @@ func (c Config) Validate() error {
 		return errors.New("baseImage.name is required")
 	}
 
-	if c.ExtraCACertificate != "" {
-		if !filepath.IsAbs(c.ExtraCACertificate) {
-			return errors.New("extraCACertificate must be an absolute path")
+	for _, path := range c.ExtraCACertificates {
+		if path == "" {
+			return errors.New("extraCACertificate cannot contain empty paths")
 		}
-		info, err := os.Stat(c.ExtraCACertificate)
+		if !filepath.IsAbs(path) {
+			return errors.New("extraCACertificate paths must be absolute")
+		}
+		info, err := os.Stat(path)
 		if err != nil {
-			return fmt.Errorf("check extra CA certificate %q: %w", c.ExtraCACertificate, err)
+			return fmt.Errorf("check extra CA certificate %q: %w", path, err)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("extra CA certificate %q must be a regular file", c.ExtraCACertificate)
+			return fmt.Errorf("extra CA certificate %q must be a regular file", path)
 		}
-		if err := ValidateCACertificate(c.ExtraCACertificate); err != nil {
+		if err := ValidateCACertificate(path); err != nil {
 			return err
 		}
 	}

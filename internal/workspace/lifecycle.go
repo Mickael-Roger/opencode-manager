@@ -260,13 +260,11 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
-	extraCAMount, extraCAFingerprint, err := extraCACertificateMount(l.cfg.ExtraCACertificate)
+	extraCAMounts, extraCAFingerprint, err := extraCACertificateMounts(l.cfg.ExtraCACertificates)
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
-	if extraCAMount != nil {
-		mounts = append(mounts, *extraCAMount)
-	}
+	mounts = append(mounts, extraCAMounts...)
 	// Mount the host module directory read-only so module install/uninstall
 	// scripts are runnable inside the container.
 	mounts = append(mounts, moduleMounts(l.cfg)...)
@@ -393,35 +391,39 @@ const openCodeConfigDir = openCodeHomeDir + "/.config/opencode"
 const openCodeAuthRelPath = ".local/share/opencode/auth.json"
 
 const (
-	extraCACertificateContainerPath  = "/run/opencode-manager-extra-ca.crt"
 	extraCACertificateFingerprintEnv = "OCM_EXTRA_CA_CERTIFICATE_SHA256"
 )
 
-// extraCACertificateMount returns the mount and content fingerprint for an
-// optional host CA certificate. The fingerprint recreates containers after a
-// certificate update.
-func extraCACertificateMount(path string) (*runtime.Mount, string, error) {
-	if path == "" {
+// extraCACertificateMounts returns mounts and a combined fingerprint for all
+// optional host CA certificates. Any list or content change recreates containers.
+func extraCACertificateMounts(paths []string) ([]runtime.Mount, string, error) {
+	if len(paths) == 0 {
 		return nil, "", nil
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, "", fmt.Errorf("check extra CA certificate %q: %w", path, err)
+	mounts := make([]runtime.Mount, 0, len(paths))
+	hash := sha256.New()
+	for index, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("check extra CA certificate %q: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, "", fmt.Errorf("extra CA certificate %q must be a regular file", path)
+		}
+		if err := config.ValidateCACertificate(path); err != nil {
+			return nil, "", err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("read extra CA certificate %q: %w", path, err)
+		}
+		fmt.Fprintf(hash, "%d:%s\x00", index, path)
+		hash.Write(data)
+		mounts = append(mounts, runtime.Mount{Source: path, Target: fmt.Sprintf("/run/opencode-manager-extra-ca-%d.crt", index), ReadOnly: true})
 	}
-	if !info.Mode().IsRegular() {
-		return nil, "", fmt.Errorf("extra CA certificate %q must be a regular file", path)
-	}
-	if err := config.ValidateCACertificate(path); err != nil {
-		return nil, "", err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, "", fmt.Errorf("read extra CA certificate %q: %w", path, err)
-	}
-	fingerprint := fmt.Sprintf("%x", sha256.Sum256(data))
 
-	return &runtime.Mount{Source: path, Target: extraCACertificateContainerPath, ReadOnly: true}, fingerprint, nil
+	return mounts, fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 // openCodeMounts returns the read-only bind mounts that expose the global
