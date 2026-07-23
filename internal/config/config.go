@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -56,6 +58,9 @@ type Config struct {
 	WorkspaceRoot        string `yaml:"workspaceRoot"`
 	Runtime              string `yaml:"runtime"`
 	UseLocalOpenCodeAuth bool   `yaml:"useLocalOpenCodeAuth"`
+	// ExtraCACertificate is an optional absolute path to a host CA certificate
+	// installed into every workspace container's system trust store.
+	ExtraCACertificate string `yaml:"extraCACertificate"`
 	// HostNetwork shares the host's network namespace with each workspace
 	// container (docker/podman `--network host`) instead of giving it an isolated
 	// one. Off by default. Because every workspace then shares the host loopback,
@@ -281,6 +286,22 @@ func (c Config) Validate() error {
 		return errors.New("baseImage.name is required")
 	}
 
+	if c.ExtraCACertificate != "" {
+		if !filepath.IsAbs(c.ExtraCACertificate) {
+			return errors.New("extraCACertificate must be an absolute path")
+		}
+		info, err := os.Stat(c.ExtraCACertificate)
+		if err != nil {
+			return fmt.Errorf("check extra CA certificate %q: %w", c.ExtraCACertificate, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("extra CA certificate %q must be a regular file", c.ExtraCACertificate)
+		}
+		if err := ValidateCACertificate(c.ExtraCACertificate); err != nil {
+			return err
+		}
+	}
+
 	for _, pkg := range c.BaseImage.Packages {
 		if pkg == "" {
 			return errors.New("baseImage.packages cannot contain empty package names")
@@ -309,6 +330,37 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(command) == "" {
 			return errors.New("workspacePreDeleteCommands cannot contain empty commands")
 		}
+	}
+
+	return nil
+}
+
+// ValidateCACertificate verifies that path contains one or more PEM-encoded CA
+// certificates suitable for installation into the container trust store.
+func ValidateCACertificate(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read extra CA certificate %q: %w", path, err)
+	}
+
+	count := 0
+	for len(data) > 0 {
+		block, rest := pem.Decode(data)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return fmt.Errorf("extra CA certificate %q must contain PEM-encoded X.509 certificates", path)
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("parse extra CA certificate %q: %w", path, err)
+		}
+		if !certificate.IsCA {
+			return fmt.Errorf("extra CA certificate %q must contain CA certificates", path)
+		}
+		count++
+		data = rest
+	}
+	if count == 0 {
+		return fmt.Errorf("extra CA certificate %q must contain PEM-encoded X.509 certificates", path)
 	}
 
 	return nil

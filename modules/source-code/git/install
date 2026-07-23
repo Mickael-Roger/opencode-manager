@@ -1,9 +1,9 @@
 #!/bin/sh
-# Configures the git identity from the values resolved off the host and clones the
-# requested repository into the workspace home directory. Idempotent: identity is
-# (re)written only for values the host actually provides, and a repo whose target
-# directory already exists is left untouched, so reconcile never re-clones or
-# clobbers local work.
+# Configures git from values resolved off the host and clones the requested
+# repository into the workspace home directory. Idempotent: identity/signing
+# config is (re)written only for values the host actually provides, and a repo
+# whose target directory already exists is left untouched, so reconcile never
+# re-clones or clobbers local work.
 set -e
 
 # Install git if missing (needed for both the config below and cloning).
@@ -22,6 +22,28 @@ if [ -n "$OCM_EMAIL" ]; then
 fi
 if [ -n "$OCM_NAME" ] || [ -n "$OCM_EMAIL" ]; then
   echo "git identity configured: ${OCM_NAME:-unset} <${OCM_EMAIL:-unset}>"
+fi
+
+# OpenPGP signing config comes from the host resolve hook. The secret key is not
+# persisted in the workspace manifest; it is passed only for this install run.
+if [ -n "$OCM_GPG_SECRET_KEY_B64" ] && [ -n "$OCM_GPG_SIGNINGKEY" ]; then
+  if ! command -v gpg >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends gnupg
+  fi
+  mkdir -p "$HOME/.gnupg"
+  chmod 700 "$HOME/.gnupg"
+  printf '%s' "$OCM_GPG_SECRET_KEY_B64" | base64 -d | gpg --batch --import >/dev/null 2>&1
+  git config --global user.signingkey "$OCM_GPG_SIGNINGKEY"
+  git config --global gpg.format openpgp
+  git config --global gpg.program gpg
+  if [ -n "$OCM_GPG_COMMIT_SIGN" ]; then
+    git config --global commit.gpgsign "$OCM_GPG_COMMIT_SIGN"
+  fi
+  if [ -n "$OCM_GPG_TAG_SIGN" ]; then
+    git config --global tag.gpgsign "$OCM_GPG_TAG_SIGN"
+  fi
+  echo "git OpenPGP signing key configured: $OCM_GPG_SIGNINGKEY"
 fi
 
 # No repo to clone (e.g. an identity-only legacy entry): identity is configured

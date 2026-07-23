@@ -55,14 +55,14 @@ func (m model) editSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Edit failed: " + m.lifecycleErr
+		m.showError("Edit Modules", "Edit failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
 	catalog, err := m.lifecycle.Catalog()
 	if err != nil {
 		m.catalogErr = err.Error()
-		m.message = "Failed to load modules: " + err.Error()
+		m.showError("Edit Modules", "Failed to load modules: "+err.Error())
 		return m, nil
 	}
 	if len(catalog) == 0 {
@@ -136,7 +136,7 @@ func (m model) openTemplateEditor(t workspace.Template, isNew bool) (tea.Model, 
 	catalog, err := m.lifecycle.Catalog()
 	if err != nil {
 		m.catalogErr = err.Error()
-		m.message = "Failed to load modules: " + err.Error()
+		m.showError("Edit Template", "Failed to load modules: "+err.Error())
 		return m, nil
 	}
 	if len(catalog) == 0 {
@@ -395,7 +395,7 @@ func (m *model) prepareEditPrompt() {
 	if cur.Type == module.PromptSelect || cur.Type == module.PromptMultiSelect {
 		opts, err := loadPromptOptions(m.editPromptMod, cur)
 		if err != nil {
-			m.message = fmt.Sprintf("Failed to load options for %s: %v", cur.Label, err)
+			m.showError("Module Options", fmt.Sprintf("Failed to load options for %s: %v", cur.Label, err))
 		}
 		m.editPromptOptions = opts
 		m.editPromptChosen = make([]bool, len(opts))
@@ -945,7 +945,7 @@ func (m model) applyTemplateEdit() (tea.Model, tea.Cmd) {
 	t.UpdatedAt = now
 
 	if err := m.templateRegistry.Save(t); err != nil {
-		m.message = fmt.Sprintf("Save template failed: %v", err)
+		m.showError("Save Template", fmt.Sprintf("Save template failed: %v", err))
 		return m, nil
 	}
 
@@ -954,7 +954,7 @@ func (m model) applyTemplateEdit() (tea.Model, tea.Cmd) {
 	m.editEntries = nil
 	m.editFilter = ""
 	if err := m.reloadTemplates(); err != nil {
-		m.message = fmt.Sprintf("Saved template %q, but reloading failed: %v", t.Name, err)
+		m.showError("Save Template", fmt.Sprintf("Saved template %q, but reloading failed: %v", t.Name, err))
 		return m, nil
 	}
 	m.selectTemplate(t.Name)

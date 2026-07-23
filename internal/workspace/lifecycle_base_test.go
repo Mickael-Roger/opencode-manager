@@ -220,3 +220,35 @@ func TestProvisionBackfillsMissingPort(t *testing.T) {
 		t.Fatalf("backfilled port = %d, want within [%d, %d]", saved.OpenCodePort, OpenCodePortMin, OpenCodePortMax)
 	}
 }
+
+func TestProvisionMountsExtraCACertificate(t *testing.T) {
+	rec := &specRecordingDriver{fakeDriver: &fakeDriver{}}
+	root := t.TempDir()
+	certificate := filepath.Join(root, "company-ca.crt")
+	writeTestFile(t, certificate, testCACertificate(t))
+	cfg := config.Config{
+		WorkspaceRoot:      root,
+		Runtime:            config.RuntimeDocker,
+		ExtraCACertificate: certificate,
+		BaseImage:          config.BaseImageConfig{Name: "debian:stable-slim"},
+	}
+	l := Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: rec}
+
+	created, err := l.registry.Create("demo")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, spec, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path}); err != nil {
+		t.Fatalf("provision: %v", err)
+	} else if spec.Env[extraCACertificateFingerprintEnv] == "" {
+		t.Fatalf("spec.Env[%s] should contain certificate fingerprint", extraCACertificateFingerprintEnv)
+	}
+
+	want := runtime.Mount{Source: certificate, Target: extraCACertificateContainerPath, ReadOnly: true}
+	for _, mount := range rec.created.Mounts {
+		if mount == want {
+			return
+		}
+	}
+	t.Fatalf("extra CA mount not found in %#v", rec.created.Mounts)
+}

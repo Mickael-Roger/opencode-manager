@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,7 @@ func updateTestModel(activity workspace.Activity) model {
 		statuses: map[string]workspace.Status{
 			"app": {Activity: activity},
 		},
+		updating: map[string]bool{},
 	}
 }
 
@@ -287,6 +289,24 @@ func TestWorkspaceStatusCreatingWhileProvisioning(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStatusUpdatingWhileUpdateInProgress(t *testing.T) {
+	ws := workspace.Summary{Manifest: workspace.Manifest{Name: "app"}}
+	m := model{
+		workspaces: []workspace.Summary{ws},
+		statuses:   map[string]workspace.Status{"app": {Container: runtime.StatusRunning}},
+		updating:   map[string]bool{"app": true},
+	}
+
+	if label, _ := m.workspaceStatus(ws); label != "updating" {
+		t.Fatalf("status while updating = %q, want %q", label, "updating")
+	}
+
+	delete(m.updating, "app")
+	if label, _ := m.workspaceStatus(ws); label != "running" {
+		t.Fatalf("status after update = %q, want %q", label, "running")
+	}
+}
+
 // Update must be refused while OpenCode is mid-task so the post-update restart
 // cannot interrupt active work.
 func TestUpdateRefusedWhileTaskRunning(t *testing.T) {
@@ -313,6 +333,29 @@ func TestUpdateDispatchedWhenIdle(t *testing.T) {
 		if msg := next.(model).message; !strings.Contains(msg, "Updating OpenCode") {
 			t.Fatalf("activity %q: message = %q, want progress message", activity, msg)
 		}
+		if label, _ := next.(model).workspaceStatus(m.workspaces[0]); label != "updating" {
+			t.Fatalf("activity %q: status = %q, want updating", activity, label)
+		}
+	}
+}
+
+func TestUpdateErrorOpensFullErrorDialog(t *testing.T) {
+	m := model{width: 70, baseImageReady: true}
+	longErr := "first line with enough text to wrap without truncating and a unique-tail-token"
+	updated, _ := m.Update(updateActionMsg{name: "app", err: errors.New(longErr)})
+	next := updated.(model)
+
+	if next.errorMessage == "" {
+		t.Fatal("expected error dialog state")
+	}
+	dialog := next.renderErrorDialog()
+	if !strings.Contains(dialog, "unique-tail-token") {
+		t.Fatalf("dialog should contain the complete error message, got:\n%s", dialog)
+	}
+
+	closed, _ := next.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if closed.(model).errorMessage != "" {
+		t.Fatal("Esc should dismiss the error dialog")
 	}
 }
 

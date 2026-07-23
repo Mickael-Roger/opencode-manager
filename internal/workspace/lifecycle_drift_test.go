@@ -70,6 +70,12 @@ func TestContainerSpecDrift(t *testing.T) {
 			spec:  runtime.ContainerSpec{HostNetwork: true},
 			want:  false,
 		},
+		{
+			name: "extra CA certificate changed",
+			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "bridge", Env: map[string]string{OpenCodePortEnv: "4097", extraCACertificateFingerprintEnv: "old"}},
+			spec: runtime.ContainerSpec{Env: map[string]string{extraCACertificateFingerprintEnv: "new"}},
+			want: true,
+		},
 	}
 
 	for _, tc := range cases {

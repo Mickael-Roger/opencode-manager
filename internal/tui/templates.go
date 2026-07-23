@@ -18,7 +18,7 @@ func (m model) showTemplates() (tea.Model, tea.Cmd) {
 	m.templateFilterMode = false
 	m.templatePos = 0
 	if err := m.reloadTemplates(); err != nil {
-		m.message = "Failed to load templates: " + err.Error()
+		m.showError("Templates", "Failed to load templates: "+err.Error())
 		return m, nil
 	}
 	m.message = "Templates — c create, e edit, ^d delete, :workspaces to go back."
@@ -172,7 +172,7 @@ func (m model) editSelectedTemplate() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.message = "Edit failed: " + m.lifecycleErr
+		m.showError("Edit Template", "Edit failed: "+m.lifecycleErr)
 		return m, nil
 	}
 	return m.openTemplateEditor(t, false)
@@ -194,11 +194,11 @@ func (m model) deleteSelectedTemplate() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if err := m.templateRegistry.Delete(t.Name); err != nil {
-		m.message = fmt.Sprintf("Delete failed: %v", err)
+		m.showError("Delete Template", fmt.Sprintf("Delete failed: %v", err))
 		return m, nil
 	}
 	if err := m.reloadTemplates(); err != nil {
-		m.message = "Deleted, but reloading templates failed: " + err.Error()
+		m.showError("Delete Template", "Deleted, but reloading templates failed: "+err.Error())
 		return m, nil
 	}
 	m.message = fmt.Sprintf("Deleted template %q.", t.Name)

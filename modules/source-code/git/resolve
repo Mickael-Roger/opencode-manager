@@ -1,9 +1,8 @@
 #!/bin/sh
-# Host-side resolve hook: emit the host's global git identity (user.name /
-# user.email) as install values so the workspace is configured with the same
-# identity as the host, without the user typing it. A value the host has not set
-# is simply not emitted, leaving that identity field unset in the container (git
-# then falls back to its own behaviour). The identity is pulled from the host on
+# Host-side resolve hook: emit the host's global git identity and OpenPGP signing
+# configuration as install values so the workspace is configured like the host,
+# without the user typing it. A value the host has not set is simply not emitted,
+# leaving that field unset in the container. Values are pulled from the host on
 # every install/reconcile and never persisted to the manifest.
 #
 # Runs on the host (where ~/.gitconfig lives) before the container install.
@@ -13,7 +12,28 @@ command -v git >/dev/null 2>&1 || exit 0
 
 name="$(git config --global user.name 2>/dev/null || true)"
 email="$(git config --global user.email 2>/dev/null || true)"
+signingkey="$(git config --global user.signingkey 2>/dev/null || true)"
+gpgformat="$(git config --global gpg.format 2>/dev/null || true)"
+commitgpgsign="$(git config --global commit.gpgsign 2>/dev/null || true)"
+taggpgsign="$(git config --global tag.gpgsign 2>/dev/null || true)"
 
 [ -n "$name" ] && printf 'name=%s\n' "$name"
 [ -n "$email" ] && printf 'email=%s\n' "$email"
+
+# Only OpenPGP signing is imported. Git also supports ssh/x509 signing formats,
+# but those need different host material and container configuration.
+case "$gpgformat" in
+  ""|openpgp) ;;
+  *) exit 0 ;;
+esac
+
+if [ -n "$signingkey" ] && command -v gpg >/dev/null 2>&1; then
+  secret_key_b64="$(gpg --batch --armor --export-secret-keys "$signingkey" 2>/dev/null | base64 | tr -d '\n' || true)"
+  if [ -n "$secret_key_b64" ]; then
+    printf 'gpg_signingkey=%s\n' "$signingkey"
+    printf 'gpg_secret_key_b64=%s\n' "$secret_key_b64"
+    [ -n "$commitgpgsign" ] && printf 'gpg_commit_sign=%s\n' "$commitgpgsign"
+    [ -n "$taggpgsign" ] && printf 'gpg_tag_sign=%s\n' "$taggpgsign"
+  fi
+fi
 exit 0

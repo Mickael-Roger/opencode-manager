@@ -159,6 +159,19 @@ func TestEntrypointAndAttachUseAssignedPort(t *testing.T) {
 	}
 }
 
+func TestEntrypointInstallsExtraCACertificate(t *testing.T) {
+	content := readBuildFile(t, "opencode-manager-entrypoint")
+	for _, want := range []string{
+		"/run/opencode-manager-extra-ca.crt",
+		"/usr/local/share/ca-certificates/opencode-manager-extra-ca.crt",
+		"update-ca-certificates",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("entrypoint should install the extra CA certificate using %q:\n%s", want, content)
+		}
+	}
+}
+
 func readBuildFile(t *testing.T, name string) string {
 	t.Helper()
 	data, err := buildContextFS.ReadFile("buildcontext/" + name)

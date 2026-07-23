@@ -1,10 +1,17 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadUsesDefaultsWhenConfigDoesNotExist(t *testing.T) {
@@ -23,6 +30,9 @@ func TestLoadUsesDefaultsWhenConfigDoesNotExist(t *testing.T) {
 
 	if cfg.UseLocalOpenCodeAuth {
 		t.Fatal("UseLocalOpenCodeAuth should default to false")
+	}
+	if cfg.ExtraCACertificate != "" {
+		t.Fatalf("ExtraCACertificate = %q, want empty by default", cfg.ExtraCACertificate)
 	}
 
 	if cfg.LogLevel != LogLevelWarning {
@@ -45,6 +55,69 @@ func TestLoadParsesHostNetwork(t *testing.T) {
 	}
 	if !cfg.HostNetwork {
 		t.Fatal("HostNetwork = false, want true")
+	}
+}
+
+func TestLoadParsesExtraCACertificate(t *testing.T) {
+	dir := t.TempDir()
+	certificate := filepath.Join(dir, "company-ca.crt")
+	writeFile(t, certificate, testCACertificate(t))
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("extraCACertificate: "+certificate+"\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ExtraCACertificate != certificate {
+		t.Fatalf("ExtraCACertificate = %q, want %q", cfg.ExtraCACertificate, certificate)
+	}
+}
+
+func TestLoadRejectsInvalidExtraCACertificate(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{name: "relative path", value: "company-ca.crt"},
+		{name: "missing file", value: filepath.Join(dir, "missing.crt")},
+		{name: "directory", value: dir},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeFile(t, path, []byte("extraCACertificate: "+tc.value+"\n"))
+
+			if _, err := Load(path); err == nil {
+				t.Fatal("Load should reject invalid extraCACertificate")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsMalformedExtraCACertificate(t *testing.T) {
+	dir := t.TempDir()
+	certificate := filepath.Join(dir, "company-ca.crt")
+	writeFile(t, certificate, []byte("not a certificate\n"))
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("extraCACertificate: "+certificate+"\n"))
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject a malformed extraCACertificate")
+	}
+}
+
+func TestLoadRejectsNonCAExtraCACertificate(t *testing.T) {
+	dir := t.TempDir()
+	certificate := filepath.Join(dir, "leaf.crt")
+	writeFile(t, certificate, testCertificate(t, false))
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("extraCACertificate: "+certificate+"\n"))
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should reject a non-CA extraCACertificate")
 	}
 }
 
@@ -273,6 +346,35 @@ func writeFile(t *testing.T, path string, data []byte) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
+}
+
+func testCACertificate(t *testing.T) []byte {
+	return testCertificate(t, true)
+}
+
+func testCertificate(t *testing.T, isCA bool) []byte {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate test key: %v", err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test CA"},
+		NotBefore:             now,
+		NotAfter:              now.Add(time.Hour),
+		IsCA:                  isCA,
+		BasicConstraintsValid: isCA,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	certificate, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatalf("create test certificate: %v", err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate})
 }
 
 func TestIsManagedBaseImage(t *testing.T) {
