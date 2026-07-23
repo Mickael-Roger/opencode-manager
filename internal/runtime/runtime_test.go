@@ -256,6 +256,19 @@ func TestBaseDockerfileModuleSupport(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDockerfileRefreshesManagerScripts(t *testing.T) {
+	content := readBuildFile(t, workspaceDockerfile)
+	for _, want := range []string{
+		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
+		"COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint",
+		"chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("workspace Dockerfile missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestOverlayDockerfileOnlyAddsExtras(t *testing.T) {
 	content := readBuildFile(t, overlayDockerfile)
 	for _, want := range []string{
