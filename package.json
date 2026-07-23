@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "go build -o dist/opencode-manager-$(node -p \"process.platform\")-$(node -p \"process.arch\") ./cmd/opencode-manager",
-    "test": "go test ./...",
+    "test": "go test ./... && node --test scripts/verify-package.test.js",
     "prepack": "node scripts/verify-package.js",
     "postinstall": "node scripts/postinstall.js"
   },
