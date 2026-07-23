@@ -15,7 +15,7 @@ documents every option.
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
-extraCACertificate: ""
+extraCACertificate: []
 hostNetwork: false
 runtimeArgs:
   - --dns
@@ -58,18 +58,21 @@ share your host OpenCode login. Default `false` keeps auth isolated from the hos
 
 ### `extraCACertificate`
 
-Optional absolute path to a host CA certificate file. When set, the manager
-mounts the file **read-only** into each workspace container and installs it in
-the Debian system trust store before OpenCode starts. This lets OpenCode and
-other workspace tools trust services signed by a private or corporate CA.
+Optional list of absolute paths to host CA certificate files. The manager mounts
+each file **read-only** into every workspace container and installs them in the
+Debian system trust store before OpenCode starts. This lets OpenCode and other
+workspace tools trust services signed by private or corporate CAs.
 
 ```yaml
-extraCACertificate: /home/user/certificates/company-ca.crt
+extraCACertificate:
+  - /home/user/certificates/company-root-ca.crt
+  - /home/user/certificates/partner-root-ca.crt
 ```
 
-The path must point to an existing, readable regular file. Certificate changes
-take effect the next time a workspace starts; its container is recreated while
-the workspace home and module state are preserved.
+Every path must point to an existing, readable regular file. Certificate list or
+content changes take effect the next time a workspace starts; its container is
+recreated while the workspace home and module state are preserved. Existing
+single-path configurations remain supported.
 
 ### `hostNetwork`
 

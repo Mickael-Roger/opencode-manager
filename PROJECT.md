@@ -124,7 +124,7 @@ Example:
 workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
-extraCACertificate: ""
+extraCACertificate: []
 baseImage:
   name: debian:stable-slim
   packages:
@@ -143,9 +143,10 @@ When `useLocalOpenCodeAuth` is `true`, the host file
 workspace containers. It defaults to `false`, so host OpenCode auth is not shared
 unless explicitly enabled.
 
-`extraCACertificate` is an optional absolute path to an existing host CA
-certificate file. It is mounted read-only and installed in each workspace
-container's system trust store before OpenCode starts.
+`extraCACertificate` is an optional list of absolute paths to existing host CA
+certificate files. Each is mounted read-only and installed in every workspace
+container's system trust store before OpenCode starts. A single legacy path is
+also accepted.
 
 Generated workspace images always include `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Additional Debian packages are declared through `baseImage.packages`, and additional build steps are declared through `baseImage.commands`.
 

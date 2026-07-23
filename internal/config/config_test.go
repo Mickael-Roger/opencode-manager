@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -31,8 +32,8 @@ func TestLoadUsesDefaultsWhenConfigDoesNotExist(t *testing.T) {
 	if cfg.UseLocalOpenCodeAuth {
 		t.Fatal("UseLocalOpenCodeAuth should default to false")
 	}
-	if cfg.ExtraCACertificate != "" {
-		t.Fatalf("ExtraCACertificate = %q, want empty by default", cfg.ExtraCACertificate)
+	if len(cfg.ExtraCACertificates) != 0 {
+		t.Fatalf("ExtraCACertificates = %#v, want empty by default", cfg.ExtraCACertificates)
 	}
 
 	if cfg.LogLevel != LogLevelWarning {
@@ -69,8 +70,40 @@ func TestLoadParsesExtraCACertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if cfg.ExtraCACertificate != certificate {
-		t.Fatalf("ExtraCACertificate = %q, want %q", cfg.ExtraCACertificate, certificate)
+	if len(cfg.ExtraCACertificates) != 1 || cfg.ExtraCACertificates[0] != certificate {
+		t.Fatalf("ExtraCACertificates = %#v, want [%q]", cfg.ExtraCACertificates, certificate)
+	}
+}
+
+func TestLoadAcceptsEmptyLegacyExtraCACertificate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, []byte("extraCACertificate: \"\"\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(cfg.ExtraCACertificates) != 0 {
+		t.Fatalf("ExtraCACertificates = %#v, want empty", cfg.ExtraCACertificates)
+	}
+}
+
+func TestLoadParsesExtraCACertificateList(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first-ca.crt")
+	second := filepath.Join(dir, "second-ca.crt")
+	writeFile(t, first, testCACertificate(t))
+	writeFile(t, second, testCACertificate(t))
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("extraCACertificate:\n  - "+first+"\n  - "+second+"\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	want := []string{first, second}
+	if !reflect.DeepEqual([]string(cfg.ExtraCACertificates), want) {
+		t.Fatalf("ExtraCACertificates = %#v, want %#v", cfg.ExtraCACertificates, want)
 	}
 }
 

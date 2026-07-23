@@ -162,8 +162,8 @@ func TestEntrypointAndAttachUseAssignedPort(t *testing.T) {
 func TestEntrypointInstallsExtraCACertificate(t *testing.T) {
 	content := readBuildFile(t, "opencode-manager-entrypoint")
 	for _, want := range []string{
-		"/run/opencode-manager-extra-ca.crt",
-		"/usr/local/share/ca-certificates/opencode-manager-extra-ca.crt",
+		"/run/opencode-manager-extra-ca-*.crt",
+		"/usr/local/share/ca-certificates/${certificate##*/}",
 		"update-ca-certificates",
 	} {
 		if !strings.Contains(content, want) {

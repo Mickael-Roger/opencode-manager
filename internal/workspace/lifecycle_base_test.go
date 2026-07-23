@@ -227,10 +227,10 @@ func TestProvisionMountsExtraCACertificate(t *testing.T) {
 	certificate := filepath.Join(root, "company-ca.crt")
 	writeTestFile(t, certificate, testCACertificate(t))
 	cfg := config.Config{
-		WorkspaceRoot:      root,
-		Runtime:            config.RuntimeDocker,
-		ExtraCACertificate: certificate,
-		BaseImage:          config.BaseImageConfig{Name: "debian:stable-slim"},
+		WorkspaceRoot:       root,
+		Runtime:             config.RuntimeDocker,
+		ExtraCACertificates: config.CACertificates{certificate},
+		BaseImage:           config.BaseImageConfig{Name: "debian:stable-slim"},
 	}
 	l := Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: rec}
 
@@ -244,7 +244,7 @@ func TestProvisionMountsExtraCACertificate(t *testing.T) {
 		t.Fatalf("spec.Env[%s] should contain certificate fingerprint", extraCACertificateFingerprintEnv)
 	}
 
-	want := runtime.Mount{Source: certificate, Target: extraCACertificateContainerPath, ReadOnly: true}
+	want := runtime.Mount{Source: certificate, Target: "/run/opencode-manager-extra-ca-0.crt", ReadOnly: true}
 	for _, mount := range rec.created.Mounts {
 		if mount == want {
 			return

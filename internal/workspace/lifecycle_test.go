@@ -113,33 +113,36 @@ func TestOpenCodeMountsRequiresLocalAuthFile(t *testing.T) {
 	}
 }
 
-func TestExtraCACertificateMount(t *testing.T) {
-	certificate := filepath.Join(t.TempDir(), "company-ca.crt")
-	writeTestFile(t, certificate, testCACertificate(t))
+func TestExtraCACertificateMounts(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first-ca.crt")
+	second := filepath.Join(dir, "second-ca.crt")
+	writeTestFile(t, first, testCACertificate(t))
+	writeTestFile(t, second, testCACertificate(t))
 
-	mount, fingerprint, err := extraCACertificateMount(certificate)
+	mounts, fingerprint, err := extraCACertificateMounts([]string{first, second})
 	if err != nil {
-		t.Fatalf("extraCACertificateMount returned error: %v", err)
+		t.Fatalf("extraCACertificateMounts returned error: %v", err)
 	}
-	if mount == nil {
-		t.Fatal("extraCACertificateMount returned nil mount")
+	want := []runtime.Mount{
+		{Source: first, Target: "/run/opencode-manager-extra-ca-0.crt", ReadOnly: true},
+		{Source: second, Target: "/run/opencode-manager-extra-ca-1.crt", ReadOnly: true},
 	}
-	want := runtime.Mount{Source: certificate, Target: extraCACertificateContainerPath, ReadOnly: true}
-	if !reflect.DeepEqual(*mount, want) {
-		t.Fatalf("mount = %#v, want %#v", *mount, want)
+	if !reflect.DeepEqual(mounts, want) {
+		t.Fatalf("mounts = %#v, want %#v", mounts, want)
 	}
 	if fingerprint == "" {
 		t.Fatal("fingerprint should not be empty")
 	}
 }
 
-func TestExtraCACertificateMountIsOptional(t *testing.T) {
-	mount, fingerprint, err := extraCACertificateMount("")
+func TestExtraCACertificateMountsAreOptional(t *testing.T) {
+	mounts, fingerprint, err := extraCACertificateMounts(nil)
 	if err != nil {
-		t.Fatalf("extraCACertificateMount returned error: %v", err)
+		t.Fatalf("extraCACertificateMounts returned error: %v", err)
 	}
-	if mount != nil || fingerprint != "" {
-		t.Fatalf("extraCACertificateMount = (%#v, %q), want (nil, empty)", mount, fingerprint)
+	if mounts != nil || fingerprint != "" {
+		t.Fatalf("extraCACertificateMounts = (%#v, %q), want (nil, empty)", mounts, fingerprint)
 	}
 }
 
@@ -147,8 +150,8 @@ func TestExtraCACertificateMountRejectsMalformedCertificate(t *testing.T) {
 	certificate := filepath.Join(t.TempDir(), "company-ca.crt")
 	writeTestFile(t, certificate, []byte("not a certificate\n"))
 
-	if _, _, err := extraCACertificateMount(certificate); err == nil {
-		t.Fatal("extraCACertificateMount should reject a malformed certificate")
+	if _, _, err := extraCACertificateMounts([]string{certificate}); err == nil {
+		t.Fatal("extraCACertificateMounts should reject a malformed certificate")
 	}
 }
 
