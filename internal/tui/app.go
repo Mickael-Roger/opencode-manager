@@ -613,10 +613,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.loadStatuses
 	case workspace.ShellResultMsg:
-		if msg.Err != nil {
+		switch {
+		case msg.StillRunning && msg.Completed:
+			slog.Debug("shell session closed, container still running")
+			m.message = "Shell session closed; container still running."
+		case msg.Err != nil:
 			slog.Error("shell session failed", "error", msg.Err)
 			m.showError("Shell Session", fmt.Sprintf("Shell session failed: %v", msg.Err))
-		} else {
+		default:
 			slog.Debug("shell session closed")
 			m.message = "Shell session closed."
 		}

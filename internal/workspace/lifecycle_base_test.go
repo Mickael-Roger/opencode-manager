@@ -252,3 +252,31 @@ func TestProvisionMountsExtraCACertificate(t *testing.T) {
 	}
 	t.Fatalf("extra CA mount not found in %#v", rec.created.Mounts)
 }
+
+func TestProvisionResolvesWorkspaceEnv(t *testing.T) {
+	rec := &specRecordingDriver{fakeDriver: &fakeDriver{}}
+	t.Setenv("HOST_TOKEN", "host-secret")
+	cfg := config.Config{
+		WorkspaceRoot: t.TempDir(),
+		Runtime:       config.RuntimeDocker,
+		WorkspaceEnv: map[string]string{
+			"LOG_LEVEL": "debug",
+			"API_TOKEN": "{env:HOST_TOKEN}",
+		},
+		BaseImage: config.BaseImageConfig{Name: "debian:stable-slim"},
+	}
+	l := Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: rec}
+	created, err := l.registry.Create("demo")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, _, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path}); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if rec.created.Env["API_TOKEN"] != "host-secret" || rec.created.Env["LOG_LEVEL"] != "debug" {
+		t.Fatalf("workspace environment = %#v", rec.created.Env)
+	}
+	if rec.created.Env[workspaceEnvKeysEnv] != "API_TOKEN,LOG_LEVEL" {
+		t.Fatalf("workspace environment marker = %q", rec.created.Env[workspaceEnvKeysEnv])
+	}
+}

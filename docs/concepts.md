@@ -25,9 +25,8 @@ container. Each workspace has:
 - a **name**;
 - a dedicated directory under the configured workspace root;
 - a dedicated **home directory** (`home/`);
-- the global `opencode.json` mounted read-only;
-- the globally shared OpenCode commands, skills, agents, and plugins, mounted
-  read-only;
+- a one-way copy of shared OpenCode configuration, including `opencode.json`,
+  commands, skills, agents, and plugins;
 - its selected **module** configuration;
 - a generated **image** and a long-lived, attachable **container** that runs
   OpenCode interactively.
@@ -80,11 +79,10 @@ with exactly those modules already installed. Templates are stored as
 
 ## Shared OpenCode config
 
-OpenCode configuration is shared across all workspaces from the global config
-directory:
+OpenCode configuration is shared across all workspaces from this source tree:
 
 ```text
-~/.config/opencode-manager/
+~/.config/opencode-manager/opencode/
 ├── AGENTS.md
 ├── opencode.json
 ├── agents/
@@ -93,12 +91,14 @@ directory:
 └── skills/
 ```
 
-These are **mounted read-only** into every workspace at
-`/home/debian/.config/opencode/`. Editing a file on the host propagates live to
-all running workspaces — no copy, no recreation. Adding or removing an entry
-takes effect the next time a workspace container is (re)created.
+The manager copies this tree one way into each workspace at
+`/home/debian/.config/opencode/` during provisioning, at startup, and after a
+host-side source change while it is active. Host changes win and workspace
+changes never flow back. A per-workspace journal lets source removals remove only
+entries that the manager previously copied. Generated top-level state such as
+package manifests, lockfiles, and `node_modules` is intentionally local.
 
-On startup `ocm` creates any missing entries so the mounts always have a source:
+On startup `ocm` creates any missing entries in the shared source:
 empty `AGENTS.md` and `agents/`, `commands/`, `plugins/`, `skills/` directories,
 and a minimal valid `opencode.json`:
 

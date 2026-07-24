@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -43,7 +44,9 @@ type AttachResultMsg struct {
 }
 
 type ShellResultMsg struct {
-	Err error
+	Err          error
+	StillRunning bool
+	Completed    bool
 }
 
 func NewLifecycle(cfg config.Config) (Lifecycle, error) {
@@ -250,9 +253,9 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 
-	// Seed the workspace's OpenCode asset directories (and the manager status
-	// plugin) into the bind-mounted home so they are writable by module scripts.
-	if err := ensureWorkspaceOpenCodeAssets(manifest.HomeDir); err != nil {
+	// Converge shared host OpenCode configuration into the writable workspace
+	// copy before starting the server.
+	if err := syncWorkspaceOpenCodeConfig(manifest.HomeDir); err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
 
@@ -273,15 +276,23 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 			return runtime.StatusUnknown, runtime.ContainerSpec{}, fmt.Errorf("create workspace OpenCode data directory: %w", err)
 		}
 	}
+	workspaceEnv, err := l.cfg.ResolveWorkspaceEnv()
+	if err != nil {
+		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
 
 	// Carry the workspace's manifest env plus the assigned OpenCode port into the
 	// container without mutating the persisted env map. The entrypoint binds the
 	// server to this port and the attach client connects to it.
-	env := make(map[string]string, len(manifest.Env)+2)
+	env := make(map[string]string, len(manifest.Env)+len(workspaceEnv)+3)
 	for k, v := range manifest.Env {
 		env[k] = v
 	}
+	for k, v := range workspaceEnv {
+		env[k] = v
+	}
 	env[OpenCodePortEnv] = strconv.Itoa(manifest.OpenCodePort)
+	env[workspaceEnvKeysEnv] = l.cfg.WorkspaceEnvKeys()
 	if extraCAFingerprint != "" {
 		env[extraCACertificateFingerprintEnv] = extraCAFingerprint
 	}
@@ -392,6 +403,7 @@ const openCodeAuthRelPath = ".local/share/opencode/auth.json"
 
 const (
 	extraCACertificateFingerprintEnv = "OCM_EXTRA_CA_CERTIFICATE_SHA256"
+	workspaceEnvKeysEnv              = "OCM_WORKSPACE_ENV_KEYS"
 )
 
 // extraCACertificateMounts returns mounts and a combined fingerprint for all
@@ -426,31 +438,10 @@ func extraCACertificateMounts(paths []string) ([]runtime.Mount, string, error) {
 	return mounts, fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
-// openCodeMounts returns the read-only bind mounts that expose the global
-// OpenCode templates (~/.config/opencode-manager) inside the workspace at
-// /home/debian/.config/opencode. Only the single-file templates (AGENTS.md and
-// opencode.json) are mounted live; editing one propagates to every workspace.
-//
-// The asset directories (agents/, commands/, plugins/, skills/) are NOT mounted:
-// they are seeded into the workspace home so module install scripts can write
-// OpenCode commands/skills/agents/plugins into them (see
-// ensureWorkspaceOpenCodeAssets). They are then workspace-owned, writable, and
-// persist across container recreation via the bind-mounted home.
+// openCodeMounts returns optional OpenCode-related mounts. Shared configuration
+// is copied into the workspace home rather than mounted, so it remains writable.
 func openCodeMounts(useLocalAuth bool) ([]runtime.Mount, error) {
-	dir, err := config.GlobalDir()
-	if err != nil {
-		return nil, err
-	}
-
-	names := []string{"AGENTS.md", "opencode.json"}
-	mounts := make([]runtime.Mount, 0, len(names)+1)
-	for _, name := range names {
-		mounts = append(mounts, runtime.Mount{
-			Source:   filepath.Join(dir, name),
-			Target:   openCodeConfigDir + "/" + name,
-			ReadOnly: true,
-		})
-	}
+	mounts := make([]runtime.Mount, 0, 1)
 	if useLocalAuth {
 		source, err := localOpenCodeAuthPath()
 		if err != nil {
@@ -467,71 +458,6 @@ func openCodeMounts(useLocalAuth bool) ([]runtime.Mount, error) {
 	}
 
 	return mounts, nil
-}
-
-// ensureWorkspaceOpenCodeAssets seeds the OpenCode asset directories (agents/,
-// commands/, plugins/, skills/) into the workspace home from the global
-// templates the first time, and always refreshes the manager-owned status
-// plugin. Existing directories are left intact so workspace-level edits and
-// module-written assets are preserved.
-func ensureWorkspaceOpenCodeAssets(homeDir string) error {
-	globalDir, err := config.GlobalDir()
-	if err != nil {
-		return err
-	}
-
-	base := filepath.Join(homeDir, ".config", "opencode")
-	for _, name := range config.GlobalTemplateDirs {
-		dst := filepath.Join(base, name)
-		if _, err := os.Stat(dst); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("check workspace OpenCode asset directory %q: %w", dst, err)
-		}
-		if err := os.MkdirAll(dst, 0o700); err != nil {
-			return fmt.Errorf("create workspace OpenCode asset directory %q: %w", dst, err)
-		}
-		if err := copyDirContents(filepath.Join(globalDir, name), dst); err != nil {
-			return fmt.Errorf("seed workspace OpenCode asset directory %q: %w", dst, err)
-		}
-	}
-
-	return EnsureWorkspaceStatusPlugin(base)
-}
-
-// copyDirContents recursively copies the contents of src into dst. A missing
-// src is treated as empty.
-func copyDirContents(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read directory %q: %w", src, err)
-	}
-
-	for _, entry := range entries {
-		s := filepath.Join(src, entry.Name())
-		d := filepath.Join(dst, entry.Name())
-		if entry.IsDir() {
-			if err := os.MkdirAll(d, 0o700); err != nil {
-				return err
-			}
-			if err := copyDirContents(s, d); err != nil {
-				return err
-			}
-			continue
-		}
-		data, err := os.ReadFile(s)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(d, data, 0o600); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func localOpenCodeAuthPath() (string, error) {
@@ -682,20 +608,10 @@ func (l Lifecycle) AttachCommand(ctx context.Context, summary Summary) (*exec.Cm
 	return l.driver.ExecCommand(summary.Manifest.ContainerName, openCodeSessionCommand()), nil
 }
 
-// ensureCurrentRunning makes sure the workspace container is running and built
-// from the current image before we exec into it. The common hot path (already
-// running and current) avoids the image build that EnsureStarted performs.
+// ensureCurrentRunning converges the workspace before we exec into it so changes
+// to global workspace settings, including host environment references, apply on
+// the normal attach path.
 func (l Lifecycle) ensureCurrentRunning(ctx context.Context, summary Summary) error {
-	status, err := l.driver.ContainerStatus(ctx, summary.Manifest.ContainerName)
-	if err != nil {
-		return err
-	}
-	if status == runtime.StatusRunning {
-		if stale, serr := l.containerImageStale(ctx, summary.Manifest); serr == nil && !stale {
-			return nil
-		}
-	}
-
 	return l.EnsureStarted(ctx, summary)
 }
 
@@ -747,6 +663,17 @@ func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, sp
 	if rc.Env[extraCACertificateFingerprintEnv] != spec.Env[extraCACertificateFingerprintEnv] {
 		slog.Debug("container extra CA certificate differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
 		return true
+	}
+
+	if rc.Env[workspaceEnvKeysEnv] != spec.Env[workspaceEnvKeysEnv] {
+		slog.Debug("container workspace environment keys differ from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
+		return true
+	}
+	for key := range l.cfg.WorkspaceEnv {
+		if rc.Env[key] != spec.Env[key] {
+			slog.Debug("container workspace environment differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName, "key", key)
+			return true
+		}
 	}
 
 	return false
@@ -811,14 +738,74 @@ func (l Lifecycle) RunCommand(ctx context.Context, summary Summary, prompt strin
 }
 
 func (l Lifecycle) Shell(ctx context.Context, summary Summary) (tea.Cmd, error) {
-	cmd, err := l.ShellCommand(ctx, summary)
+	markerName, err := shellMarkerName()
 	if err != nil {
+		return nil, err
+	}
+	markerPath := filepath.Join(summary.Manifest.HomeDir, markerName)
+	rcName := strings.TrimSuffix(markerName, ".done") + ".rc"
+	rcPath := filepath.Join(summary.Manifest.HomeDir, rcName)
+	markerContainerPath := openCodeHomeDir + "/" + markerName
+	if err := writeShellRC(rcPath, markerContainerPath); err != nil {
+		return nil, err
+	}
+	cmd, err := l.shellCommand(ctx, summary, openCodeHomeDir+"/"+rcName)
+	if err != nil {
+		_ = os.Remove(rcPath)
 		return nil, err
 	}
 
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return ShellResultMsg{Err: err}
+		completed := consumeShellMarker(markerPath)
+		_ = os.Remove(rcPath)
+		// Use a fresh context: the caller's ctx is already cancelled by the time
+		// the interactive shell exits.
+		bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status, _ := l.driver.ContainerStatus(bg, summary.Manifest.ContainerName)
+		return ShellResultMsg{Err: err, StillRunning: status == runtime.StatusRunning, Completed: completed}
 	}), nil
+}
+
+func shellMarkerName() (string, error) {
+	token := make([]byte, 16)
+	if _, err := rand.Read(token); err != nil {
+		return "", fmt.Errorf("generate shell completion marker: %w", err)
+	}
+	return ".ocm-shell-" + hex.EncodeToString(token) + ".done", nil
+}
+
+func (l Lifecycle) shellCommand(ctx context.Context, summary Summary, rcPath string) (*exec.Cmd, error) {
+	if rcPath == "" {
+		return l.ShellCommand(ctx, summary)
+	}
+
+	slog.Info("opening shell in workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
+	if err := l.EnsureStarted(ctx, summary); err != nil {
+		return nil, err
+	}
+	return l.driver.ExecCommand(summary.Manifest.ContainerName, shellCommandArgs(rcPath)), nil
+}
+
+func writeShellRC(rcPath, markerPath string) error {
+	content := fmt.Sprintf("if [ -f \"$HOME/.bashrc\" ] && ! . \"$HOME/.bashrc\"; then exit 1; fi\n: > %q\n", markerPath)
+	if err := os.WriteFile(rcPath, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write shell startup file: %w", err)
+	}
+	return nil
+}
+
+func shellCommandArgs(rcPath string) []string {
+	return []string{"/bin/bash", "--rcfile", rcPath, "-i"}
+}
+
+func consumeShellMarker(markerPath string) bool {
+	_, err := os.Stat(markerPath)
+	if err != nil {
+		return false
+	}
+	_ = os.Remove(markerPath)
+	return true
 }
 
 // openCodeServeCommand is the container's main process: the supervisor

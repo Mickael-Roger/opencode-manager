@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -41,6 +42,14 @@ func main() {
 	if err := workspace.SeedStatusPlugin(); err != nil {
 		slog.Error("failed to seed status plugin", "error", err)
 		fmt.Fprintf(os.Stderr, "failed to seed status plugin: %v\n", err)
+		os.Exit(1)
+	}
+
+	syncContext, cancelSync := context.WithCancel(context.Background())
+	defer cancelSync()
+	if err := workspace.StartOpenCodeConfigSync(syncContext, cfg); err != nil {
+		slog.Error("failed to synchronize shared OpenCode config", "error", err)
+		fmt.Fprintf(os.Stderr, "failed to synchronize shared OpenCode config: %v\n", err)
 		os.Exit(1)
 	}
 

@@ -76,12 +76,21 @@ func TestContainerSpecDrift(t *testing.T) {
 			spec: runtime.ContainerSpec{Env: map[string]string{extraCACertificateFingerprintEnv: "new"}},
 			want: true,
 		},
+		{
+			name: "workspace environment changed",
+			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "bridge", Env: map[string]string{OpenCodePortEnv: "4097", workspaceEnvKeysEnv: "API_TOKEN", "API_TOKEN": "old"}},
+			spec: runtime.ContainerSpec{Env: map[string]string{workspaceEnvKeysEnv: "API_TOKEN", "API_TOKEN": "new"}},
+			want: true,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &driftDriver{fakeDriver: &fakeDriver{}, rc: tc.rc, rcErr: tc.rcErr}
 			l := Lifecycle{driver: d}
+			if tc.name == "workspace environment changed" {
+				l.cfg.WorkspaceEnv = map[string]string{"API_TOKEN": "new"}
+			}
 			if got := l.containerSpecDrift(context.Background(), manifest, tc.spec); got != tc.want {
 				t.Fatalf("containerSpecDrift = %v, want %v", got, tc.want)
 			}

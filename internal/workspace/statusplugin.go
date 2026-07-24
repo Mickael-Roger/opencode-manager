@@ -13,8 +13,8 @@ import (
 )
 
 // statusPluginJS is the opencode plugin that reports per-session activity to a
-// status file. It is seeded into the global plugins directory and mounted
-// read-only into every workspace container.
+// status file. It is seeded into the shared plugins directory and copied into
+// every workspace container.
 //
 //go:embed assets/opencode-manager-status.js
 var statusPluginJS string
@@ -53,7 +53,7 @@ type statusReport struct {
 }
 
 // SeedStatusPlugin writes the manager-owned status-reporter plugin into the
-// global plugins template directory, overwriting any previous copy so the
+// shared plugins source directory, overwriting any previous copy so the
 // shipped version is always current. Unlike user templates it is intentionally
 // overwritten on every startup because the manager owns and versions it.
 func SeedStatusPlugin() error {
@@ -62,7 +62,7 @@ func SeedStatusPlugin() error {
 		return err
 	}
 
-	pluginsDir := filepath.Join(dir, "plugins")
+	pluginsDir := filepath.Join(dir, "opencode", "plugins")
 	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
 		return fmt.Errorf("create plugins directory %q: %w", pluginsDir, err)
 	}

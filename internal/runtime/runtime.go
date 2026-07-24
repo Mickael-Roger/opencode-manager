@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -357,22 +358,32 @@ func (d CLIDriver) ContainerRuntimeConfig(ctx context.Context, name string) (Con
 		return ContainerRuntimeConfig{}, fmt.Errorf("container name is required")
 	}
 
-	// First line is the network mode; each remaining line is a KEY=VALUE env var.
-	const format = `{{println .HostConfig.NetworkMode}}{{range .Config.Env}}{{println .}}{{end}}`
+	const format = `{{json .}}`
 	cmd := exec.CommandContext(ctx, d.binary, "inspect", "-f", format, name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return ContainerRuntimeConfig{}, fmt.Errorf("inspect container %q: %w: %s", name, err, strings.TrimSpace(string(output)))
 	}
+	return parseContainerRuntimeConfig(output)
+}
 
+func parseContainerRuntimeConfig(output []byte) (ContainerRuntimeConfig, error) {
+	var inspected struct {
+		HostConfig struct {
+			NetworkMode string
+		}
+		Config struct {
+			Env []string
+		}
+	}
+	if err := json.Unmarshal(output, &inspected); err != nil {
+		return ContainerRuntimeConfig{}, fmt.Errorf("parse container runtime config: %w", err)
+	}
 	rc := ContainerRuntimeConfig{Env: map[string]string{}}
-	lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
-	if len(lines) > 0 {
-		rc.NetworkMode = strings.TrimSpace(lines[0])
-		for _, line := range lines[1:] {
-			if i := strings.IndexByte(line, '='); i > 0 {
-				rc.Env[line[:i]] = line[i+1:]
-			}
+	rc.NetworkMode = inspected.HostConfig.NetworkMode
+	for _, line := range inspected.Config.Env {
+		if i := strings.IndexByte(line, '='); i > 0 {
+			rc.Env[line[:i]] = line[i+1:]
 		}
 	}
 	return rc, nil
@@ -598,16 +609,38 @@ func (d CLIDriver) Exec(ctx context.Context, spec ExecSpec) ([]byte, error) {
 }
 
 func (d CLIDriver) run(ctx context.Context, args ...string) error {
-	slog.Debug("running runtime command", "runtime", d.binary, "args", args)
+	redactedArgs := redactEnvArgs(args)
+	slog.Debug("running runtime command", "runtime", d.binary, "args", redactedArgs)
 	cmd := exec.CommandContext(ctx, d.binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.Debug("runtime command failed", "runtime", d.binary, "args", args, "error", err, "output", strings.TrimSpace(string(output)))
-		return fmt.Errorf("%s %s: %w: %s", d.binary, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+		slog.Debug("runtime command failed", "runtime", d.binary, "args", redactedArgs, "error", err, "output", strings.TrimSpace(string(output)))
+		return fmt.Errorf("%s %s: %w: %s", d.binary, strings.Join(redactedArgs, " "), err, strings.TrimSpace(string(output)))
 	}
 
-	slog.Debug("runtime command succeeded", "runtime", d.binary, "args", args)
+	slog.Debug("runtime command succeeded", "runtime", d.binary, "args", redactedArgs)
 	return nil
+}
+
+func redactEnvArgs(args []string) []string {
+	redacted := append([]string(nil), args...)
+	for i, arg := range redacted {
+		if arg == "--env" && i+1 < len(redacted) {
+			redacted[i+1] = redactEnvValue(redacted[i+1])
+			continue
+		}
+		if strings.HasPrefix(arg, "--env=") {
+			redacted[i] = "--env=" + redactEnvValue(strings.TrimPrefix(arg, "--env="))
+		}
+	}
+	return redacted
+}
+
+func redactEnvValue(value string) string {
+	if key, _, ok := strings.Cut(value, "="); ok {
+		return key + "=<redacted>"
+	}
+	return "<redacted>"
 }
 
 func (d CLIDriver) runAllowMissing(ctx context.Context, args []string, resource string) error {

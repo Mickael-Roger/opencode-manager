@@ -62,12 +62,12 @@ directory on your `PATH`.
 
 1. **Install** (see above).
 
-2. **Add your OpenCode config.** Every workspace shares the OpenCode templates in
-   your global config directory. Copy your existing `opencode.json`, skills,
+2. **Add your OpenCode config.** Every workspace receives a one-way copy of the
+   shared config in `~/.config/opencode-manager/opencode/`. Copy your existing `opencode.json`, skills,
    commands, agents, and plugins into it:
 
    ```sh
-   cd ~/.config/opencode-manager
+   cd ~/.config/opencode-manager/opencode
 
    cp /path/to/your/opencode.json .
    cp -r /path/to/your/skills/*   skills/
@@ -78,9 +78,11 @@ directory on your `PATH`.
    cp /path/to/your/AGENTS.md     .
    ```
 
-   These are mounted read-only into every workspace, so editing them on the host
-   updates all your workspaces live. (`ocm` creates this directory and an empty
-   `opencode.json` for you on first run, so the layout already exists.)
+   `ocm` copies this tree to each workspace on creation, reconciles it at startup,
+   and watches it while active. Host changes win; workspace changes never flow
+   back. Per-workspace generated state such as lockfiles and `node_modules` is
+   preserved. (`ocm` creates this directory and an empty `opencode.json` for you
+   on first run.)
 
 3. **Launch the dashboard.**
 

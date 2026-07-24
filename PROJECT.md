@@ -125,6 +125,7 @@ workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
 extraCACertificate: []
+workspaceEnv: {}
 baseImage:
   name: debian:stable-slim
   packages:
@@ -147,6 +148,10 @@ unless explicitly enabled.
 certificate files. Each is mounted read-only and installed in every workspace
 container's system trust store before OpenCode starts. A single legacy path is
 also accepted.
+
+`workspaceEnv` defines environment variables for every workspace. A value may be
+literal or `{env:HOST_VARIABLE}` to resolve the current manager-host value when
+the workspace is provisioned.
 
 Generated workspace images always include `npx`, `uvx`, `git`, `ripgrep`, and `jq`. Additional Debian packages are declared through `baseImage.packages`, and additional build steps are declared through `baseImage.commands`.
 

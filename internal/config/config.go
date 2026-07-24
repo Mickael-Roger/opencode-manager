@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -61,6 +63,9 @@ type Config struct {
 	// ExtraCACertificates are optional absolute paths to host CA certificates
 	// installed into every workspace container's system trust store.
 	ExtraCACertificates CACertificates `yaml:"extraCACertificate"`
+	// WorkspaceEnv defines environment variables passed to every workspace
+	// container. Values may be literal or {env:HOST_VARIABLE} references.
+	WorkspaceEnv map[string]string `yaml:"workspaceEnv"`
 	// HostNetwork shares the host's network namespace with each workspace
 	// container (docker/podman `--network host`) instead of giving it an isolated
 	// one. Off by default. Because every workspace then shares the host loopback,
@@ -88,6 +93,44 @@ type Config struct {
 	// pending commits or deregister. A failing command is logged and does not
 	// block deletion.
 	WorkspacePreDeleteCommands []string `yaml:"workspacePreDeleteCommands"`
+}
+
+var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ResolveWorkspaceEnv resolves host environment references without persisting
+// their values to workspace manifests.
+func (c Config) ResolveWorkspaceEnv() (map[string]string, error) {
+	resolved := make(map[string]string, len(c.WorkspaceEnv))
+	for key, value := range c.WorkspaceEnv {
+		if strings.HasPrefix(value, "{env:") {
+			if !strings.HasSuffix(value, "}") {
+				return nil, fmt.Errorf("workspaceEnv.%s has an invalid host environment reference", key)
+			}
+			hostKey := strings.TrimSuffix(strings.TrimPrefix(value, "{env:"), "}")
+			if !environmentName.MatchString(hostKey) {
+				return nil, fmt.Errorf("workspaceEnv.%s has an invalid host environment variable name", key)
+			}
+			hostValue, ok := os.LookupEnv(hostKey)
+			if !ok {
+				return nil, fmt.Errorf("workspaceEnv.%s requires host environment variable %q", key, hostKey)
+			}
+			resolved[key] = hostValue
+			continue
+		}
+		resolved[key] = value
+	}
+	return resolved, nil
+}
+
+// WorkspaceEnvKeys returns the stable key list used to detect removed global
+// environment variables on existing containers without exposing their values.
+func (c Config) WorkspaceEnvKeys() string {
+	keys := make([]string, 0, len(c.WorkspaceEnv))
+	for key := range c.WorkspaceEnv {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 // CACertificates accepts the current YAML list form and the single-string form
@@ -129,9 +172,8 @@ func DefaultPath() (string, error) {
 }
 
 // GlobalDir returns the opencode-manager configuration directory
-// (~/.config/opencode-manager). It holds config.yaml as well as the OpenCode
-// templates (AGENTS.md, opencode.json, agents/, commands/, plugins/, skills/)
-// mounted read-only into every workspace container.
+// (~/.config/opencode-manager). It holds config.yaml, modules, and the shared
+// OpenCode configuration directory.
 func GlobalDir() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -139,6 +181,16 @@ func GlobalDir() (string, error) {
 	}
 
 	return filepath.Join(dir, "opencode-manager"), nil
+}
+
+// OpenCodeDir returns the host-side OpenCode configuration that is copied into
+// each workspace. It is deliberately separate from manager configuration.
+func OpenCodeDir() (string, error) {
+	dir, err := GlobalDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "opencode"), nil
 }
 
 // DataDir returns the opencode-manager data directory
@@ -163,8 +215,8 @@ func LogDir() (string, error) {
 	return filepath.Join(dataDir, "logs"), nil
 }
 
-// GlobalTemplateDirs are the OpenCode template subdirectories created in the
-// global config directory and mounted read-only into each workspace.
+// GlobalTemplateDirs are conventional OpenCode config subdirectories created in
+// the shared OpenCode configuration directory.
 var GlobalTemplateDirs = []string{"agents", "commands", "plugins", "skills"}
 
 // defaultOpenCodeJSON is the minimal valid content seeded into the global
@@ -172,9 +224,8 @@ var GlobalTemplateDirs = []string{"agents", "commands", "plugins", "skills"}
 // config, so it cannot be left blank like AGENTS.md.
 const defaultOpenCodeJSON = "{\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n"
 
-// EnsureGlobalConfig creates the global config directory and the OpenCode
-// template files/directories if they are missing. Existing files are never
-// overwritten so user edits are preserved.
+// EnsureGlobalConfig creates the global config directory and shared OpenCode
+// files/directories if they are missing. Existing files are never overwritten.
 func EnsureGlobalConfig() error {
 	dir, err := GlobalDir()
 	if err != nil {
@@ -185,8 +236,16 @@ func EnsureGlobalConfig() error {
 		return fmt.Errorf("create global config directory %q: %w", dir, err)
 	}
 
+	openCodeDir := filepath.Join(dir, "opencode")
+	if err := migrateLegacyOpenCodeTemplates(dir, openCodeDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(openCodeDir, 0o700); err != nil {
+		return fmt.Errorf("create shared OpenCode directory %q: %w", openCodeDir, err)
+	}
+
 	for _, name := range GlobalTemplateDirs {
-		path := filepath.Join(dir, name)
+		path := filepath.Join(openCodeDir, name)
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("create global template directory %q: %w", path, err)
 		}
@@ -197,7 +256,7 @@ func EnsureGlobalConfig() error {
 		"opencode.json": defaultOpenCodeJSON,
 	}
 	for name, content := range files {
-		path := filepath.Join(dir, name)
+		path := filepath.Join(openCodeDir, name)
 		if err := ensureFile(path, content); err != nil {
 			return err
 		}
@@ -206,16 +265,38 @@ func EnsureGlobalConfig() error {
 	return nil
 }
 
+// migrateLegacyOpenCodeTemplates moves the former fixed root template layout
+// into opencode/. It only runs when the new location is absent or empty so an
+// existing shared config is never overwritten.
+func migrateLegacyOpenCodeTemplates(globalDir, openCodeDir string) error {
+	entries, err := os.ReadDir(openCodeDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read shared OpenCode directory %q: %w", openCodeDir, err)
+	}
+	if err == nil && len(entries) != 0 {
+		return nil
+	}
+	if err := os.MkdirAll(openCodeDir, 0o700); err != nil {
+		return fmt.Errorf("create shared OpenCode directory %q: %w", openCodeDir, err)
+	}
+
+	for _, name := range append([]string{"AGENTS.md", "opencode.json"}, GlobalTemplateDirs...) {
+		legacy := filepath.Join(globalDir, name)
+		if _, err := os.Lstat(legacy); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("check legacy OpenCode template %q: %w", legacy, err)
+		}
+		if err := os.Rename(legacy, filepath.Join(openCodeDir, name)); err != nil {
+			return fmt.Errorf("migrate legacy OpenCode template %q: %w", legacy, err)
+		}
+	}
+	return nil
+}
+
 // ensureFile writes content to path when the file does not already exist, and in
-// all cases makes the file world-readable.
-//
-// AGENTS.md and opencode.json are bind-mounted read-only into every workspace
-// container. Under rootless Podman's user namespace, the workspace process's UID
-// usually does not map to the host file's owner (the file appears owned by root /
-// a sub-UID / nobody inside the container), so a 0600 file is unreadable there.
-// 0644 keeps the file private on the host (it lives in the 0700 config dir) while
-// guaranteeing the container can read it regardless of the UID mapping. Existing
-// 0600 files from older installs are healed here on the next launch.
+// all cases makes the file world-readable. Workspace sync writes private copies,
+// but readable source files remain convenient for host-side OpenCode tooling.
 func ensureFile(path, content string) error {
 	if info, err := os.Stat(path); err == nil {
 		if perm := info.Mode().Perm(); perm&0o044 != 0o044 {
@@ -307,6 +388,21 @@ func (c Config) Validate() error {
 
 	if c.BaseImage.Name == "" {
 		return errors.New("baseImage.name is required")
+	}
+
+	for key, value := range c.WorkspaceEnv {
+		if !environmentName.MatchString(key) {
+			return fmt.Errorf("workspaceEnv key %q is not a valid environment variable name", key)
+		}
+		if key == "HOME" || key == "TERM" || strings.HasPrefix(key, "OCM_") {
+			return fmt.Errorf("workspaceEnv key %q is reserved by the manager", key)
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("workspaceEnv.%s cannot contain NUL", key)
+		}
+		if strings.HasPrefix(value, "{env:") && (!strings.HasSuffix(value, "}") || !environmentName.MatchString(strings.TrimSuffix(strings.TrimPrefix(value, "{env:"), "}"))) {
+			return fmt.Errorf("workspaceEnv.%s has an invalid host environment reference", key)
+		}
 	}
 
 	for _, path := range c.ExtraCACertificates {

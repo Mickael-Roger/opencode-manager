@@ -100,8 +100,7 @@ func TestCreateWorkspaceWritesLayoutAndManifest(t *testing.T) {
 		}
 	}
 
-	// The OpenCode templates are mounted read-only from the global config
-	// directory at container creation, not materialized in the workspace.
+	// Shared OpenCode config is materialized during provisioning, not creation.
 	for _, path := range []string{
 		filepath.Join("home", ".config", "opencode", "opencode.json"),
 		filepath.Join("home", ".config", "opencode", "agents"),
