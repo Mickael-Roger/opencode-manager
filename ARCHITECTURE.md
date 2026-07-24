@@ -49,8 +49,9 @@ Each workspace has:
 - A name.
 - A dedicated directory under the configured workspace root.
 - A dedicated home directory.
-- A global `opencode.json` mounted read-only at `home/.config/opencode/opencode.json`.
-- Globally shared OpenCode commands, skills, agents, and plugins, mounted read-only.
+- A one-way copy of `~/.config/opencode-manager/opencode/` at
+  `home/.config/opencode/`, reconciled at manager startup and on source changes.
+- Per-workspace generated OpenCode state remains local and never syncs back.
 - Selected module configuration.
 - A generated image.
 - A long-lived container.
@@ -169,6 +170,7 @@ workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
 extraCACertificate: []
+workspaceEnv: {}
 hostNetwork: false
 runtimeArgs:
   - --dns
@@ -200,6 +202,10 @@ certificate files to mount them read-only and install them in each workspace
 container's Debian system trust store. The option is an empty list by default. A
 certificate list or content change takes effect when the workspace next starts,
 which recreates its container. Existing single-path configurations remain valid.
+
+`workspaceEnv` passes named environment variables to every workspace. Values may
+be literal or `{env:HOST_VARIABLE}`, which is resolved from the manager host at
+workspace provisioning time. Resolved values are not persisted to manifests.
 
 Set `hostNetwork: true` to run each container in the host's network namespace
 (`--network host`) instead of an isolated one, so the agent and its tools can
@@ -262,11 +268,10 @@ When the TUI starts, it ensures the base image is available and shows
 
 ## Global OpenCode Templates
 
-OpenCode configuration is shared across all workspaces from the global config
-directory:
+OpenCode configuration is shared across all workspaces from this source tree:
 
 ```text
-~/.config/opencode-manager/
+~/.config/opencode-manager/opencode/
 ├── AGENTS.md
 ├── opencode.json
 ├── agents/
@@ -275,14 +280,13 @@ directory:
 └── skills/
 ```
 
-These entries are **mounted read-only** into every workspace container at
-`/home/debian/.config/opencode/`. Editing a file on the host propagates live to
-all running workspaces — no copy is made and no recreation is needed. Adding or
-removing a template takes effect the next time a workspace container is
-(re)created.
+The manager copies this tree one way into each workspace at
+`/home/debian/.config/opencode/` during provisioning, at startup, and after a
+host-side source change while it is active. A per-workspace journal makes source
+removals safe by removing only entries the manager previously copied. Generated
+top-level state remains local to each workspace and never syncs back.
 
-On startup, `opencode-manager` creates any missing entries (so the mounts always
-have a source):
+On startup, `opencode-manager` creates any missing entries in the shared source:
 
 - `AGENTS.md` and the `agents/`, `commands/`, `plugins/`, `skills/` directories
   are created empty.

@@ -203,6 +203,52 @@ func TestLoadParsesWorkspaceHookCommands(t *testing.T) {
 	}
 }
 
+func TestLoadResolvesWorkspaceEnv(t *testing.T) {
+	t.Setenv("LOCAL_TOKEN", "host-secret")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeFile(t, path, []byte("workspaceEnv:\n  LOG_LEVEL: debug\n  API_TOKEN: '{env:LOCAL_TOKEN}'\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	resolved, err := cfg.ResolveWorkspaceEnv()
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceEnv returned error: %v", err)
+	}
+	if !reflect.DeepEqual(resolved, map[string]string{"LOG_LEVEL": "debug", "API_TOKEN": "host-secret"}) {
+		t.Fatalf("resolved workspace env = %#v", resolved)
+	}
+	if got := cfg.WorkspaceEnvKeys(); got != "API_TOKEN,LOG_LEVEL" {
+		t.Fatalf("WorkspaceEnvKeys = %q, want API_TOKEN,LOG_LEVEL", got)
+	}
+}
+
+func TestLoadRejectsInvalidWorkspaceEnv(t *testing.T) {
+	for _, content := range []string{
+		"workspaceEnv:\n  OCM_OPENCODE_PORT: value\n",
+		"workspaceEnv:\n  INVALID-NAME: value\n",
+		"workspaceEnv:\n  TOKEN: '{env:INVALID-NAME}'\n",
+	} {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		writeFile(t, path, []byte(content))
+		if _, err := Load(path); err == nil {
+			t.Fatalf("Load should reject workspaceEnv config %q", content)
+		}
+	}
+}
+
+func TestResolveWorkspaceEnvRequiresHostVariable(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+	cfg.WorkspaceEnv = map[string]string{"TOKEN": "{env:MISSING_TOKEN}"}
+	if _, err := cfg.ResolveWorkspaceEnv(); err == nil {
+		t.Fatal("ResolveWorkspaceEnv should reject a missing host variable")
+	}
+}
+
 func TestLoadRejectsEmptyWorkspaceHookCommand(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -277,7 +323,7 @@ func TestEnsureGlobalConfigCreatesTemplates(t *testing.T) {
 		t.Fatalf("EnsureGlobalConfig returned error: %v", err)
 	}
 
-	dir := filepath.Join(configHome, "opencode-manager")
+	dir := filepath.Join(configHome, "opencode-manager", "opencode")
 
 	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	if err != nil {
@@ -309,9 +355,7 @@ func TestEnsureGlobalConfigCreatesTemplates(t *testing.T) {
 	}
 }
 
-// AGENTS.md and opencode.json are bind-mounted read-only into workspace
-// containers; under rootless podman the workspace user's UID may not map to the
-// file owner, so they must be world-readable or the container cannot read them.
+// Shared source files remain readable for host-side OpenCode tooling.
 func TestEnsureGlobalConfigMakesMountedFilesWorldReadable(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
@@ -320,7 +364,7 @@ func TestEnsureGlobalConfigMakesMountedFilesWorldReadable(t *testing.T) {
 		t.Fatalf("EnsureGlobalConfig returned error: %v", err)
 	}
 
-	dir := filepath.Join(configHome, "opencode-manager")
+	dir := filepath.Join(configHome, "opencode-manager", "opencode")
 	for _, name := range []string{"AGENTS.md", "opencode.json"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
@@ -364,12 +408,33 @@ func TestEnsureGlobalConfigPreservesExistingFiles(t *testing.T) {
 		t.Fatalf("EnsureGlobalConfig returned error: %v", err)
 	}
 
-	got, err := os.ReadFile(filepath.Join(dir, "opencode.json"))
+	got, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
 	if err != nil {
 		t.Fatalf("read opencode.json: %v", err)
 	}
 	if string(got) != custom {
 		t.Fatalf("opencode.json = %q, want preserved %q", string(got), custom)
+	}
+}
+
+func TestEnsureGlobalConfigMigratesLegacyTemplatesWhenSharedDirectoryIsEmpty(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	global := filepath.Join(configHome, "opencode-manager")
+	if err := os.MkdirAll(global, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(global, "opencode.json"), []byte("{\"model\":\"legacy\"}"))
+
+	if err := EnsureGlobalConfig(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(global, "opencode", "opencode.json"))
+	if err != nil || string(data) != "{\"model\":\"legacy\"}" {
+		t.Fatalf("migrated config = %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(global, "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy config remains or stat failed: %v", err)
 	}
 }
 

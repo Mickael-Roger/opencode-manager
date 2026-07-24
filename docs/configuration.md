@@ -16,6 +16,7 @@ workspaceRoot: /home/user/.local/share/opencode-manager
 runtime: docker
 useLocalOpenCodeAuth: false
 extraCACertificate: []
+workspaceEnv: {}
 hostNetwork: false
 runtimeArgs:
   - --dns
@@ -105,6 +106,25 @@ workspace (the home is bind-mounted and modules reinstall idempotently).
 > container can reach (and bind) anything on the host's network interfaces. It
 > also has limited support on Docker Desktop (macOS/Windows); on Linux with
 > docker/podman it works as expected.
+
+### `workspaceEnv`
+
+Environment variables passed to every workspace container. Values can be literal
+or a reference to a variable in the manager host's environment:
+
+```yaml
+workspaceEnv:
+  LOG_LEVEL: debug
+  MY_VAR: "{env:LOCAL_VAR}"
+```
+
+`MY_VAR` is available in each workspace with the current host value of
+`LOCAL_VAR`. The reference is resolved whenever a workspace is provisioned; a
+missing host variable prevents the workspace from starting. Changes to literal
+values, referenced host values, or configured keys recreate the workspace
+container. Referenced values are not written to `workspace.yaml`, but they are
+visible to users who can inspect the container runtime. Module exports in the
+workspace's `~/.env` take precedence for the OpenCode process.
 
 ### `runtimeArgs`
 

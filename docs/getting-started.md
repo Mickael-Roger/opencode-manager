@@ -13,11 +13,11 @@ npm install -g @mickaelroger78/opencode-manager
 
 ## 2. Add your OpenCode config
 
-Every workspace shares the OpenCode configuration in your global config
-directory. Copy your existing setup into it so all workspaces inherit it:
+Every workspace receives a one-way copy of the shared OpenCode configuration.
+Copy your existing setup into it so all workspaces inherit it:
 
 ```sh
-cd ~/.config/opencode-manager
+cd ~/.config/opencode-manager/opencode
 
 cp /path/to/your/opencode.json .
 cp -r /path/to/your/skills/*   skills/
@@ -28,9 +28,11 @@ cp -r /path/to/your/plugins/*  plugins/
 cp /path/to/your/AGENTS.md     .
 ```
 
-These are **mounted read-only** into every workspace, so editing them on the
-host updates all workspaces live. `ocm` creates this directory and an empty
-`opencode.json` on first run, so the layout already exists.
+`ocm` copies this tree to each workspace when it is provisioned, reconciles it
+on startup, and watches it while active. Host changes win and workspace changes
+never flow back. Generated workspace state such as lockfiles and `node_modules`
+is preserved. `ocm` creates this directory and an empty `opencode.json` on first
+run, so the layout already exists.
 
 See [Concepts → Shared OpenCode config](concepts.md#shared-opencode-config) for
 exactly what is shared and how.

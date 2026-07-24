@@ -359,6 +359,36 @@ func TestUpdateErrorOpensFullErrorDialog(t *testing.T) {
 	}
 }
 
+func TestShellResultWithRunningContainerDoesNotOpenErrorDialog(t *testing.T) {
+	m := model{baseImageReady: true}
+	updated, _ := m.Update(workspace.ShellResultMsg{Err: errors.New("exit status 1"), StillRunning: true, Completed: true})
+	next := updated.(model)
+	if next.errorMessage != "" {
+		t.Fatalf("errorMessage = %q, want empty", next.errorMessage)
+	}
+	if !strings.Contains(next.message, "container still running") {
+		t.Fatalf("message = %q, want normal shell closure", next.message)
+	}
+}
+
+func TestShellResultInfrastructureFailureWithRunningContainerOpensErrorDialog(t *testing.T) {
+	m := model{baseImageReady: true}
+	updated, _ := m.Update(workspace.ShellResultMsg{Err: errors.New("docker exec failed"), StillRunning: true})
+	next := updated.(model)
+	if next.errorTitle != "Shell Session" || !strings.Contains(next.errorMessage, "docker exec failed") {
+		t.Fatalf("shell error dialog = (%q, %q)", next.errorTitle, next.errorMessage)
+	}
+}
+
+func TestShellResultFailureAfterContainerStopsOpensErrorDialog(t *testing.T) {
+	m := model{baseImageReady: true}
+	updated, _ := m.Update(workspace.ShellResultMsg{Err: errors.New("exit status 1")})
+	next := updated.(model)
+	if next.errorTitle != "Shell Session" || !strings.Contains(next.errorMessage, "exit status 1") {
+		t.Fatalf("shell error dialog = (%q, %q)", next.errorTitle, next.errorMessage)
+	}
+}
+
 func TestActionsUseK9sBindings(t *testing.T) {
 	keys := map[string]string{}
 	for _, a := range actions {

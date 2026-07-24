@@ -162,12 +162,8 @@ func (r Registry) Delete(summary Summary) error {
 }
 
 func (r Registry) createLayout(workspacePath string) error {
-	// opencode.json and AGENTS.md are mounted read-only from
-	// ~/.config/opencode-manager at container creation. The OpenCode asset
-	// directories (agents/, commands/, plugins/, skills/) are seeded into the
-	// home by ensureWorkspaceOpenCodeAssets during provisioning so they are
-	// writable by module install scripts; they are not materialized here. Only
-	// the writable home layout is created.
+	// Shared OpenCode configuration is copied into this writable directory during
+	// provisioning. Only the base home layout is created here.
 	dirs := []string{
 		"home",
 		filepath.Join("home", "workspace"),

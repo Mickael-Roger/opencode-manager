@@ -35,6 +35,7 @@ function ensureConfig() {
     "runtime: docker",
     "useLocalOpenCodeAuth: false",
     "extraCACertificate: []",
+    "workspaceEnv: {}",
     "baseImage:",
     "  name: docker.io/mroger78/ocm-base:latest",
     "  packages: []",

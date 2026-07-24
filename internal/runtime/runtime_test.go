@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -129,6 +130,24 @@ func TestCreateArgsAppendsExtraArgsBeforeImage(t *testing.T) {
 	}
 	if args[len(args)-1] != "opencode" || args[len(args)-2] != "opencode-manager/demo:latest" {
 		t.Fatalf("expected image then command at end of args, got: %v", args)
+	}
+}
+
+func TestRedactEnvArgs(t *testing.T) {
+	got := redactEnvArgs([]string{"create", "--env", "TOKEN=secret", "--env=NAME=value", "image"})
+	want := []string{"create", "--env", "TOKEN=<redacted>", "--env=NAME=<redacted>", "image"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("redactEnvArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseContainerRuntimeConfigPreservesMultilineEnv(t *testing.T) {
+	rc, err := parseContainerRuntimeConfig([]byte(`{"HostConfig":{"NetworkMode":"host"},"Config":{"Env":["TOKEN=first\nsecond","PLAIN=value"]}}`))
+	if err != nil {
+		t.Fatalf("parseContainerRuntimeConfig returned error: %v", err)
+	}
+	if rc.NetworkMode != "host" || rc.Env["TOKEN"] != "first\nsecond" || rc.Env["PLAIN"] != "value" {
+		t.Fatalf("runtime config = %#v", rc)
 	}
 }
 

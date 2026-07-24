@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -174,6 +175,55 @@ func TestVerifyStartedRejectsContainerThatExitsDuringStartup(t *testing.T) {
 
 	if err := l.verifyStarted(context.Background(), "demo"); err == nil {
 		t.Fatal("verifyStarted should reject a container that exits during startup")
+	}
+}
+
+func TestShellCommandArgsUseStartupFile(t *testing.T) {
+	args := shellCommandArgs("/home/debian/.ocm-shell-test.rc")
+	if !reflect.DeepEqual(args, []string{"/bin/bash", "--rcfile", "/home/debian/.ocm-shell-test.rc", "-i"}) {
+		t.Fatalf("shell command args = %#v", args)
+	}
+}
+
+func TestWriteShellRCWritesMarkerAfterBashRC(t *testing.T) {
+	rcPath := filepath.Join(t.TempDir(), ".ocm-shell.rc")
+	if err := writeShellRC(rcPath, "/home/debian/.ocm-shell.done"); err != nil {
+		t.Fatalf("writeShellRC returned error: %v", err)
+	}
+	content, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatalf("read shell startup file: %v", err)
+	}
+	if !strings.Contains(string(content), "! . \"$HOME/.bashrc\"") || !strings.Contains(string(content), "exit 1") || !strings.Contains(string(content), ".ocm-shell.done") {
+		t.Fatalf("shell startup file = %q", content)
+	}
+}
+
+func TestConsumeShellMarker(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), ".ocm-shell.done")
+	if consumeShellMarker(marker) {
+		t.Fatal("missing marker should not report shell completion")
+	}
+	writeTestFile(t, marker, nil)
+	if !consumeShellMarker(marker) {
+		t.Fatal("existing marker should report shell completion")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("marker should be removed, stat error = %v", err)
+	}
+}
+
+func TestShellMarkerNameIsUnique(t *testing.T) {
+	first, err := shellMarkerName()
+	if err != nil {
+		t.Fatalf("shellMarkerName returned error: %v", err)
+	}
+	second, err := shellMarkerName()
+	if err != nil {
+		t.Fatalf("shellMarkerName returned error: %v", err)
+	}
+	if first == second {
+		t.Fatalf("shell marker names must differ: %q", first)
 	}
 }
 
