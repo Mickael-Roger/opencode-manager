@@ -1,8 +1,8 @@
 name: kubernetes
 version: 2
-description: Import host kube contexts into the workspace (one entry per context). kubectl is installed when the first context is added.
+description: Import host kube contexts into the workspace (one entry per context). kubectl, the kubectl-oidc-login plugin and the kube-ovn (kubectl ko) plugin are installed when the first context is added.
 # Multi-instance: one entry per kube context. Each install writes only
-# ~/.kube/config and the kubectl binary; nothing in ~/.env, so it never bounces
+# ~/.kube/config and the kubectl/kubectl-oidc_login/kubectl-ko binaries; nothing in ~/.env, so it never bounces
 # the OpenCode server and can be edited while a task is running.
 restartServer: false
 key: context

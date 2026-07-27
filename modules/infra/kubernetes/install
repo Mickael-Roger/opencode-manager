@@ -1,25 +1,53 @@
 #!/bin/sh
-# Runs inside the workspace container. Installs kubectl (if missing) and merges
-# the single context produced by the host resolve hook ($OCM_KUBECONFIG, base64)
-# into ~/.kube/config. Because this runs once per selected context, kubectl is
-# installed as soon as the first context is added. Idempotent: the kubectl install
-# is guarded and merging the same context again just overwrites that entry, so
-# reconcile can re-run this safely.
+# Runs inside the workspace container. Installs kubectl, the kubectl-oidc-login
+# plugin and the kube-ovn (kubectl ko) plugin (if missing) and merges the single
+# context produced by the host resolve
+# hook ($OCM_KUBECONFIG, base64) into ~/.kube/config. Because this runs once per
+# selected context, the tools are installed as soon as the first context is added.
+# Idempotent: the tool installs are guarded and merging the same context again just
+# overwrites that entry, so reconcile can re-run this safely.
 set -e
 
+# Detect the container architecture once for both binary downloads.
+case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+  arm64 | aarch64) karch=arm64 ;;
+  *) karch=amd64 ;;
+esac
+
+if ! command -v curl >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends curl ca-certificates
+fi
+
 if ! command -v kubectl >/dev/null 2>&1; then
-  if ! command -v curl >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y --no-install-recommends curl ca-certificates
-  fi
-  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
-    arm64 | aarch64) karch=arm64 ;;
-    *) karch=amd64 ;;
-  esac
   ver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
   curl -fsSL "https://dl.k8s.io/release/${ver}/bin/linux/${karch}/kubectl" -o /tmp/kubectl
   sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
   rm -f /tmp/kubectl
+fi
+
+# kubelogin (int128/kubelogin) provides the "kubectl oidc-login" credential plugin,
+# required by contexts that authenticate through an OIDC provider. It is installed
+# on PATH as kubectl-oidc_login so kubectl discovers it as the "oidc-login" plugin.
+if ! command -v kubectl-oidc_login >/dev/null 2>&1; then
+  if ! command -v unzip >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends unzip
+  fi
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/int128/kubelogin/releases/latest/download/kubelogin_linux_${karch}.zip" -o "$tmp/kubelogin.zip"
+  unzip -q -o "$tmp/kubelogin.zip" -d "$tmp"
+  sudo install -m 0755 "$tmp/kubelogin" /usr/local/bin/kubectl-oidc_login
+  rm -rf "$tmp"
+fi
+
+# kube-ovn ships its "kubectl ko" diagnostics plugin as a standalone shell script.
+# It is installed on PATH as kubectl-ko so kubectl discovers it as the "ko" plugin.
+if ! command -v kubectl-ko >/dev/null 2>&1; then
+  tmp="$(mktemp)"
+  curl -fsSL "https://raw.githubusercontent.com/kubeovn/kube-ovn/master/dist/images/kubectl-ko" -o "$tmp"
+  sudo install -m 0755 "$tmp" /usr/local/bin/kubectl-ko
+  rm -f "$tmp"
 fi
 
 mkdir -p "$HOME/.kube"
