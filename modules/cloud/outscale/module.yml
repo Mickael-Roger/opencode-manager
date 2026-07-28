@@ -1,8 +1,9 @@
 name: outscale
 version: 1
-description: Install octl (the Outscale CLI) and write an isolated named AK/SK profile to ~/.osc/config.json.
-# Only writes ~/.osc/config.json; nothing in ~/.env, so it never bounces the
-# OpenCode server and can be edited while a task is running.
+description: Install octl (the Outscale CLI) and the AWS CLI, and write an isolated named AK/SK profile to ~/.osc/config.json plus a matching AWS profile (~/.aws) targeting the Outscale S3/OOS endpoint.
+# Only writes ~/.osc/config.json and ~/.aws/{credentials,config}; nothing in
+# ~/.env, so it never bounces the OpenCode server and can be edited while a task
+# is running.
 restartServer: false
 key: profile
 prompts:

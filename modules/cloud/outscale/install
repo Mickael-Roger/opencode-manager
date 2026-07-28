@@ -1,19 +1,22 @@
 #!/bin/sh
-# Installs octl (the Outscale CLI) from its GitHub release and writes an isolated
-# named profile into ~/.osc/config.json — the JSON file octl reads, keyed by
-# profile name. Idempotent and instance-scoped by $OCM_PROFILE: re-running edits
-# only that profile (via jq), so reconcile is safe and multiple profiles coexist.
-# The first profile configured is also marked active via `octl profile use`, so a
-# fresh setup always has a usable default.
+# Installs octl (the Outscale CLI) and the AWS CLI, and writes an isolated named
+# profile into ~/.osc/config.json (the JSON file octl reads, keyed by profile name)
+# plus a matching AWS profile in ~/.aws pointing at the Outscale Object Storage
+# (OOS) endpoint, so `aws s3` works against Outscale out of the box. Idempotent and
+# instance-scoped by $OCM_PROFILE: re-running edits only that profile, so reconcile
+# is safe and multiple profiles coexist. The first profile configured is also
+# marked active via `octl profile use`, so a fresh setup always has a usable default.
 set -e
 
 : "${OCM_PROFILE:=default}"
 
+# Ensure curl once, shared by both CLI installs below.
+if ! command -v curl >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends curl ca-certificates
+fi
+
 if ! command -v octl >/dev/null 2>&1; then
-  if ! command -v curl >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y --no-install-recommends curl ca-certificates
-  fi
   case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
     arm64 | aarch64) asset=octl_Linux_arm64 ;;
     *) asset=octl_Linux_x86_64 ;;
@@ -21,6 +24,23 @@ if ! command -v octl >/dev/null 2>&1; then
   curl -fsSL -o /tmp/octl "https://github.com/outscale/octl/releases/latest/download/${asset}"
   sudo install -m 0755 /tmp/octl /usr/local/bin/octl
   rm -f /tmp/octl
+fi
+
+# AWS CLI v2, used against the S3-compatible Outscale Object Storage endpoint.
+if ! command -v aws >/dev/null 2>&1; then
+  if ! command -v unzip >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends unzip
+  fi
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) awsarch=aarch64 ;;
+    *) awsarch=x86_64 ;;
+  esac
+  tmp="$(mktemp -d)"
+  curl -fsSL -o "$tmp/awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-${awsarch}.zip"
+  unzip -q "$tmp/awscliv2.zip" -d "$tmp"
+  sudo "$tmp/aws/install" --update
+  rm -rf "$tmp"
 fi
 
 cfg="$HOME/.osc/config.json"
@@ -51,6 +71,19 @@ chmod 600 "$cfg"
 if jq -e --arg p "$OCM_PROFILE" 'has($p) and (any(.[]; .default == true) | not)' "$cfg" >/dev/null 2>&1; then
   octl profile use "$OCM_PROFILE"
   chmod 600 "$cfg"
+fi
+
+# Mirror the credentials into a matching AWS profile so `aws s3 --profile $OCM_PROFILE`
+# talks to the Outscale OOS endpoint for this region. `aws configure set` edits only
+# this profile in ~/.aws/{credentials,config}, keeping it per-profile and idempotent.
+if [ -n "$OCM_ACCESS_KEY" ] && [ -n "$OCM_SECRET_KEY" ]; then
+  aws_region="${OCM_REGION:-eu-west-2}"
+  aws configure set aws_access_key_id "$OCM_ACCESS_KEY" --profile "$OCM_PROFILE"
+  aws configure set aws_secret_access_key "$OCM_SECRET_KEY" --profile "$OCM_PROFILE"
+  aws configure set region "$aws_region" --profile "$OCM_PROFILE"
+  aws configure set endpoint_url "https://oos.${aws_region}.outscale.com" --profile "$OCM_PROFILE"
+  chmod 700 "$HOME/.aws" 2>/dev/null || true
+  chmod 600 "$HOME/.aws/credentials" "$HOME/.aws/config" 2>/dev/null || true
 fi
 
 echo "outscale profile '$OCM_PROFILE' configured"
