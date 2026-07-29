@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs inside the workspace container. Installs kubectl, the kubectl-oidc-login
-# plugin and the kube-ovn (kubectl ko) plugin (if missing) and merges the single
-# context produced by the host resolve
+# plugin, the kube-ovn (kubectl ko) plugin and kubectx (if missing) and merges the
+# single context produced by the host resolve
 # hook ($OCM_KUBECONFIG, base64) into ~/.kube/config. Because this runs once per
 # selected context, the tools are installed as soon as the first context is added.
 # Idempotent: the tool installs are guarded and merging the same context again just
@@ -47,6 +47,14 @@ if ! command -v kubectl-ko >/dev/null 2>&1; then
   tmp="$(mktemp)"
   curl -fsSL "https://raw.githubusercontent.com/kubeovn/kube-ovn/master/dist/images/kubectl-ko" -o "$tmp"
   sudo install -m 0755 "$tmp" /usr/local/bin/kubectl-ko
+  rm -f "$tmp"
+fi
+
+# kubectx (ahmetb/kubectx) is a standalone shell script for fast context switching.
+if ! command -v kubectx >/dev/null 2>&1; then
+  tmp="$(mktemp)"
+  curl -fsSL "https://raw.githubusercontent.com/ahmetb/kubectx/master/kubectx" -o "$tmp"
+  sudo install -m 0755 "$tmp" /usr/local/bin/kubectx
   rm -f "$tmp"
 fi
 
