@@ -156,6 +156,44 @@ func TestDeleteWorkspaceRemovesWorkspaceDirectory(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkspacePreservesHomeWhenConfigured(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.PreserveData = true
+	registry := NewRegistry(cfg)
+
+	result, err := registry.Create("Demo Workspace")
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	// A file written into the home directory must survive the deletion.
+	dataFile := filepath.Join(result.Manifest.HomeDir, "keep.txt")
+	if err := os.WriteFile(dataFile, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write home file: %v", err)
+	}
+
+	summary := Summary{Manifest: result.Manifest, Path: result.Path}
+	if err := registry.Delete(summary); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+
+	if _, err := os.Stat(dataFile); err != nil {
+		t.Fatalf("home data file was not preserved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(result.Path, ManifestFile)); !os.IsNotExist(err) {
+		t.Fatalf("manifest still exists or stat failed unexpectedly: %v", err)
+	}
+
+	// The leftover home directory has no manifest, so List must skip it.
+	workspaces, err := registry.List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(workspaces) != 0 {
+		t.Fatalf("workspaces = %#v, want empty after preserving delete", workspaces)
+	}
+}
+
 func TestDeleteWorkspaceRejectsPathOutsideWorkspaceRoot(t *testing.T) {
 	registry := NewRegistry(testConfig(t))
 	manifest, err := registry.NewManifest("Demo Workspace")

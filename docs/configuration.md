@@ -36,6 +36,7 @@ workspacePostCreateCommands:
   - npm install
 workspacePreDeleteCommands:
   - git push
+preserveData: false
 ```
 
 ## Options
@@ -208,6 +209,23 @@ is skipped. A failing command is logged and **never blocks the deletion** — a
 broken command can't make a workspace undeletable. As with all destructive
 actions, the deletion confirmation still applies; these commands run only once
 you confirm.
+
+### `preserveData`
+
+When `true`, deleting a workspace keeps its **home directory** on disk instead of
+removing it. The container, image, and `workspace.yaml` manifest are still
+removed, but the local directory bind-mounted as the container home
+(`<workspaceRoot>/workspaces/<slug>/home`) is left untouched, so its contents —
+your project files, credentials cached in the home, shell history — survive.
+Default `false`, in which case a deleted workspace is removed entirely.
+
+```yaml
+preserveData: true
+```
+
+The leftover directory has no manifest, so the workspace no longer appears in the
+list and its slug stays reserved: creating a new workspace with the same name is
+refused until you remove the preserved `home` directory by hand.
 
 ## Base image
 

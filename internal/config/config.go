@@ -93,6 +93,12 @@ type Config struct {
 	// pending commits or deregister. A failing command is logged and does not
 	// block deletion.
 	WorkspacePreDeleteCommands []string `yaml:"workspacePreDeleteCommands"`
+	// PreserveData keeps a deleted workspace's home directory on disk instead of
+	// removing it. When true, deleting a workspace still removes its container,
+	// image, and manifest, but the local directory bind-mounted as the container
+	// home (WorkspaceDir/home) is left in place so its contents survive. Off by
+	// default, in which case a deleted workspace is removed entirely.
+	PreserveData bool `yaml:"preserveData"`
 }
 
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

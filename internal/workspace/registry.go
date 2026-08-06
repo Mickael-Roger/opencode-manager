@@ -13,6 +13,11 @@ import (
 	"github.com/mickael-menu/opencode-manager/internal/config"
 )
 
+// workspaceHomeSubdir is the workspace subdirectory bind-mounted as the
+// container home. It holds the workspace's data and is the directory preserved
+// on delete when config.PreserveData is set.
+const workspaceHomeSubdir = "home"
+
 type Registry struct {
 	cfg config.Config
 }
@@ -56,7 +61,16 @@ func (r Registry) List() ([]Summary, error) {
 		}
 
 		workspacePath := filepath.Join(r.WorkspacesDir(), entry.Name())
-		manifest, err := LoadManifest(filepath.Join(workspacePath, ManifestFile))
+		manifestPath := filepath.Join(workspacePath, ManifestFile)
+		if _, err := os.Stat(manifestPath); errors.Is(err, os.ErrNotExist) {
+			// A directory without a manifest is not a live workspace — e.g. the
+			// home directory left behind by a preserveData deletion. Skip it.
+			slog.Debug("skipping directory without manifest", "path", workspacePath)
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("check workspace manifest %q: %w", manifestPath, err)
+		}
+		manifest, err := LoadManifest(manifestPath)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +109,7 @@ func (r Registry) NewManifest(name string) (Manifest, error) {
 		ImageName:     "opencode-manager/" + safeName + ":latest",
 		Image:         imageConfigFromConfig(r.cfg),
 		ContainerName: "opencode-manager-" + safeName,
-		HomeDir:       filepath.Join(r.WorkspaceDir(safeName), "home"),
+		HomeDir:       filepath.Join(r.WorkspaceDir(safeName), workspaceHomeSubdir),
 		OpenCodePort:  port,
 		Env:           map[string]string{},
 		Modules:       nil,
@@ -153,6 +167,10 @@ func (r Registry) Delete(summary Summary) error {
 		return fmt.Errorf("refuse to delete workspace path %q because it does not match slug %q", summary.Path, expectedSlug)
 	}
 
+	if r.cfg.PreserveData {
+		return r.deletePreservingHome(workspacePath, summary.Manifest.Name)
+	}
+
 	if err := os.RemoveAll(workspacePath); err != nil {
 		return fmt.Errorf("delete workspace directory %q: %w", workspacePath, err)
 	}
@@ -161,13 +179,38 @@ func (r Registry) Delete(summary Summary) error {
 	return nil
 }
 
+// deletePreservingHome removes a workspace's metadata (its manifest and any
+// other files) while leaving the home subdirectory — the bind-mounted container
+// home — intact, so its data survives the deletion. The leftover directory has
+// no manifest, so Registry.List skips it. Its slug stays reserved until the
+// directory is removed by hand.
+func (r Registry) deletePreservingHome(workspacePath, name string) error {
+	entries, err := os.ReadDir(workspacePath)
+	if err != nil {
+		return fmt.Errorf("read workspace directory %q: %w", workspacePath, err)
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == workspaceHomeSubdir {
+			continue
+		}
+		path := filepath.Join(workspacePath, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("delete workspace file %q: %w", path, err)
+		}
+	}
+
+	slog.Info("preserved workspace home directory", "workspace", name, "home", filepath.Join(workspacePath, workspaceHomeSubdir))
+	return nil
+}
+
 func (r Registry) createLayout(workspacePath string) error {
 	// Shared OpenCode configuration is copied into this writable directory during
 	// provisioning. Only the base home layout is created here.
 	dirs := []string{
-		"home",
-		filepath.Join("home", "workspace"),
-		filepath.Join("home", ".config", "opencode"),
+		workspaceHomeSubdir,
+		filepath.Join(workspaceHomeSubdir, "workspace"),
+		filepath.Join(workspaceHomeSubdir, ".config", "opencode"),
 	}
 
 	for _, dir := range dirs {

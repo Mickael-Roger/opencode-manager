@@ -247,7 +247,11 @@ func newWorkspacesDeleteCmd(cfg config.Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !force && !confirm(cmd, fmt.Sprintf("Delete workspace %q and all its data?", s.Manifest.Name)) {
+			prompt := fmt.Sprintf("Delete workspace %q and all its data?", s.Manifest.Name)
+			if cfg.PreserveData {
+				prompt = fmt.Sprintf("Delete workspace %q? Its home directory is preserved.", s.Manifest.Name)
+			}
+			if !force && !confirm(cmd, prompt) {
 				fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
 				return nil
 			}

@@ -7,3 +7,7 @@
 
 # MkDocs build output (the site is built and deployed by CI, never committed).
 /site/
+
+# Local npm installation artifacts.
+/node_modules/
+/package-lock.json

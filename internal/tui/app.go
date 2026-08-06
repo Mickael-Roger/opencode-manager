@@ -1946,10 +1946,15 @@ func (m model) renderDeleteConfirmation() string {
 		name = "selected " + noun
 	}
 
+	caption := "This action cannot be undone."
+	if !m.templatesMode && m.cfg.PreserveData {
+		caption = "The home directory is preserved on disk."
+	}
+
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		dialogText.Render("Delete "+noun+" ")+dialogLabel.Render(name)+dialogText.Render("?"),
-		dialogText.Render("This action cannot be undone."),
+		dialogText.Render(caption),
 		"",
 		deleteDialogButtons(m.dialogFocus),
 	)

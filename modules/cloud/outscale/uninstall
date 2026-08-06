@@ -30,6 +30,10 @@ del_aws_section() {
   chmod 600 "$file"
 }
 del_aws_section "$HOME/.aws/credentials" "[$OCM_PROFILE]"
-del_aws_section "$HOME/.aws/config" "[profile $OCM_PROFILE]"
+if [ "$OCM_PROFILE" = "default" ]; then
+  del_aws_section "$HOME/.aws/config" "[default]"
+else
+  del_aws_section "$HOME/.aws/config" "[profile $OCM_PROFILE]"
+fi
 
 echo "outscale profile '$OCM_PROFILE' removed"

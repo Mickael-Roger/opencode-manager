@@ -189,6 +189,7 @@ workspacePostCreateCommands:
   - git clone git@github.com:me/project.git .
 workspacePreDeleteCommands:
   - git push
+preserveData: false
 ```
 
 `runtime` must be either `docker` or `podman`.
@@ -233,6 +234,14 @@ stopped). Each command runs as the workspace user in the project directory with
 `~/.env` sourced. Both are best-effort — a non-zero exit is logged and never
 blocks the start or the deletion. They are applied by the lifecycle (`hooks.go`),
 so both the TUI and the CLI honor them.
+
+`preserveData` (default `false`) keeps a deleted workspace's `home/` directory on
+disk. Deleting a workspace still removes its container, image, and
+`workspace.yaml` manifest, but `Registry.Delete` leaves the bind-mounted home
+directory in place instead of removing the whole workspace directory. The
+leftover directory has no manifest, so `Registry.List` skips it and it disappears
+from the listing, while its slug stays reserved until the directory is removed by
+hand.
 
 `logLevel` controls how much is written to the log file. It must be one of
 `debug`, `info`, `warning` (default), or `error`. Logs are appended to
