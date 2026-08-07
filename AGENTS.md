@@ -59,6 +59,7 @@
 - The npm postinstall script creates the same user config directory used by Go's `os.UserConfigDir`, writes `config.yaml` only when absent, removes legacy flat built-in module dirs from older installs, and syncs the `category/module` layout from `modules/` into the user config, overwriting built-in modules so updates take effect while leaving user-authored modules untouched.
 - Built-in modules are **not** embedded in the Go binary; they are installed and updated exclusively through the npm package.
 - The TUI orders workspaces by the most recent observed status change for the current process only; status recency is never persisted and alphabetical order is the fallback.
+- Ctrl-C in the manager UI requires a second press within three seconds to quit; Ctrl-C while attached to a workspace remains the workspace detach action.
 
 ## Lessons Learned
 

@@ -452,6 +452,42 @@ func TestUpdateErrorOpensFullErrorDialog(t *testing.T) {
 	}
 }
 
+func TestCtrlCRequiresConfirmation(t *testing.T) {
+	m := model{baseImageReady: true}
+	key := tea.KeyMsg{Type: tea.KeyCtrlC}
+
+	updated, cmd := m.Update(key)
+	next := updated.(model)
+	if cmd == nil {
+		t.Fatal("first Ctrl-C should schedule confirmation expiry")
+	}
+	if !next.quitConfirmation {
+		t.Fatal("first Ctrl-C should arm quit confirmation")
+	}
+	if next.message != quitConfirmationMessage {
+		t.Fatalf("message = %q, want %q", next.message, quitConfirmationMessage)
+	}
+
+	updated, cmd = next.Update(key)
+	if cmd == nil {
+		t.Fatal("second Ctrl-C should quit")
+	}
+}
+
+func TestCtrlCConfirmationExpires(t *testing.T) {
+	m := model{baseImageReady: true}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	updated, _ = updated.(model).Update(quitConfirmationExpiredMsg{})
+	next := updated.(model)
+	if next.quitConfirmation {
+		t.Fatal("expired Ctrl-C confirmation should be disarmed")
+	}
+	if next.message != "" {
+		t.Fatalf("expired confirmation message = %q, want empty", next.message)
+	}
+}
+
 func TestShellResultWithRunningContainerDoesNotOpenErrorDialog(t *testing.T) {
 	m := model{baseImageReady: true}
 	updated, _ := m.Update(workspace.ShellResultMsg{Err: errors.New("exit status 1"), StillRunning: true, Completed: true})

@@ -50,6 +50,7 @@ type model struct {
 	runtimeError     string
 	loadError        string
 	message          string
+	quitConfirmation bool
 	errorTitle       string
 	errorMessage     string
 
@@ -362,6 +363,16 @@ type updateAvailableMsg struct {
 	latest string
 }
 
+type quitConfirmationExpiredMsg struct{}
+
+const quitConfirmationMessage = "If you really want to quit, press Ctrl-C again."
+
+func quitConfirmationCmd() tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return quitConfirmationExpiredMsg{}
+	})
+}
+
 // tickMsg drives periodic refresh of container/activity statuses so the
 // dashboard reflects opencode activity without any user interaction.
 type tickMsg time.Time
@@ -458,7 +469,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+	case quitConfirmationExpiredMsg:
+		m.quitConfirmation = false
+		if m.message == quitConfirmationMessage {
+			m.message = ""
+		}
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			if m.quitConfirmation {
+				return m, tea.Quit
+			}
+			m.quitConfirmation = true
+			m.message = quitConfirmationMessage
+			return m, quitConfirmationCmd()
+		}
 		return m.updateKey(msg)
 	case workspaceListMsg:
 		if msg.err != nil {
