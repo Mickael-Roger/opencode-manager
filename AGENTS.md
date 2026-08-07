@@ -58,6 +58,7 @@
 - The built-in `git` module imports host global `user.name`/`user.email` and OpenPGP signing config through its host-side `resolve` hook. If `user.signingkey` exists and the secret key is exportable, the armored secret key is base64-passed only to the container install environment, imported into `~/.gnupg`, and never persisted to the manifest.
 - The npm postinstall script creates the same user config directory used by Go's `os.UserConfigDir`, writes `config.yaml` only when absent, removes legacy flat built-in module dirs from older installs, and syncs the `category/module` layout from `modules/` into the user config, overwriting built-in modules so updates take effect while leaving user-authored modules untouched.
 - Built-in modules are **not** embedded in the Go binary; they are installed and updated exclusively through the npm package.
+- The TUI orders workspaces by the most recent observed status change for the current process only; status recency is never persisted and alphabetical order is the fallback.
 
 ## Lessons Learned
 

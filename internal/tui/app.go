@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,8 @@ type model struct {
 	lifecycleErr     string
 	workspaces       []workspace.Summary
 	statuses         map[string]workspace.Status
+	statusRecency    map[string]uint64
+	statusSequence   uint64
 	workspacePos     int
 	width            int
 	height           int
@@ -434,6 +437,7 @@ func newModel(cfg config.Config) model {
 		lifecycle:        lifecycle,
 		lifecycleErr:     lifecycleErr,
 		statuses:         map[string]workspace.Status{},
+		statusRecency:    map[string]uint64{},
 		tokens:           map[string]tokenState{},
 		versions:         map[string]versionState{},
 		installing:       map[string]bool{},
@@ -466,8 +470,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.loadError = ""
+		selectedName := m.selectedWorkspaceName()
 		m.workspaces = msg.workspaces
-		m.clampSelection()
+		m.pruneWorkspaceStatusState()
+		m.orderWorkspaces(selectedName)
 		return m, m.loadStatuses
 	case runtimeStatusMsg:
 		m.runtimeName = msg.name
@@ -483,6 +489,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		for _, status := range msg.statuses {
 			name := status.Workspace.Manifest.Name
+			if prev, ok := m.statuses[name]; ok && statusChanged(prev, status) {
+				if m.statusRecency == nil {
+					m.statusRecency = map[string]uint64{}
+				}
+				m.statusSequence++
+				m.statusRecency[name] = m.statusSequence
+			}
 			// Ring the bell when a workspace newly starts needing a human
 			// (blocked on an approval prompt).
 			if status.Activity == workspace.ActivityWaiting {
@@ -520,6 +533,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.statuses = next
+		m.orderWorkspaces(m.selectedWorkspaceName())
 		if ring {
 			cmds = append(cmds, bellCmd())
 		}
@@ -1569,7 +1583,7 @@ func (m model) renderTable(width, height int) string {
 	visible := m.visibleWorkspaces()
 
 	widths := columnWidths(contentWidth)
-	headers := []string{"NAME↑", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "TOKENS I/O/C", "CONTAINER", "AGE"}
+	headers := []string{"NAME", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "TOKENS I/O/C", "CONTAINER", "AGE"}
 	headerCells := make([]string, len(headers))
 	for i, h := range headers {
 		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
@@ -2549,6 +2563,67 @@ func humanDuration(d time.Duration) string {
 func (m model) isRunning(name string) bool {
 	status, ok := m.statuses[name]
 	return ok && status.Container == runtime.StatusRunning
+}
+
+// statusChanged reports whether a status update changes anything displayed in
+// the workspace table. Recency is session-only, so the first observation is
+// intentionally not treated as a change.
+func statusChanged(previous, next workspace.Status) bool {
+	return previous.Container != next.Container ||
+		previous.Activity != next.Activity ||
+		previous.Pending != next.Pending ||
+		previous.Error != next.Error
+}
+
+// orderWorkspaces puts the most recently changed workspace first. Workspaces
+// without a status change keep the deterministic alphabetical fallback from the
+// registry. Selection is restored by workspace name because a status update can
+// move the selected row.
+func (m *model) orderWorkspaces(selectedName string) {
+	sort.SliceStable(m.workspaces, func(i, j int) bool {
+		left, leftSeen := m.statusRecency[m.workspaces[i].Manifest.Name]
+		right, rightSeen := m.statusRecency[m.workspaces[j].Manifest.Name]
+		if leftSeen != rightSeen {
+			return leftSeen
+		}
+		if leftSeen && left != right {
+			return left > right
+		}
+
+		leftName := m.workspaces[i].Manifest.Name
+		rightName := m.workspaces[j].Manifest.Name
+		if strings.EqualFold(leftName, rightName) {
+			return leftName < rightName
+		}
+		return strings.ToLower(leftName) < strings.ToLower(rightName)
+	})
+
+	if selectedName != "" {
+		for i, ws := range m.visibleWorkspaces() {
+			if ws.Manifest.Name == selectedName {
+				m.workspacePos = i
+				return
+			}
+		}
+	}
+	m.clampSelection()
+}
+
+func (m *model) pruneWorkspaceStatusState() {
+	present := make(map[string]bool, len(m.workspaces))
+	for _, ws := range m.workspaces {
+		present[ws.Manifest.Name] = true
+	}
+	for name := range m.statusRecency {
+		if !present[name] {
+			delete(m.statusRecency, name)
+		}
+	}
+	for name := range m.statuses {
+		if !present[name] {
+			delete(m.statuses, name)
+		}
+	}
 }
 
 func (m model) visibleWorkspaces() []workspace.Summary {

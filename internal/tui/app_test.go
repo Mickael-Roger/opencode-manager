@@ -188,6 +188,99 @@ func TestCreateFocusOrderSkipsTemplateWhenNone(t *testing.T) {
 	}
 }
 
+func TestWorkspaceOrderTracksRecentStatusChanges(t *testing.T) {
+	alpha := workspace.Summary{Manifest: workspace.Manifest{Name: "alpha"}}
+	beta := workspace.Summary{Manifest: workspace.Manifest{Name: "beta"}}
+	initial := workspace.Status{Container: runtime.StatusMissing, Activity: workspace.ActivitySleeping}
+
+	m := model{
+		workspaces: []workspace.Summary{alpha, beta},
+		statuses: map[string]workspace.Status{
+			"alpha": initial,
+			"beta":  initial,
+		},
+		statusRecency: map[string]uint64{},
+		workspacePos:  0,
+	}
+
+	// A change in beta moves it ahead of alpha while keeping the selection on
+	// alpha instead of leaving the cursor on the moved row.
+	updated, _ := m.Update(statusListMsg{statuses: []workspace.Status{
+		{Workspace: alpha, Container: runtime.StatusMissing, Activity: workspace.ActivitySleeping},
+		{Workspace: beta, Container: runtime.StatusMissing, Activity: workspace.ActivityWorking},
+	}})
+	next := updated.(model)
+	if got := next.workspaces[0].Manifest.Name; got != "beta" {
+		t.Fatalf("first workspace after beta change = %q, want beta", got)
+	}
+	if got := next.selectedWorkspaceName(); got != "alpha" {
+		t.Fatalf("selected workspace after reorder = %q, want alpha", got)
+	}
+
+	// A later change in alpha takes precedence over beta's earlier change.
+	updated, _ = next.Update(statusListMsg{statuses: []workspace.Status{
+		{Workspace: alpha, Container: runtime.StatusMissing, Activity: workspace.ActivityWaiting},
+		{Workspace: beta, Container: runtime.StatusMissing, Activity: workspace.ActivityWorking},
+	}})
+	next = updated.(model)
+	if got := next.workspaces[0].Manifest.Name; got != "alpha" {
+		t.Fatalf("first workspace after alpha change = %q, want alpha", got)
+	}
+	if got := next.statusSequence; got != 2 {
+		t.Fatalf("status sequence = %d, want 2", got)
+	}
+
+	// Repeating the same snapshot does not change recency or reorder rows.
+	updated, _ = next.Update(statusListMsg{statuses: []workspace.Status{
+		{Workspace: alpha, Container: runtime.StatusMissing, Activity: workspace.ActivityWaiting},
+		{Workspace: beta, Container: runtime.StatusMissing, Activity: workspace.ActivityWorking},
+	}})
+	next = updated.(model)
+	if got := next.statusSequence; got != 2 {
+		t.Fatalf("unchanged status sequence = %d, want 2", got)
+	}
+	if got := next.workspaces[0].Manifest.Name; got != "alpha" {
+		t.Fatalf("first workspace after unchanged refresh = %q, want alpha", got)
+	}
+}
+
+func TestWorkspaceOrderUsesAlphabeticalFallback(t *testing.T) {
+	alpha := workspace.Summary{Manifest: workspace.Manifest{Name: "alpha"}}
+	beta := workspace.Summary{Manifest: workspace.Manifest{Name: "beta"}}
+	m := model{workspacePos: 1}
+
+	updated, _ := m.Update(workspaceListMsg{workspaces: []workspace.Summary{beta, alpha}})
+	next := updated.(model)
+	if got := next.workspaces[0].Manifest.Name; got != "alpha" {
+		t.Fatalf("first workspace without status history = %q, want alpha", got)
+	}
+	if got := next.selectedWorkspaceName(); got != "beta" {
+		t.Fatalf("selected workspace after alphabetical reorder = %q, want beta", got)
+	}
+}
+
+func TestWorkspaceOrderDoesNotReuseDeletedWorkspaceRecency(t *testing.T) {
+	alpha := workspace.Summary{Manifest: workspace.Manifest{Name: "alpha"}}
+	beta := workspace.Summary{Manifest: workspace.Manifest{Name: "beta"}}
+	m := model{
+		workspaces:    []workspace.Summary{alpha, beta},
+		statuses:      map[string]workspace.Status{"alpha": {}, "beta": {}},
+		statusRecency: map[string]uint64{"alpha": 2},
+	}
+
+	// Remove alpha from the list, then recreate it. Its old session recency must
+	// not make it outrank the alphabetical fallback for the new workspace.
+	updated, _ := m.Update(workspaceListMsg{workspaces: []workspace.Summary{beta}})
+	updated, _ = updated.(model).Update(workspaceListMsg{workspaces: []workspace.Summary{beta, alpha}})
+	next := updated.(model)
+	if _, ok := next.statusRecency["alpha"]; ok {
+		t.Fatal("deleted workspace recency should be pruned")
+	}
+	if got := next.workspaces[0].Manifest.Name; got != "alpha" {
+		t.Fatalf("first workspace after recreation = %q, want alpha", got)
+	}
+}
+
 func TestMoveCreateFocus(t *testing.T) {
 	// Without templates, Tab from the name field skips straight to OK.
 	m := model{createFocus: createFocusName}
