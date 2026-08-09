@@ -2089,26 +2089,26 @@ func renderLogLine(line logLine, width int) string {
 	if line.text == "" {
 		return ""
 	}
-	blockWidth := max(20, width*2/3)
-	text := fit(line.text, blockWidth-2)
+	blockWidth := max(20, width*3/5)
+	text := fit(line.text, blockWidth-3)
 	var style lipgloss.Style
 	align := lipgloss.Right
 	switch line.kind {
 	case logUser:
-		style = lipgloss.NewStyle().Foreground(colMenuText).Background(lipgloss.Color("#1f3b5b")).Padding(0, 1)
+		style = lipgloss.NewStyle().Foreground(colMenuText).BorderLeft(true).BorderForeground(colBorder).PaddingLeft(1)
 		align = lipgloss.Left
 	case logAssistant:
-		style = lipgloss.NewStyle().Foreground(colMenuText).Background(lipgloss.Color("#244f42")).Padding(0, 1)
+		style = lipgloss.NewStyle().Foreground(colMenuText).BorderRight(true).BorderForeground(colRunning).PaddingRight(1)
 	case logReasoning:
-		style = lipgloss.NewStyle().Foreground(colMuted).Background(lipgloss.Color("#303b42")).Padding(0, 1)
+		style = lipgloss.NewStyle().Foreground(colMuted).BorderRight(true).BorderForeground(colMuted).PaddingRight(1)
 	case logTool:
-		style = lipgloss.NewStyle().Foreground(colTitle).Background(lipgloss.Color("#303b42")).Padding(0, 1)
+		style = lipgloss.NewStyle().Foreground(colTitle).BorderRight(true).BorderForeground(colBorder).PaddingRight(1)
 	case logTodo:
-		style = lipgloss.NewStyle().Foreground(colStarting).Background(lipgloss.Color("#303b42")).Padding(0, 1)
+		style = lipgloss.NewStyle().Foreground(colStarting).BorderRight(true).BorderForeground(colStarting).PaddingRight(1)
 	case logError:
-		style = lipgloss.NewStyle().Foreground(colError).Background(lipgloss.Color("#3b2525")).Padding(0, 1)
+		style = lipgloss.NewStyle().Foreground(colError).BorderRight(true).BorderForeground(colError).PaddingRight(1)
 	}
-	return lipgloss.PlaceHorizontal(width, align, style.Render(text))
+	return lipgloss.PlaceHorizontal(width, align, style.Width(blockWidth).Render(text))
 }
 
 func (m model) renderDeleteConfirmation() string {
