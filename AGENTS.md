@@ -14,6 +14,7 @@
 - Treat Docker and Podman as first-class runtime targets.
 - Do not assume implicit access to host credentials, environment variables, Kubernetes contexts, SSH keys, or cloud accounts.
 - Model workspace access through explicit modules.
+- Use `vX.Y.Z` versioning: increment `Z` only for bug fixes or small updates to side elements such as modules; increment `Y` for new features or significant non-breaking feature changes; increment `X` only when explicitly requested by the user.
 
 ## Architecture Notes
 

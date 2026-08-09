@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mickael-menu/opencode-manager/internal/config"
@@ -81,6 +83,7 @@ type model struct {
 	logScroll     int
 	logFollow     bool
 	logLoading    bool
+	logDirty      bool
 	logError      string
 	logWorkspace  string
 	logCancel     context.CancelFunc
@@ -377,17 +380,24 @@ type sessionLogMsg struct {
 type logLineKind uint8
 
 const (
-	logUser logLineKind = iota
+	logSpacer logLineKind = iota
+	logUser
 	logAssistant
 	logReasoning
 	logTool
+	logToolOutput
+	logPanel
+	logPanelMuted
+	logDiffAdded
+	logDiffRemoved
 	logTodo
 	logError
 )
 
 type logLine struct {
-	text string
-	kind logLineKind
+	text   string
+	kind   logLineKind
+	source string
 }
 
 type sessionLogEventMsg struct{ name string }
@@ -735,13 +745,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.logFollow {
 			m.scrollLogToEnd()
 		}
+		if m.showLogs && m.logDirty {
+			m.logDirty = false
+			if selected, ok := m.selectedWorkspace(); ok {
+				m.logLoading = true
+				return m, m.fetchSessionLog(selected)
+			}
+		}
 		return m, nil
 	case sessionLogEventMsg:
 		if !m.showLogs || msg.name != m.logWorkspace {
 			return m, nil
 		}
 		cmds := []tea.Cmd{m.nextSessionLogEvent()}
-		if !m.logLoading {
+		if m.logLoading {
+			m.logDirty = true
+		} else {
 			if selected, ok := m.selectedWorkspace(); ok {
 				m.logLoading = true
 				cmds = append(cmds, m.fetchSessionLog(selected))
@@ -1431,10 +1450,16 @@ func (m model) View() string {
 	height := max(12, m.height)
 
 	header := m.renderHeader(width)
+	if m.showLogs {
+		header = ""
+	}
 	headerHeight := lipgloss.Height(header)
 
 	crumbs := m.renderCrumbs()
 	prompt := m.renderPrompt(width)
+	if m.showLogs {
+		crumbs = ""
+	}
 
 	// k9s-style: the ":" command prompt is a small box wedged between the top bar
 	// and the main view, shrinking the body by its height while it is open.
@@ -1463,7 +1488,9 @@ func (m model) View() string {
 	}
 
 	var view string
-	if m.commandMode {
+	if m.showLogs {
+		view = lipgloss.JoinVertical(lipgloss.Left, body, prompt)
+	} else if m.commandMode {
 		view = lipgloss.JoinVertical(lipgloss.Left, header, commandBox, body, crumbs, prompt)
 	} else {
 		view = lipgloss.JoinVertical(lipgloss.Left, header, body, crumbs, prompt)
@@ -2053,62 +2080,122 @@ func (m model) renderDescribePage(width, height int) string {
 }
 
 func (m model) renderLogPage(width, height int) string {
-	inner := width - 2
-	contentWidth := inner - 2
-	rows := make([]string, 0, height-1)
-	follow := "off"
-	if m.logFollow {
-		follow = "on"
-	}
-	status := fmt.Sprintf("follow: %s  up/down: scroll  page up/down: scroll  esc: back", follow)
-	rows = append(rows, " "+mutedStyle.Render(fit(status, contentWidth))+" ")
-
+	const margin = 2
+	contentWidth := max(20, width-margin*2)
+	rows := make([]string, 0, height)
 	if m.logError != "" {
-		rows = append(rows, " "+errorStyle.Render(fit("Unable to read session: "+m.logError, contentWidth))+" ")
+		rows = append(rows, strings.Repeat(" ", margin)+errorStyle.Render(fit("Unable to read session: "+m.logError, contentWidth)))
 	} else if m.logLoading && len(m.logLines) == 0 {
-		rows = append(rows, " "+mutedStyle.Render(fit("Loading OpenCode session...", contentWidth))+" ")
+		rows = append(rows, strings.Repeat(" ", margin)+mutedStyle.Render(fit("Loading OpenCode session...", contentWidth)))
 	} else if len(m.logLines) == 0 {
-		rows = append(rows, " "+mutedStyle.Render(fit("No OpenCode session output yet.", contentWidth))+" ")
+		rows = append(rows, strings.Repeat(" ", margin)+mutedStyle.Render(fit("No OpenCode session output yet.", contentWidth)))
 	} else {
-		capacity := max(1, height-2)
+		capacity := max(1, height)
 		maxScroll := max(0, len(m.logLines)-capacity)
 		start := clamp(m.logScroll, 0, maxScroll)
 		end := min(len(m.logLines), start+capacity)
 		for _, line := range m.logLines[start:end] {
-			rows = append(rows, " "+renderLogLine(line, contentWidth)+" ")
+			rows = append(rows, strings.Repeat(" ", margin)+renderLogLine(line, contentWidth))
 		}
 	}
-	for len(rows) < height-1 {
-		rows = append(rows, " "+strings.Repeat(" ", contentWidth)+" ")
+	for len(rows) < height {
+		rows = append(rows, strings.Repeat(" ", width))
 	}
-	title := titleStyle.Render("Logs") + counterStyle.Render("("+m.logWorkspace+")")
-	return m.boxWithTitle(title, rows, width)
+	return strings.Join(rows, "\n")
 }
 
 func renderLogLine(line logLine, width int) string {
 	if line.text == "" {
+		if line.kind == logPanel || line.kind == logPanelMuted || line.kind == logTodo {
+			return lipgloss.NewStyle().Background(lipgloss.Color("#141414")).Width(width).Render("")
+		}
 		return ""
 	}
-	blockWidth := max(20, width*3/5)
-	text := fit(line.text, blockWidth-3)
+	raw := fit(line.text, width-2)
+	text := raw
+	if line.source != "" {
+		text = highlightCodeLine(raw, line.source)
+		if line.kind == logDiffAdded || line.kind == logDiffRemoved {
+			prefix, code := raw[:1], raw[1:]
+			prefixColor := lipgloss.Color("#4fd6be")
+			if line.kind == logDiffRemoved {
+				prefixColor = lipgloss.Color("#c53b53")
+			}
+			text = lipgloss.NewStyle().Foreground(prefixColor).Render(prefix) + highlightCodeLine(code, line.source)
+		}
+	}
 	var style lipgloss.Style
-	align := lipgloss.Right
 	switch line.kind {
 	case logUser:
-		style = lipgloss.NewStyle().Foreground(colMenuText).BorderLeft(true).BorderForeground(colBorder).PaddingLeft(1)
-		align = lipgloss.Left
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#eeeeee")).Background(lipgloss.Color("#141414")).BorderLeft(true).BorderForeground(lipgloss.Color("#5c9cf5")).PaddingLeft(2).Width(width - 1)
 	case logAssistant:
-		style = lipgloss.NewStyle().Foreground(colMenuText).BorderRight(true).BorderForeground(colRunning).PaddingRight(1)
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#eeeeee")).PaddingLeft(1)
 	case logReasoning:
-		style = lipgloss.NewStyle().Foreground(colMuted).BorderRight(true).BorderForeground(colMuted).PaddingRight(1)
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#fab283")).PaddingLeft(1)
 	case logTool:
-		style = lipgloss.NewStyle().Foreground(colTitle).BorderRight(true).BorderForeground(colBorder).PaddingRight(1)
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#4fd6be")).PaddingLeft(1)
+	case logToolOutput:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).PaddingLeft(3)
+	case logPanel:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#eeeeee")).Background(lipgloss.Color("#141414")).PaddingLeft(2).Width(width)
+	case logPanelMuted:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Background(lipgloss.Color("#141414")).PaddingLeft(2).Width(width)
+	case logDiffAdded:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#4fd6be")).Background(lipgloss.Color("#14211d")).PaddingLeft(2).Width(width)
+	case logDiffRemoved:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#c53b53")).Background(lipgloss.Color("#211317")).PaddingLeft(2).Width(width)
 	case logTodo:
-		style = lipgloss.NewStyle().Foreground(colStarting).BorderRight(true).BorderForeground(colStarting).PaddingRight(1)
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#808080")).Background(lipgloss.Color("#141414")).PaddingLeft(2).Width(width)
 	case logError:
-		style = lipgloss.NewStyle().Foreground(colError).BorderRight(true).BorderForeground(colError).PaddingRight(1)
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75")).PaddingLeft(1)
 	}
-	return lipgloss.PlaceHorizontal(width, align, style.Width(blockWidth).Render(text))
+	return style.Render(text)
+}
+
+func highlightCodeLine(text, filename string) string {
+	lexer := lexers.Match(filename)
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	iterator, err := lexer.Tokenise(nil, text)
+	if err != nil {
+		return text
+	}
+	var out strings.Builder
+	for token := iterator(); token != chroma.EOF; token = iterator() {
+		color := syntaxTokenColor(token.Type)
+		if color == "" {
+			out.WriteString(token.Value)
+		} else {
+			out.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(token.Value))
+		}
+	}
+	return out.String()
+}
+
+func syntaxTokenColor(token chroma.TokenType) string {
+	switch {
+	case token.InCategory(chroma.Comment):
+		return "#808080"
+	case token.InSubCategory(chroma.NameClass), token.InSubCategory(chroma.NameNamespace), token == chroma.KeywordType:
+		return "#e5c07b"
+	case token.InCategory(chroma.Keyword):
+		return "#9d7cd8"
+	case token.InSubCategory(chroma.NameFunction):
+		return "#fab283"
+	case token.InSubCategory(chroma.NameVariable):
+		return "#e06c75"
+	case token.InSubCategory(chroma.LiteralString):
+		return "#7fd88f"
+	case token.InSubCategory(chroma.LiteralNumber):
+		return "#f5a742"
+	case token.InCategory(chroma.Operator):
+		return "#56b6c2"
+	case token.InCategory(chroma.Punctuation):
+		return "#eeeeee"
+	default:
+		return ""
+	}
 }
 
 func (m model) renderDeleteConfirmation() string {
@@ -2545,8 +2632,9 @@ func (m model) showSessionLog() (tea.Model, tea.Cmd) {
 	m.logScroll = 0
 	m.logFollow = true
 	m.logLoading = true
+	m.logDirty = false
 	m.logError = ""
-	m.message = "Logs - follow is on. Use Up/Down or Page Up/Page Down to scroll."
+	m.message = "Logs - auto-scroll is on. Press s to toggle; use Up/Down or Page Up/Page Down to scroll."
 	return m, tea.Batch(m.fetchSessionLog(selected), m.watchSessionLogEvents(selected))
 }
 
@@ -2561,22 +2649,26 @@ func (m model) updateLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logCancel = nil
 		}
 		m.message = ""
+	case "s":
+		m.logFollow = !m.logFollow
+		if m.logFollow {
+			m.scrollLogToEnd()
+			m.message = "Logs auto-scroll enabled."
+		} else {
+			m.message = "Logs auto-scroll disabled."
+		}
 	case "up":
-		m.logFollow = false
 		m.logScroll--
 		m.clampLogScroll()
 	case "down":
 		m.logScroll++
 		m.clampLogScroll()
-		m.logFollow = m.logScroll == max(0, len(m.logLines)-m.logViewportHeight())
 	case "ctrl+b", "pgup":
-		m.logFollow = false
 		m.logScroll -= m.logViewportHeight()
 		m.clampLogScroll()
 	case "ctrl+f", "pgdown":
 		m.logScroll += m.logViewportHeight()
 		m.clampLogScroll()
-		m.logFollow = m.logScroll == max(0, len(m.logLines)-m.logViewportHeight())
 	}
 	return m, nil
 }
@@ -2622,11 +2714,9 @@ func (m *model) watchSessionLogEvents(summary workspace.Summary) tea.Cmd {
 			return
 		}
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 		for scanner.Scan() {
-			if !strings.HasPrefix(scanner.Text(), "event: ") {
-				continue
-			}
-			event := strings.TrimPrefix(scanner.Text(), "event: ")
+			event := sessionEventType(scanner.Text())
 			if !strings.HasPrefix(event, "message.") && !strings.HasPrefix(event, "session.") {
 				continue
 			}
@@ -2647,6 +2737,29 @@ func (m *model) watchSessionLogEvents(summary workspace.Summary) tea.Cmd {
 	return m.nextSessionLogEvent()
 }
 
+func sessionEventType(line string) string {
+	if strings.HasPrefix(line, "event:") {
+		return strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+	}
+	if !strings.HasPrefix(line, "data:") {
+		return ""
+	}
+	data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	var event struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type string `json:"type"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal([]byte(data), &event) != nil {
+		return ""
+	}
+	if event.Type != "" {
+		return event.Type
+	}
+	return event.Payload.Type
+}
+
 func (m model) nextSessionLogEvent() tea.Cmd {
 	events := m.logEvents
 	return func() tea.Msg {
@@ -2657,7 +2770,7 @@ func (m model) nextSessionLogEvent() tea.Cmd {
 	}
 }
 
-func (m model) logViewportHeight() int { return max(1, m.height-16) }
+func (m model) logViewportHeight() int { return max(1, m.height-4) }
 
 func (m *model) clampLogScroll() {
 	maxScroll := max(0, len(m.logLines)-m.logViewportHeight())
@@ -2701,18 +2814,26 @@ func sessionLogLines(data []byte) ([]logLine, error) {
 				if text.Text == "" || text.Synthetic || text.Ignored {
 					continue
 				}
-				kind, label := logAssistant, "OpenCode"
+				kind := logAssistant
 				if message.Info.Role == "user" {
-					kind, label = logUser, "You"
+					kind = logUser
 				}
-				lines = appendLogBlock(lines, kind, label, text.Text)
+				lines = appendLogText(lines, kind, text.Text)
 			case "reasoning":
 				var reasoning struct {
 					Text string `json:"text"`
+					Time struct {
+						Start int64 `json:"start"`
+						End   int64 `json:"end"`
+					} `json:"time"`
 				}
 				_ = json.Unmarshal(part, &reasoning)
 				if cleaned := strings.TrimSpace(strings.ReplaceAll(reasoning.Text, "[REDACTED]", "")); cleaned != "" {
-					lines = appendLogBlock(lines, logReasoning, "Thought", cleaned)
+					title := "+ Thought: " + reasoningTitle(cleaned)
+					if reasoning.Time.End > reasoning.Time.Start {
+						title += " · " + formatLogDuration(reasoning.Time.End-reasoning.Time.Start)
+					}
+					lines = append(lines, logLine{text: title, kind: logReasoning}, logLine{})
 				}
 			case "tool":
 				lines = append(lines, toolLogLines(part)...)
@@ -2767,6 +2888,28 @@ func appendLogBlock(lines []logLine, kind logLineKind, label, text string) []log
 	return append(lines, logLine{})
 }
 
+func appendLogText(lines []logLine, kind logLineKind, text string) []logLine {
+	if text = strings.TrimSpace(text); text == "" {
+		return lines
+	}
+	for _, line := range strings.Split(text, "\n") {
+		lines = append(lines, logLine{text: line, kind: kind})
+	}
+	return append(lines, logLine{})
+}
+
+func reasoningTitle(text string) string {
+	line := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+	return strings.Trim(line, "*_# `")
+}
+
+func formatLogDuration(milliseconds int64) string {
+	if milliseconds < 1000 {
+		return fmt.Sprintf("%dms", milliseconds)
+	}
+	return fmt.Sprintf("%.1fs", float64(milliseconds)/1000)
+}
+
 func toolLogLines(data json.RawMessage) []logLine {
 	var tool struct {
 		Tool  string `json:"tool"`
@@ -2777,6 +2920,16 @@ func toolLogLines(data json.RawMessage) []logLine {
 			Error    string          `json:"error"`
 			Input    json.RawMessage `json:"input"`
 			Metadata struct {
+				Diff  string `json:"diff"`
+				Files []struct {
+					Type         string `json:"type"`
+					RelativePath string `json:"relativePath"`
+					FilePath     string `json:"filePath"`
+					Patch        string `json:"patch"`
+					MovePath     string `json:"movePath"`
+					Additions    int    `json:"additions"`
+					Deletions    int    `json:"deletions"`
+				} `json:"files"`
 				Todos []struct {
 					Content string `json:"content"`
 					Status  string `json:"status"`
@@ -2785,7 +2938,8 @@ func toolLogLines(data json.RawMessage) []logLine {
 		} `json:"state"`
 	}
 	_ = json.Unmarshal(data, &tool)
-	label := firstNonEmpty(tool.State.Title, tool.Tool)
+	var input map[string]any
+	_ = json.Unmarshal(tool.State.Input, &input)
 	var lines []logLine
 	if tool.Tool == "todowrite" {
 		todos := tool.State.Metadata.Todos
@@ -2799,12 +2953,15 @@ func toolLogLines(data json.RawMessage) []logLine {
 			_ = json.Unmarshal(tool.State.Input, &input)
 			todos = input.Todos
 		}
+		if len(todos) > 0 {
+			lines = append(lines, logLine{text: "# Todos", kind: logPanelMuted}, logLine{kind: logPanel})
+		}
 		for _, todo := range todos {
 			mark := "[ ]"
 			if todo.Status == "completed" {
-				mark = "[x]"
+				mark = "[✓]"
 			} else if todo.Status == "in_progress" {
-				mark = "[.]"
+				mark = "[•]"
 			}
 			lines = append(lines, logLine{text: "Todo  " + mark + " " + todo.Content, kind: logTodo})
 		}
@@ -2812,17 +2969,152 @@ func toolLogLines(data json.RawMessage) []logLine {
 			return append(lines, logLine{})
 		}
 	}
+	if tool.Tool == "bash" || tool.Tool == "shell" {
+		command := stringInput(input, "command")
+		if command == "" {
+			command = firstNonEmpty(tool.State.Title, tool.Tool)
+		}
+		if workdir := stringInput(input, "workdir"); workdir != "" {
+			lines = append(lines, logLine{text: "# Running in " + filepath.Base(workdir), kind: logPanelMuted}, logLine{kind: logPanel})
+		}
+		lines = append(lines, logLine{text: "$ " + command, kind: logPanel})
+		return appendPanelOutput(lines, tool.State.Output, tool.State.Error)
+	}
+	if tool.Tool == "read" {
+		path := stringInput(input, "filePath", "path")
+		label := "Read"
+		if path != "" {
+			label += " " + path
+		}
+		if offset, ok := input["offset"]; ok {
+			label += fmt.Sprintf(" [offset=%v", offset)
+			if limit, ok := input["limit"]; ok {
+				label += fmt.Sprintf(", limit=%v", limit)
+			}
+			label += "]"
+		} else if limit, ok := input["limit"]; ok {
+			label += fmt.Sprintf(" [limit=%v]", limit)
+		}
+		return appendLogBlock(lines, logTool, "→", label)
+	}
+	if tool.Tool == "write" {
+		path := stringInput(input, "filePath", "path")
+		if path == "" {
+			path = strings.TrimPrefix(tool.State.Title, "Write ")
+		}
+		lines = append(lines, logLine{text: "# Wrote " + path, kind: logPanelMuted}, logLine{kind: logPanel})
+		if content := stringInput(input, "content"); content != "" {
+			return appendPanelCode(lines, content, tool.State.Error, path)
+		}
+		return appendPanelOutput(lines, tool.State.Output, tool.State.Error)
+	}
+	if tool.Tool == "apply_patch" {
+		if tool.State.Error != "" {
+			return appendLogBlock(lines, logError, "Error", tool.State.Error)
+		}
+		if len(tool.State.Metadata.Files) > 0 {
+			for _, file := range tool.State.Metadata.Files {
+				path := firstNonEmpty(file.RelativePath, file.FilePath)
+				title := "← Patched " + path
+				switch file.Type {
+				case "add":
+					title = "# Created " + path
+				case "delete":
+					title = "# Deleted " + path
+				case "move":
+					title = "# Moved " + file.FilePath + " → " + path
+				}
+				lines = append(lines, logLine{text: title, kind: logPanelMuted}, logLine{kind: logPanel})
+				if file.Type == "delete" && file.Patch == "" {
+					lines = append(lines, logLine{text: fmt.Sprintf("-%d lines", file.Deletions), kind: logDiffRemoved})
+				} else {
+					lines = appendDiffLines(lines, file.Patch, path)
+				}
+				lines = append(lines, logLine{})
+			}
+			return lines
+		}
+		return appendLogText(lines, logTool, tool.State.Output)
+	}
+	if tool.Tool == "edit" && tool.State.Metadata.Diff != "" {
+		path := stringInput(input, "filePath", "path")
+		lines = append(lines, logLine{text: "← Edit " + path, kind: logPanelMuted}, logLine{kind: logPanel})
+		lines = appendDiffLines(lines, tool.State.Metadata.Diff, path)
+		return append(lines, logLine{})
+	}
+	label := firstNonEmpty(tool.State.Title, tool.Tool)
 	if tool.State.Error != "" {
 		return appendLogBlock(lines, logError, label, tool.State.Error)
 	}
-	status := strings.TrimSpace(tool.State.Status)
-	if tool.State.Output != "" {
-		return appendLogBlock(lines, logTool, label, tool.State.Output)
+	lines = appendLogBlock(lines, logTool, "*", label)
+	return appendToolOutput(lines, tool.State.Output, "")
+}
+
+func appendToolOutput(lines []logLine, output, failure string) []logLine {
+	if failure != "" {
+		return appendLogBlock(lines, logError, "Error", failure)
 	}
-	if status != "" {
-		return appendLogBlock(lines, logTool, label, status)
+	if output == "" {
+		return lines
 	}
-	return appendLogBlock(lines, logTool, label, "running")
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		lines = append(lines, logLine{text: "| " + line, kind: logToolOutput})
+	}
+	return append(lines, logLine{})
+}
+
+func appendPanelOutput(lines []logLine, output, failure string) []logLine {
+	if failure != "" {
+		lines = append(lines, logLine{text: "Error: " + failure, kind: logError})
+		return append(lines, logLine{})
+	}
+	if output != "" {
+		lines = append(lines, logLine{kind: logPanel})
+		for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+			lines = append(lines, logLine{text: line, kind: logPanel})
+		}
+	}
+	return append(lines, logLine{})
+}
+
+func appendPanelCode(lines []logLine, code, failure, filename string) []logLine {
+	if failure != "" {
+		lines = append(lines, logLine{text: "Error: " + failure, kind: logError})
+		return append(lines, logLine{})
+	}
+	if code != "" {
+		for _, line := range strings.Split(strings.TrimSpace(code), "\n") {
+			lines = append(lines, logLine{text: line, kind: logPanel, source: filename})
+		}
+	}
+	return append(lines, logLine{})
+}
+
+func appendDiffLines(lines []logLine, patch, filename string) []logLine {
+	for _, line := range strings.Split(strings.TrimSpace(patch), "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git"), strings.HasPrefix(line, "index "), strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "):
+			continue
+		case strings.HasPrefix(line, "@@"):
+			lines = append(lines, logLine{text: line, kind: logPanelMuted})
+		case strings.HasPrefix(line, "+"):
+			lines = append(lines, logLine{text: line, kind: logDiffAdded, source: filename})
+		case strings.HasPrefix(line, "-"):
+			lines = append(lines, logLine{text: line, kind: logDiffRemoved, source: filename})
+		default:
+			lines = append(lines, logLine{text: line, kind: logPanel, source: filename})
+		}
+	}
+	return lines
+}
+
+func stringInput(input map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := input[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(values ...string) string {

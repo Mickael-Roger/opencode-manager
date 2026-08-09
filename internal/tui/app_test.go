@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alecthomas/chroma/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mickael-menu/opencode-manager/internal/config"
@@ -561,9 +562,9 @@ func TestSessionLogLinesPreservesConversationText(t *testing.T) {
 		t.Fatalf("sessionLogLines returned error: %v", err)
 	}
 	want := []logLine{
-		{text: "You  hello", kind: logUser}, {text: "world", kind: logUser}, {},
-		{text: "Thought  hidden", kind: logReasoning}, {},
-		{text: "OpenCode  hi", kind: logAssistant}, {},
+		{text: "hello", kind: logUser}, {text: "world", kind: logUser}, {},
+		{text: "+ Thought: hidden", kind: logReasoning}, {},
+		{text: "hi", kind: logAssistant}, {},
 	}
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("sessionLogLines = %#v, want %#v", lines, want)
@@ -586,9 +587,72 @@ func TestSessionLogLinesIncludesToolOutputAndTodos(t *testing.T) {
 			got = append(got, line.text)
 		}
 	}
-	want := []string{"Write internal/app.go  Wrote 12 lines", "Todo  [x] Implement logs", "Todo  [.] Verify output"}
+	want := []string{"# Wrote internal/app.go", "Wrote 12 lines", "# Todos", "Todo  [✓] Implement logs", "Todo  [•] Verify output"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("rendered lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionLogLinesIncludesApplyPatchDiff(t *testing.T) {
+	lines, err := sessionLogLines([]byte(`[
+		{"info":{"role":"assistant"},"parts":[{"type":"tool","tool":"apply_patch","state":{
+			"status":"completed","output":"Success. Updated the following files:\nM app.go",
+			"metadata":{"files":[{"type":"update","relativePath":"app.go","patch":"--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new"}]}
+		}}]}
+	]`))
+	if err != nil {
+		t.Fatalf("sessionLogLines returned error: %v", err)
+	}
+	want := []logLine{
+		{text: "← Patched app.go", kind: logPanelMuted}, {kind: logPanel},
+		{text: "@@ -1 +1 @@", kind: logPanelMuted},
+		{text: "-old", kind: logDiffRemoved, source: "app.go"},
+		{text: "+new", kind: logDiffAdded, source: "app.go"}, {},
+	}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("sessionLogLines = %#v, want %#v", lines, want)
+	}
+}
+
+func TestSyntaxTokenColorsMatchOpenCodeTheme(t *testing.T) {
+	tests := map[chroma.TokenType]string{
+		chroma.Comment:       "#808080",
+		chroma.Keyword:       "#9d7cd8",
+		chroma.NameFunction:  "#fab283",
+		chroma.NameVariable:  "#e06c75",
+		chroma.LiteralString: "#7fd88f",
+		chroma.LiteralNumber: "#f5a742",
+		chroma.KeywordType:   "#e5c07b",
+		chroma.Operator:      "#56b6c2",
+		chroma.Punctuation:   "#eeeeee",
+	}
+	for token, want := range tests {
+		if got := syntaxTokenColor(token); got != want {
+			t.Errorf("syntaxTokenColor(%v) = %q, want %q", token, got, want)
+		}
+	}
+}
+
+func TestSessionEventTypeParsesOpenCodeSSE(t *testing.T) {
+	tests := map[string]string{
+		`event: message.updated`:                                "message.updated",
+		`data: {"type":"message.part.updated","properties":{}}`: "message.part.updated",
+		`data: {"payload":{"type":"session.idle"}}`:             "session.idle",
+		`data: not-json`:                                        "",
+		`: keepalive`:                                           "",
+	}
+	for line, want := range tests {
+		if got := sessionEventType(line); got != want {
+			t.Errorf("sessionEventType(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
+
+func TestSessionEventMarksInFlightLogFetchDirty(t *testing.T) {
+	m := model{showLogs: true, logWorkspace: "app", logLoading: true}
+	updated, _ := m.Update(sessionLogEventMsg{name: "app"})
+	if !updated.(model).logDirty {
+		t.Fatal("event received during log fetch should schedule a follow-up refresh")
 	}
 }
 
