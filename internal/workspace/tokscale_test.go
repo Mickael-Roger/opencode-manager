@@ -29,14 +29,15 @@ func (f *fakeDriver) ContainerStatus(context.Context, string) (string, error) {
 func (f *fakeDriver) ContainerRuntimeConfig(context.Context, string) (runtime.ContainerRuntimeConfig, error) {
 	return runtime.ContainerRuntimeConfig{}, errors.New("not implemented")
 }
-func (f *fakeDriver) ContainerImageID(context.Context, string) (string, error)     { return "", nil }
-func (f *fakeDriver) ImageID(context.Context, string) (string, error)              { return "", nil }
-func (f *fakeDriver) CreateContainer(context.Context, runtime.ContainerSpec) error { return nil }
-func (f *fakeDriver) StartContainer(context.Context, string) error                 { f.started++; return nil }
-func (f *fakeDriver) StopContainer(context.Context, string) error                  { f.stopped++; return nil }
-func (f *fakeDriver) RemoveContainer(context.Context, string) error                { return nil }
-func (f *fakeDriver) RemoveImage(context.Context, string) error                    { return nil }
-func (f *fakeDriver) ExecCommand(string, []string) *exec.Cmd                       { return nil }
+func (f *fakeDriver) ContainerImageID(context.Context, string) (string, error)      { return "", nil }
+func (f *fakeDriver) ImageID(context.Context, string) (string, error)               { return "", nil }
+func (f *fakeDriver) CreateContainer(context.Context, runtime.ContainerSpec) error  { return nil }
+func (f *fakeDriver) StartContainer(context.Context, string) error                  { f.started++; return nil }
+func (f *fakeDriver) StopContainer(context.Context, string) error                   { f.stopped++; return nil }
+func (f *fakeDriver) RemoveContainer(context.Context, string) error                 { return nil }
+func (f *fakeDriver) RemoveImage(context.Context, string) error                     { return nil }
+func (f *fakeDriver) ExecCommand(string, []string) *exec.Cmd                        { return nil }
+func (f *fakeDriver) ExecStreamCommand(context.Context, string, []string) *exec.Cmd { return nil }
 func (f *fakeDriver) ExecOutput(_ context.Context, _ string, args []string) ([]byte, error) {
 	f.gotArgs = append(f.gotArgs, args)
 	return f.output(args), nil

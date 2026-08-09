@@ -141,6 +141,7 @@ type Driver interface {
 	RemoveContainer(context.Context, string) error
 	RemoveImage(context.Context, string) error
 	ExecCommand(string, []string) *exec.Cmd
+	ExecStreamCommand(context.Context, string, []string) *exec.Cmd
 	ExecOutput(context.Context, string, []string) ([]byte, error)
 	ExecOutputAs(context.Context, string, string, []string) ([]byte, error)
 	Exec(context.Context, ExecSpec) ([]byte, error)
@@ -527,6 +528,13 @@ func (d CLIDriver) ImageID(ctx context.Context, imageName string) (string, error
 func (d CLIDriver) ExecCommand(name string, command []string) *exec.Cmd {
 	args := append([]string{"exec", "--interactive", "--tty", name}, command...)
 	return exec.Command(d.binary, args...)
+}
+
+// ExecStreamCommand runs a non-interactive command whose stdout is consumed as
+// a stream, such as OpenCode's server-sent event endpoint.
+func (d CLIDriver) ExecStreamCommand(ctx context.Context, name string, command []string) *exec.Cmd {
+	args := append([]string{"exec", name}, command...)
+	return exec.CommandContext(ctx, d.binary, args...)
 }
 
 // ExecOutput runs a command inside a running container without a TTY and

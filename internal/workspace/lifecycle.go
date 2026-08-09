@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -901,6 +902,60 @@ func (l Lifecycle) TokenUsage(ctx context.Context, summary Summary) (TokenUsage,
 		TodayCost:      today.cost,
 		TodayMsgs:      today.msgs,
 	}, nil
+}
+
+// SessionMessages returns the message JSON for the most recently updated
+// OpenCode session. The server only listens on the container loopback address,
+// so the HTTP requests must run inside the workspace container.
+func (l Lifecycle) SessionMessages(ctx context.Context, summary Summary) ([]byte, error) {
+	port := summary.Manifest.OpenCodePort
+	if port == 0 {
+		return nil, fmt.Errorf("workspace %q has no OpenCode server port", summary.Manifest.Name)
+	}
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	sessionsJSON, err := l.driver.ExecOutput(ctx, summary.Manifest.ContainerName, []string{"curl", "--fail", "--silent", "--show-error", baseURL + "/session"})
+	if err != nil {
+		return nil, fmt.Errorf("list OpenCode sessions: %w", err)
+	}
+
+	var sessions []struct {
+		ID   string `json:"id"`
+		Time struct {
+			Updated int64 `json:"updated"`
+		} `json:"time"`
+	}
+	if err := json.Unmarshal(sessionsJSON, &sessions); err != nil {
+		return nil, fmt.Errorf("decode OpenCode sessions: %w", err)
+	}
+	if len(sessions) == 0 {
+		return []byte("[]"), nil
+	}
+	latest := sessions[0]
+	for _, session := range sessions[1:] {
+		if session.Time.Updated > latest.Time.Updated {
+			latest = session
+		}
+	}
+	if latest.ID == "" {
+		return nil, fmt.Errorf("latest OpenCode session has no ID")
+	}
+
+	messagesURL := baseURL + "/session/" + url.PathEscape(latest.ID) + "/message"
+	messages, err := l.driver.ExecOutput(ctx, summary.Manifest.ContainerName, []string{"curl", "--fail", "--silent", "--show-error", messagesURL})
+	if err != nil {
+		return nil, fmt.Errorf("list OpenCode session messages: %w", err)
+	}
+	return messages, nil
+}
+
+// SessionEvents opens the OpenCode server's event stream from inside the
+// container. Callers cancel ctx to close the stream.
+func (l Lifecycle) SessionEvents(ctx context.Context, summary Summary) (*exec.Cmd, error) {
+	if summary.Manifest.OpenCodePort == 0 {
+		return nil, fmt.Errorf("workspace %q has no OpenCode server port", summary.Manifest.Name)
+	}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d/event", summary.Manifest.OpenCodePort)
+	return l.driver.ExecStreamCommand(ctx, summary.Manifest.ContainerName, []string{"curl", "--no-buffer", "--fail", "--silent", "--show-error", endpoint}), nil
 }
 
 func (l Lifecycle) runTokscale(ctx context.Context, containerName string, extra []string) (tokscaleAggregate, error) {

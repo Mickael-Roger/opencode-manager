@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -545,6 +546,23 @@ func TestActionsUseK9sBindings(t *testing.T) {
 	}
 	if keys["describe"] != "d" {
 		t.Fatalf("describe key = %q, want d", keys["describe"])
+	}
+	if keys["logs"] != "l" {
+		t.Fatalf("logs key = %q, want l", keys["logs"])
+	}
+}
+
+func TestSessionLogLinesPreservesConversationText(t *testing.T) {
+	lines, err := sessionLogLines([]byte(`[
+		{"info":{"role":"user"},"parts":[{"type":"text","text":"hello\nworld"}]},
+		{"info":{"role":"assistant"},"parts":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"hi"}]}
+	]`))
+	if err != nil {
+		t.Fatalf("sessionLogLines returned error: %v", err)
+	}
+	want := []string{"[USER]", "hello", "world", "", "[ASSISTANT]", "hi", ""}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("sessionLogLines = %#v, want %#v", lines, want)
 	}
 }
 

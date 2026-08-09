@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,15 @@ type model struct {
 	dialogFocus   int // 0 = OK/primary button, 1 = Cancel
 	showHelp      bool
 	showDescribe  bool
+	showLogs      bool
+	logLines      []string
+	logScroll     int
+	logFollow     bool
+	logLoading    bool
+	logError      string
+	logWorkspace  string
+	logCancel     context.CancelFunc
+	logEvents     <-chan tea.Msg
 	tokens        map[string]tokenState
 	versions      map[string]versionState
 
@@ -195,6 +205,7 @@ var actions = []action{
 	{Key: "s", Cmd: "shell", Desc: "Shell"},
 	{Key: "t", Cmd: "toggle", Desc: "Start/Stop"},
 	{Key: "d", Cmd: "describe", Desc: "Describe"},
+	{Key: "l", Cmd: "logs", Desc: "Logs"},
 	{Key: "e", Cmd: "edit", Desc: "Edit"},
 	{Key: "u", Cmd: "update", Desc: "Update"},
 	{Key: "c", Cmd: "create", Desc: "Create"},
@@ -355,6 +366,19 @@ type versionMsg struct {
 	name    string
 	version string
 	err     error
+}
+
+type sessionLogMsg struct {
+	name  string
+	lines []string
+	err   error
+}
+
+type sessionLogEventMsg struct{ name string }
+
+type sessionLogEventErrorMsg struct {
+	name string
+	err  error
 }
 
 // updateAvailableMsg is emitted by checkForUpdate when the npm registry
@@ -680,6 +704,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.versions[msg.name] = versionState{value: value}
 		return m, nil
+	case sessionLogMsg:
+		if msg.name != m.logWorkspace {
+			return m, nil
+		}
+		m.logLoading = false
+		if msg.err != nil {
+			m.logError = msg.err.Error()
+			return m, nil
+		}
+		m.logError = ""
+		m.logLines = msg.lines
+		m.clampLogScroll()
+		if m.logFollow {
+			m.scrollLogToEnd()
+		}
+		return m, nil
+	case sessionLogEventMsg:
+		if !m.showLogs || msg.name != m.logWorkspace {
+			return m, nil
+		}
+		cmds := []tea.Cmd{m.nextSessionLogEvent()}
+		if !m.logLoading {
+			if selected, ok := m.selectedWorkspace(); ok {
+				m.logLoading = true
+				cmds = append(cmds, m.fetchSessionLog(selected))
+			}
+		}
+		return m, tea.Batch(cmds...)
+	case sessionLogEventErrorMsg:
+		if m.showLogs && msg.name == m.logWorkspace && msg.err != nil {
+			m.logError = msg.err.Error()
+		}
+		return m, nil
 	case updateAvailableMsg:
 		slog.Info("update available", "current", appVersion, "latest", msg.latest)
 		m.updateLatest = msg.latest
@@ -753,6 +810,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.message = ""
 		}
 		return m, nil
+	}
+	if m.showLogs {
+		return m.updateLogs(msg)
 	}
 	if m.showHelp {
 		switch msg.String() {
@@ -1296,6 +1356,8 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 		m.requestDelete()
 	case "describe":
 		return m.describeSelected()
+	case "logs":
+		return m.showSessionLog()
 	case "shell":
 		return m.shellSelected()
 	case "toggle":
@@ -1378,6 +1440,8 @@ func (m model) View() string {
 		body = m.renderTemplatesPage(width, bodyHeight)
 	case m.showDescribe:
 		body = m.renderDescribePage(width, bodyHeight)
+	case m.showLogs:
+		body = m.renderLogPage(width, bodyHeight)
 	default:
 		body = m.renderTable(width, bodyHeight)
 	}
@@ -1568,6 +1632,7 @@ func (m model) renderMenu() string {
 		{"s", "Shell"},
 		{"t", "Start/Stop"},
 		{"d", "Describe"},
+		{"l", "Logs"},
 		{"e", "Edit"},
 		{"u", "Update"},
 		{"c", "Create"},
@@ -1807,6 +1872,7 @@ func (m model) renderHelp() string {
 		{"s", "shell into container"},
 		{"t", "start / stop container"},
 		{"d", "describe"},
+		{"l", "view session logs"},
 		{"e", "edit"},
 		{"u", "update OpenCode"},
 		{"c", "create"},
@@ -1967,6 +2033,39 @@ func (m model) renderDescribePage(width, height int) string {
 	}
 
 	title := titleStyle.Render("Describe") + counterStyle.Render("("+selected.Manifest.Name+")")
+	return m.boxWithTitle(title, rows, width)
+}
+
+func (m model) renderLogPage(width, height int) string {
+	inner := width - 2
+	contentWidth := inner - 2
+	rows := make([]string, 0, height-1)
+	follow := "off"
+	if m.logFollow {
+		follow = "on"
+	}
+	status := fmt.Sprintf("follow: %s  s: toggle  j/k: scroll  G: end  esc: back", follow)
+	rows = append(rows, " "+mutedStyle.Render(fit(status, contentWidth))+" ")
+
+	if m.logError != "" {
+		rows = append(rows, " "+errorStyle.Render(fit("Unable to read session: "+m.logError, contentWidth))+" ")
+	} else if m.logLoading && len(m.logLines) == 0 {
+		rows = append(rows, " "+mutedStyle.Render(fit("Loading OpenCode session...", contentWidth))+" ")
+	} else if len(m.logLines) == 0 {
+		rows = append(rows, " "+mutedStyle.Render(fit("No OpenCode session output yet.", contentWidth))+" ")
+	} else {
+		capacity := max(1, height-2)
+		maxScroll := max(0, len(m.logLines)-capacity)
+		start := clamp(m.logScroll, 0, maxScroll)
+		end := min(len(m.logLines), start+capacity)
+		for _, line := range m.logLines[start:end] {
+			rows = append(rows, " "+bodyStyle.Render(fit(line, contentWidth))+" ")
+		}
+	}
+	for len(rows) < height-1 {
+		rows = append(rows, " "+strings.Repeat(" ", contentWidth)+" ")
+	}
+	title := titleStyle.Render("Logs") + counterStyle.Render("("+m.logWorkspace+")")
 	return m.boxWithTitle(title, rows, width)
 }
 
@@ -2383,6 +2482,198 @@ func (m model) describeSelected() (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// showSessionLog opens a read-only, k9s-style transcript of the selected
+// workspace's latest OpenCode session. It deliberately does not attach a TUI.
+func (m model) showSessionLog() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Logs requires a selected workspace."
+		return m, nil
+	}
+	if !m.isRunning(selected.Manifest.Name) {
+		m.message = "Logs requires a running workspace."
+		return m, nil
+	}
+	m.showLogs = true
+	m.showDescribe = false
+	m.logWorkspace = selected.Manifest.Name
+	m.logLines = nil
+	m.logScroll = 0
+	m.logFollow = true
+	m.logLoading = true
+	m.logError = ""
+	m.message = "Logs - follow is on. Press s to toggle, esc to return."
+	return m, tea.Batch(m.fetchSessionLog(selected), m.watchSessionLogEvents(selected))
+}
+
+func (m model) updateLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.showLogs = false
+		if m.logCancel != nil {
+			m.logCancel()
+			m.logCancel = nil
+		}
+		m.message = ""
+	case "s":
+		m.logFollow = !m.logFollow
+		if m.logFollow {
+			m.scrollLogToEnd()
+			m.message = "Logs follow enabled."
+			if !m.logLoading {
+				m.logLoading = true
+				selected, _ := m.selectedWorkspace()
+				return m, m.fetchSessionLog(selected)
+			}
+		} else {
+			m.message = "Logs follow paused."
+		}
+	case "up", "k":
+		m.logFollow = false
+		m.logScroll--
+		m.clampLogScroll()
+	case "down", "j":
+		m.logFollow = false
+		m.logScroll++
+		m.clampLogScroll()
+	case "ctrl+b", "pgup":
+		m.logFollow = false
+		m.logScroll -= m.logViewportHeight()
+		m.clampLogScroll()
+	case "ctrl+f", "pgdown":
+		m.logFollow = false
+		m.logScroll += m.logViewportHeight()
+		m.clampLogScroll()
+	case "g", "home":
+		m.logFollow = false
+		m.logScroll = 0
+	case "G", "end":
+		m.logFollow = true
+		m.scrollLogToEnd()
+	}
+	return m, nil
+}
+
+func (m model) fetchSessionLog(summary workspace.Summary) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		messages, err := m.lifecycle.SessionMessages(ctx, summary)
+		if err != nil {
+			return sessionLogMsg{name: summary.Manifest.Name, err: err}
+		}
+		lines, err := sessionLogLines(messages)
+		return sessionLogMsg{name: summary.Manifest.Name, lines: lines, err: err}
+	}
+}
+
+// watchSessionLogEvents keeps one SSE connection open while the log page is
+// visible. A one-slot channel coalesces rapid text-part updates so a streaming
+// response never triggers overlapping transcript reads.
+func (m *model) watchSessionLogEvents(summary workspace.Summary) tea.Cmd {
+	if m.logCancel != nil {
+		m.logCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.logCancel = cancel
+	events := make(chan tea.Msg, 1)
+	m.logEvents = events
+	go func() {
+		cmd, err := m.lifecycle.SessionEvents(ctx, summary)
+		if err != nil {
+			events <- sessionLogEventErrorMsg{name: summary.Manifest.Name, err: err}
+			close(events)
+			return
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err != nil {
+			events <- sessionLogEventErrorMsg{name: summary.Manifest.Name, err: err}
+			close(events)
+			return
+		}
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if !strings.HasPrefix(scanner.Text(), "event: ") {
+				continue
+			}
+			event := strings.TrimPrefix(scanner.Text(), "event: ")
+			if !strings.HasPrefix(event, "message.") && !strings.HasPrefix(event, "session.") {
+				continue
+			}
+			select {
+			case events <- sessionLogEventMsg{name: summary.Manifest.Name}:
+			default:
+			}
+		}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			select {
+			case events <- sessionLogEventErrorMsg{name: summary.Manifest.Name, err: err}:
+			default:
+			}
+		}
+		_ = cmd.Wait()
+		close(events)
+	}()
+	return m.nextSessionLogEvent()
+}
+
+func (m model) nextSessionLogEvent() tea.Cmd {
+	events := m.logEvents
+	return func() tea.Msg {
+		if events == nil {
+			return nil
+		}
+		return <-events
+	}
+}
+
+func (m model) logViewportHeight() int { return max(1, m.height-16) }
+
+func (m *model) clampLogScroll() {
+	maxScroll := max(0, len(m.logLines)-m.logViewportHeight())
+	m.logScroll = clamp(m.logScroll, 0, maxScroll)
+}
+
+func (m *model) scrollLogToEnd() {
+	m.logScroll = max(0, len(m.logLines)-m.logViewportHeight())
+}
+
+// sessionLogLines keeps the conversation's text parts verbatim while adding
+// small role markers, giving the dashboard the same input/output chronology as
+// OpenCode without rendering its interactive client.
+func sessionLogLines(data []byte) ([]string, error) {
+	var messages []struct {
+		Info struct {
+			Role string `json:"role"`
+		} `json:"info"`
+		Parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return nil, fmt.Errorf("decode OpenCode session messages: %w", err)
+	}
+	var lines []string
+	for _, message := range messages {
+		role := strings.ToUpper(message.Info.Role)
+		for _, part := range message.Parts {
+			if part.Type != "text" || part.Text == "" {
+				continue
+			}
+			lines = append(lines, "["+role+"]")
+			lines = append(lines, strings.Split(part.Text, "\n")...)
+			lines = append(lines, "")
+		}
+	}
+	return lines, nil
 }
 
 func (m model) fetchTokenUsage(summary workspace.Summary) tea.Cmd {

@@ -36,6 +36,7 @@ general command line. The available views (*kinds*) are:
 | `s` | Open a **shell** in the workspace container |
 | `t` | **Start / stop** the container (toggle) |
 | `d` | **Describe** the workspace (details + token breakdown) |
+| `l` | View the latest OpenCode session's input/output transcript |
 | `e` | **Edit** the workspace's modules |
 | `u` | **Update** OpenCode in the workspace |
 | `c` | **Create** a workspace |
@@ -62,6 +63,14 @@ Shows workspace details — status, start time, image, installed modules — and
 full token breakdown (input / output / cache-read).
 
 ![describe page](assets/ocm-describe.png)
+
+### Logs (`l`)
+
+Shows the selected running workspace's latest OpenCode session without attaching
+the OpenCode TUI. The transcript updates live from the OpenCode server event
+stream; follow mode controls whether new output moves the viewport to the end.
+Press `s` to toggle follow, use `j`/`k`, `^f`/`^b`, `g`, and `G` to scroll, and
+press `Esc` to return to the dashboard.
 
 ### Edit modules (`e`)
 
