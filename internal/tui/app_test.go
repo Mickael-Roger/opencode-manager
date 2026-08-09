@@ -560,9 +560,35 @@ func TestSessionLogLinesPreservesConversationText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sessionLogLines returned error: %v", err)
 	}
-	want := []string{"[USER]", "hello", "world", "", "[ASSISTANT]", "hi", ""}
+	want := []logLine{
+		{text: "You  hello", kind: logUser}, {text: "world", kind: logUser}, {},
+		{text: "Thought  hidden", kind: logReasoning}, {},
+		{text: "OpenCode  hi", kind: logAssistant}, {},
+	}
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("sessionLogLines = %#v, want %#v", lines, want)
+	}
+}
+
+func TestSessionLogLinesIncludesToolOutputAndTodos(t *testing.T) {
+	lines, err := sessionLogLines([]byte(`[
+		{"info":{"role":"assistant"},"parts":[
+			{"type":"tool","tool":"write","state":{"status":"completed","title":"Write internal/app.go","output":"Wrote 12 lines"}},
+			{"type":"tool","tool":"todowrite","state":{"status":"completed","metadata":{"todos":[{"content":"Implement logs","status":"completed"},{"content":"Verify output","status":"in_progress"}]}}}
+		]}
+	]`))
+	if err != nil {
+		t.Fatalf("sessionLogLines returned error: %v", err)
+	}
+	var got []string
+	for _, line := range lines {
+		if line.text != "" {
+			got = append(got, line.text)
+		}
+	}
+	want := []string{"Write internal/app.go  Wrote 12 lines", "Todo  [x] Implement logs", "Todo  [.] Verify output"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rendered lines = %#v, want %#v", got, want)
 	}
 }
 

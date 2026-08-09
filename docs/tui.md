@@ -68,9 +68,9 @@ full token breakdown (input / output / cache-read).
 
 Shows the selected running workspace's latest OpenCode session without attaching
 the OpenCode TUI. The transcript updates live from the OpenCode server event
-stream; follow mode controls whether new output moves the viewport to the end.
-Press `s` to toggle follow, use `j`/`k`, `^f`/`^b`, `g`, and `G` to scroll, and
-press `Esc` to return to the dashboard.
+stream and includes OpenCode text, reasoning, tool output, and todo updates.
+Use `↑`/`↓` and `^f`/`^b` to scroll; follow resumes automatically when the
+viewport reaches the end. Press `Esc` to return to the dashboard.
 
 ### Edit modules (`e`)
 

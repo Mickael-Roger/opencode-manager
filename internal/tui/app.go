@@ -77,7 +77,7 @@ type model struct {
 	showHelp      bool
 	showDescribe  bool
 	showLogs      bool
-	logLines      []string
+	logLines      []logLine
 	logScroll     int
 	logFollow     bool
 	logLoading    bool
@@ -370,8 +370,24 @@ type versionMsg struct {
 
 type sessionLogMsg struct {
 	name  string
-	lines []string
+	lines []logLine
 	err   error
+}
+
+type logLineKind uint8
+
+const (
+	logUser logLineKind = iota
+	logAssistant
+	logReasoning
+	logTool
+	logTodo
+	logError
+)
+
+type logLine struct {
+	text string
+	kind logLineKind
 }
 
 type sessionLogEventMsg struct{ name string }
@@ -2044,7 +2060,7 @@ func (m model) renderLogPage(width, height int) string {
 	if m.logFollow {
 		follow = "on"
 	}
-	status := fmt.Sprintf("follow: %s  s: toggle  j/k: scroll  G: end  esc: back", follow)
+	status := fmt.Sprintf("follow: %s  up/down: scroll  page up/down: scroll  esc: back", follow)
 	rows = append(rows, " "+mutedStyle.Render(fit(status, contentWidth))+" ")
 
 	if m.logError != "" {
@@ -2059,7 +2075,7 @@ func (m model) renderLogPage(width, height int) string {
 		start := clamp(m.logScroll, 0, maxScroll)
 		end := min(len(m.logLines), start+capacity)
 		for _, line := range m.logLines[start:end] {
-			rows = append(rows, " "+bodyStyle.Render(fit(line, contentWidth))+" ")
+			rows = append(rows, " "+renderLogLine(line, contentWidth)+" ")
 		}
 	}
 	for len(rows) < height-1 {
@@ -2067,6 +2083,32 @@ func (m model) renderLogPage(width, height int) string {
 	}
 	title := titleStyle.Render("Logs") + counterStyle.Render("("+m.logWorkspace+")")
 	return m.boxWithTitle(title, rows, width)
+}
+
+func renderLogLine(line logLine, width int) string {
+	if line.text == "" {
+		return ""
+	}
+	blockWidth := max(20, width*2/3)
+	text := fit(line.text, blockWidth-2)
+	var style lipgloss.Style
+	align := lipgloss.Right
+	switch line.kind {
+	case logUser:
+		style = lipgloss.NewStyle().Foreground(colMenuText).Background(lipgloss.Color("#1f3b5b")).Padding(0, 1)
+		align = lipgloss.Left
+	case logAssistant:
+		style = lipgloss.NewStyle().Foreground(colMenuText).Background(lipgloss.Color("#244f42")).Padding(0, 1)
+	case logReasoning:
+		style = lipgloss.NewStyle().Foreground(colMuted).Background(lipgloss.Color("#303b42")).Padding(0, 1)
+	case logTool:
+		style = lipgloss.NewStyle().Foreground(colTitle).Background(lipgloss.Color("#303b42")).Padding(0, 1)
+	case logTodo:
+		style = lipgloss.NewStyle().Foreground(colStarting).Background(lipgloss.Color("#303b42")).Padding(0, 1)
+	case logError:
+		style = lipgloss.NewStyle().Foreground(colError).Background(lipgloss.Color("#3b2525")).Padding(0, 1)
+	}
+	return lipgloss.PlaceHorizontal(width, align, style.Render(text))
 }
 
 func (m model) renderDeleteConfirmation() string {
@@ -2504,7 +2546,7 @@ func (m model) showSessionLog() (tea.Model, tea.Cmd) {
 	m.logFollow = true
 	m.logLoading = true
 	m.logError = ""
-	m.message = "Logs - follow is on. Press s to toggle, esc to return."
+	m.message = "Logs - follow is on. Use Up/Down or Page Up/Page Down to scroll."
 	return m, tea.Batch(m.fetchSessionLog(selected), m.watchSessionLogEvents(selected))
 }
 
@@ -2519,41 +2561,22 @@ func (m model) updateLogs(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logCancel = nil
 		}
 		m.message = ""
-	case "s":
-		m.logFollow = !m.logFollow
-		if m.logFollow {
-			m.scrollLogToEnd()
-			m.message = "Logs follow enabled."
-			if !m.logLoading {
-				m.logLoading = true
-				selected, _ := m.selectedWorkspace()
-				return m, m.fetchSessionLog(selected)
-			}
-		} else {
-			m.message = "Logs follow paused."
-		}
-	case "up", "k":
+	case "up":
 		m.logFollow = false
 		m.logScroll--
 		m.clampLogScroll()
-	case "down", "j":
-		m.logFollow = false
+	case "down":
 		m.logScroll++
 		m.clampLogScroll()
+		m.logFollow = m.logScroll == max(0, len(m.logLines)-m.logViewportHeight())
 	case "ctrl+b", "pgup":
 		m.logFollow = false
 		m.logScroll -= m.logViewportHeight()
 		m.clampLogScroll()
 	case "ctrl+f", "pgdown":
-		m.logFollow = false
 		m.logScroll += m.logViewportHeight()
 		m.clampLogScroll()
-	case "g", "home":
-		m.logFollow = false
-		m.logScroll = 0
-	case "G", "end":
-		m.logFollow = true
-		m.scrollLogToEnd()
+		m.logFollow = m.logScroll == max(0, len(m.logLines)-m.logViewportHeight())
 	}
 	return m, nil
 }
@@ -2645,35 +2668,170 @@ func (m *model) scrollLogToEnd() {
 	m.logScroll = max(0, len(m.logLines)-m.logViewportHeight())
 }
 
-// sessionLogLines keeps the conversation's text parts verbatim while adding
-// small role markers, giving the dashboard the same input/output chronology as
-// OpenCode without rendering its interactive client.
-func sessionLogLines(data []byte) ([]string, error) {
+// sessionLogLines translates every OpenCode message part into transcript rows.
+// The OpenCode TUI gives each part its own renderer; retaining that distinction
+// here prevents reasoning, tool output, writes, and todo updates disappearing.
+func sessionLogLines(data []byte) ([]logLine, error) {
 	var messages []struct {
 		Info struct {
 			Role string `json:"role"`
 		} `json:"info"`
-		Parts []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"parts"`
+		Parts []json.RawMessage `json:"parts"`
 	}
 	if err := json.Unmarshal(data, &messages); err != nil {
 		return nil, fmt.Errorf("decode OpenCode session messages: %w", err)
 	}
-	var lines []string
+	var lines []logLine
 	for _, message := range messages {
-		role := strings.ToUpper(message.Info.Role)
 		for _, part := range message.Parts {
-			if part.Type != "text" || part.Text == "" {
-				continue
+			var header struct {
+				Type string `json:"type"`
 			}
-			lines = append(lines, "["+role+"]")
-			lines = append(lines, strings.Split(part.Text, "\n")...)
-			lines = append(lines, "")
+			if err := json.Unmarshal(part, &header); err != nil {
+				return nil, fmt.Errorf("decode OpenCode message part: %w", err)
+			}
+			switch header.Type {
+			case "text":
+				var text struct {
+					Text      string `json:"text"`
+					Synthetic bool   `json:"synthetic"`
+					Ignored   bool   `json:"ignored"`
+				}
+				_ = json.Unmarshal(part, &text)
+				if text.Text == "" || text.Synthetic || text.Ignored {
+					continue
+				}
+				kind, label := logAssistant, "OpenCode"
+				if message.Info.Role == "user" {
+					kind, label = logUser, "You"
+				}
+				lines = appendLogBlock(lines, kind, label, text.Text)
+			case "reasoning":
+				var reasoning struct {
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal(part, &reasoning)
+				if cleaned := strings.TrimSpace(strings.ReplaceAll(reasoning.Text, "[REDACTED]", "")); cleaned != "" {
+					lines = appendLogBlock(lines, logReasoning, "Thought", cleaned)
+				}
+			case "tool":
+				lines = append(lines, toolLogLines(part)...)
+			case "subtask":
+				var subtask struct {
+					Description string `json:"description"`
+					Prompt      string `json:"prompt"`
+				}
+				_ = json.Unmarshal(part, &subtask)
+				lines = appendLogBlock(lines, logTool, "Subtask", firstNonEmpty(subtask.Description, subtask.Prompt))
+			case "agent":
+				var agent struct {
+					Name string `json:"name"`
+				}
+				_ = json.Unmarshal(part, &agent)
+				lines = appendLogBlock(lines, logTool, "Agent", agent.Name)
+			case "patch":
+				var patch struct {
+					Files []string `json:"files"`
+				}
+				_ = json.Unmarshal(part, &patch)
+				lines = appendLogBlock(lines, logTool, "Edited", strings.Join(patch.Files, ", "))
+			case "retry":
+				var retry struct {
+					Attempt int `json:"attempt"`
+					Error   struct {
+						Data struct {
+							Message string `json:"message"`
+						} `json:"data"`
+					} `json:"error"`
+				}
+				_ = json.Unmarshal(part, &retry)
+				lines = appendLogBlock(lines, logError, fmt.Sprintf("Retry %d", retry.Attempt), retry.Error.Data.Message)
+			case "compaction":
+				lines = appendLogBlock(lines, logTool, "Compaction", "Conversation compacted")
+			}
 		}
 	}
 	return lines, nil
+}
+
+func appendLogBlock(lines []logLine, kind logLineKind, label, text string) []logLine {
+	if text = strings.TrimSpace(text); text == "" {
+		return lines
+	}
+	for i, line := range strings.Split(text, "\n") {
+		if i == 0 {
+			line = label + "  " + line
+		}
+		lines = append(lines, logLine{text: line, kind: kind})
+	}
+	return append(lines, logLine{})
+}
+
+func toolLogLines(data json.RawMessage) []logLine {
+	var tool struct {
+		Tool  string `json:"tool"`
+		State struct {
+			Status   string          `json:"status"`
+			Title    string          `json:"title"`
+			Output   string          `json:"output"`
+			Error    string          `json:"error"`
+			Input    json.RawMessage `json:"input"`
+			Metadata struct {
+				Todos []struct {
+					Content string `json:"content"`
+					Status  string `json:"status"`
+				} `json:"todos"`
+			} `json:"metadata"`
+		} `json:"state"`
+	}
+	_ = json.Unmarshal(data, &tool)
+	label := firstNonEmpty(tool.State.Title, tool.Tool)
+	var lines []logLine
+	if tool.Tool == "todowrite" {
+		todos := tool.State.Metadata.Todos
+		if len(todos) == 0 {
+			var input struct {
+				Todos []struct {
+					Content string `json:"content"`
+					Status  string `json:"status"`
+				} `json:"todos"`
+			}
+			_ = json.Unmarshal(tool.State.Input, &input)
+			todos = input.Todos
+		}
+		for _, todo := range todos {
+			mark := "[ ]"
+			if todo.Status == "completed" {
+				mark = "[x]"
+			} else if todo.Status == "in_progress" {
+				mark = "[.]"
+			}
+			lines = append(lines, logLine{text: "Todo  " + mark + " " + todo.Content, kind: logTodo})
+		}
+		if len(lines) > 0 {
+			return append(lines, logLine{})
+		}
+	}
+	if tool.State.Error != "" {
+		return appendLogBlock(lines, logError, label, tool.State.Error)
+	}
+	status := strings.TrimSpace(tool.State.Status)
+	if tool.State.Output != "" {
+		return appendLogBlock(lines, logTool, label, tool.State.Output)
+	}
+	if status != "" {
+		return appendLogBlock(lines, logTool, label, status)
+	}
+	return appendLogBlock(lines, logTool, label, "running")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (m model) fetchTokenUsage(summary workspace.Summary) tea.Cmd {
