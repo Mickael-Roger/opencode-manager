@@ -218,13 +218,11 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 		"ARG EXTRA_PACKAGES=",
 		"ARG EXTRA_COMMANDS=",
 		"COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/",
-		"git", "ripgrep", "jq", "nodejs", "npm", "unzip", "vim",
+		"git", "ripgrep", "jq", "nodejs", "npm",
 		"${EXTRA_PACKAGES}",
 		"RUN ${EXTRA_COMMANDS}",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
 		"command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai",
-		"opencode-manager-patch-pending-prompts",
-		"opencode-pending-prompts.patch",
 		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
 		"RUN chmod 0755 /usr/local/bin/opencode-manager-attach",
 		"ENV PATH=/home/debian/.local/bin:/usr/local/bin",
@@ -398,27 +396,15 @@ func TestWriteBuildContextMaterializesFiles(t *testing.T) {
 	if err := writeBuildContext(dir); err != nil {
 		t.Fatalf("writeBuildContext: %v", err)
 	}
-	for _, name := range []string{baseDockerfile, overlayDockerfile, workspaceDockerfile, attachScriptName, entrypointScriptName, "opencode-manager-patch-pending-prompts", "opencode-pending-prompts.patch"} {
+	for _, name := range []string{baseDockerfile, overlayDockerfile, workspaceDockerfile, attachScriptName, entrypointScriptName} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("build context missing %q: %v", name, err)
 		}
-		if name == attachScriptName || name == entrypointScriptName || name == "opencode-manager-patch-pending-prompts" {
+		if name == attachScriptName || name == entrypointScriptName {
 			if info.Mode().Perm()&0o111 == 0 {
 				t.Fatalf("script %q must be executable, got %v", name, info.Mode())
 			}
-		}
-	}
-}
-
-func TestWritePendingPromptsPatchAssets(t *testing.T) {
-	patcher, patch, err := WritePendingPromptsPatchAssets(t.TempDir())
-	if err != nil {
-		t.Fatalf("WritePendingPromptsPatchAssets: %v", err)
-	}
-	for _, path := range []string{patcher, patch} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("missing patch asset %q: %v", path, err)
 		}
 	}
 }
@@ -430,10 +416,6 @@ func TestManagerScriptsContent(t *testing.T) {
 	entrypoint := readBuildFile(t, entrypointScriptName)
 	if !strings.Contains(entrypoint, ". \"$HOME/.env\"") || !strings.Contains(entrypoint, "opencode serve") {
 		t.Fatalf("entrypoint script missing env sourcing or server launch:\n%s", entrypoint)
-	}
-	patcher := readBuildFile(t, "opencode-manager-patch-pending-prompts")
-	if !strings.Contains(patcher, "expected_session_sync_sha256=") || !strings.Contains(patcher, "git clone --depth 1") || !strings.Contains(patcher, "git apply --check") || !strings.Contains(patcher, "build-essential") {
-		t.Fatalf("pending-prompt patcher must verify the exact vulnerable functions before applying:\n%s", patcher)
 	}
 }
 

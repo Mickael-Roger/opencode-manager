@@ -23,7 +23,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # sudo, or bake it in through the EXTRA_PACKAGES build arg.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl file git jq nodejs npm \
-      openssh-client passwd procps ripgrep sudo unzip vim ${EXTRA_PACKAGES} \
+      openssh-client passwd procps ripgrep sudo ${EXTRA_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 
 # User-provided baseImage.commands, run after package installation (a no-op ":"
@@ -66,10 +66,6 @@ RUN set -eux; \
     rm -rf "$OCM"/node_modules/opencode-linux-* "$OCM"/node_modules/opencode-darwin-* "$OCM"/node_modules/opencode-windows-*; \
     npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*; \
     opencode --version; command -v tokscale
-
-COPY opencode-pending-prompts.patch /usr/local/share/opencode-manager/opencode-pending-prompts.patch
-COPY opencode-manager-patch-pending-prompts /usr/local/bin/opencode-manager-patch-pending-prompts
-RUN chmod 0755 /usr/local/bin/opencode-manager-patch-pending-prompts && /usr/local/bin/opencode-manager-patch-pending-prompts
 
 # Manager scripts: the attach wrapper and the supervisor entrypoint (PID 1). They
 # are COPYed rather than written via heredoc, which the buildah builder used by

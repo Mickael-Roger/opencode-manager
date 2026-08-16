@@ -14,7 +14,5 @@ RUN echo 'ALL ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && c
 # Refresh manager-owned scripts even when the resolved base image is cached.
 COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach
 COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint
-COPY opencode-pending-prompts.patch /usr/local/share/opencode-manager/opencode-pending-prompts.patch
-COPY opencode-manager-patch-pending-prompts /usr/local/bin/opencode-manager-patch-pending-prompts
-RUN chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint /usr/local/bin/opencode-manager-patch-pending-prompts && /usr/local/bin/opencode-manager-patch-pending-prompts
+RUN chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint
 WORKDIR /home/debian/workspace
