@@ -24,7 +24,7 @@ func TestUpdateOpenCodeRunsNpmAndRestarts(t *testing.T) {
 		t.Errorf("version=%q want %q", version, "0.5.7")
 	}
 
-	var sawInstall, sawPatch bool
+	var sawInstall, sawPatch, sawPatchDirectory bool
 	for _, args := range fake.gotArgs {
 		if strings.Join(args, " ") == "npm install -g opencode-ai@latest" {
 			sawInstall = true
@@ -32,12 +32,21 @@ func TestUpdateOpenCodeRunsNpmAndRestarts(t *testing.T) {
 		if strings.Join(args, " ") == "opencode-manager-patch-pending-prompts --force" {
 			sawPatch = true
 		}
+		if strings.Join(args, " ") == "mkdir -p /usr/local/share/opencode-manager" {
+			sawPatchDirectory = true
+		}
 	}
 	if !sawInstall {
 		t.Errorf("expected npm install -g opencode-ai@latest, got calls: %v", fake.gotArgs)
 	}
 	if !sawPatch {
 		t.Errorf("expected pending-prompt patch, got calls: %v", fake.gotArgs)
+	}
+	if !sawPatchDirectory {
+		t.Errorf("expected pending-prompt patch directory, got calls: %v", fake.gotArgs)
+	}
+	if len(fake.copies) != 2 {
+		t.Errorf("copied patch assets=%d, want 2", len(fake.copies))
 	}
 
 	// The container must be restarted once so the persistent `opencode serve`

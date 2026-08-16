@@ -411,6 +411,18 @@ func TestWriteBuildContextMaterializesFiles(t *testing.T) {
 	}
 }
 
+func TestWritePendingPromptsPatchAssets(t *testing.T) {
+	patcher, patch, err := WritePendingPromptsPatchAssets(t.TempDir())
+	if err != nil {
+		t.Fatalf("WritePendingPromptsPatchAssets: %v", err)
+	}
+	for _, path := range []string{patcher, patch} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("missing patch asset %q: %v", path, err)
+		}
+	}
+}
+
 func TestManagerScriptsContent(t *testing.T) {
 	if attach := readBuildFile(t, attachScriptName); !strings.Contains(attach, "exec opencode attach \"$url\" --dir \"$dir\" -c") {
 		t.Fatalf("attach script missing attach-to-last-session command:\n%s", attach)

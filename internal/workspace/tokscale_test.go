@@ -16,6 +16,7 @@ type fakeDriver struct {
 	output  func(args []string) []byte
 	stopped int
 	started int
+	copies  [][2]string
 }
 
 func (f *fakeDriver) Name() string                                                { return "fake" }
@@ -44,6 +45,10 @@ func (f *fakeDriver) ExecOutput(_ context.Context, _ string, args []string) ([]b
 }
 func (f *fakeDriver) ExecOutputAs(ctx context.Context, name, _ string, args []string) ([]byte, error) {
 	return f.ExecOutput(ctx, name, args)
+}
+func (f *fakeDriver) CopyToContainer(_ context.Context, _ string, source, destination string) error {
+	f.copies = append(f.copies, [2]string{source, destination})
+	return nil
 }
 func (f *fakeDriver) Exec(ctx context.Context, spec runtime.ExecSpec) ([]byte, error) {
 	return f.ExecOutput(ctx, spec.Container, spec.Args)

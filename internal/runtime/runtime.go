@@ -83,6 +83,29 @@ func writeBuildContext(dir string) error {
 	return nil
 }
 
+// WritePendingPromptsPatchAssets materializes the updater assets needed to
+// refresh an already-running workspace created by an older manager version.
+func WritePendingPromptsPatchAssets(dir string) (string, string, error) {
+	const patcher = "opencode-manager-patch-pending-prompts"
+	const patch = "opencode-pending-prompts.patch"
+	for _, asset := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{name: patcher, mode: 0o755},
+		{name: patch, mode: 0o644},
+	} {
+		data, err := buildContextFS.ReadFile("buildcontext/" + asset.name)
+		if err != nil {
+			return "", "", fmt.Errorf("read embedded %q: %w", asset.name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, asset.name), data, asset.mode); err != nil {
+			return "", "", fmt.Errorf("write %q: %w", asset.name, err)
+		}
+	}
+	return filepath.Join(dir, patcher), filepath.Join(dir, patch), nil
+}
+
 // baseBuildArgs returns the Dockerfile to use and the --build-arg pairs for a
 // base-image build. A prebuilt base (extras layered on the published ocm-base)
 // uses the thin overlay Dockerfile; any other base uses the full recipe. The
@@ -144,6 +167,7 @@ type Driver interface {
 	ExecStreamCommand(context.Context, string, []string) *exec.Cmd
 	ExecOutput(context.Context, string, []string) ([]byte, error)
 	ExecOutputAs(context.Context, string, string, []string) ([]byte, error)
+	CopyToContainer(context.Context, string, string, string) error
 	Exec(context.Context, ExecSpec) ([]byte, error)
 }
 
@@ -575,6 +599,21 @@ func (d CLIDriver) ExecOutputAs(ctx context.Context, name, user string, command 
 	}
 
 	return stdout.Bytes(), nil
+}
+
+// CopyToContainer copies one host file into a running container. Docker and
+// Podman share the same `cp source container:destination` command shape.
+func (d CLIDriver) CopyToContainer(ctx context.Context, name, source, destination string) error {
+	if name == "" {
+		return fmt.Errorf("container name is required")
+	}
+	if source == "" || destination == "" {
+		return fmt.Errorf("copy source and destination are required")
+	}
+	if err := d.run(ctx, "cp", source, name+":"+destination); err != nil {
+		return fmt.Errorf("copy %q into container %q: %w", source, name, err)
+	}
+	return nil
 }
 
 // Exec runs a command inside a running container as the requested user with

@@ -33,11 +33,11 @@ if [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; then
 fi
 
 workdir=$(mktemp -d)
-installed_build_tools=false
+installed_packages=""
 cleanup() {
   rm -rf "$workdir" /root/.bun /root/.cache/bun
-  if [ "$installed_build_tools" = true ]; then
-    apt-get purge -y --auto-remove build-essential >/dev/null 2>&1 || true
+  if [ -n "$installed_packages" ]; then
+    apt-get purge -y --auto-remove $installed_packages >/dev/null 2>&1 || true
     apt-get clean
     rm -rf /var/lib/apt/lists/*
   fi
@@ -54,11 +54,17 @@ session_sync_sha256=$(awk '/async sync\(sessionID: string\)/ { capture=1 } captu
 [ "$events_sha256" = "$expected_events_sha256" ] || exit 0
 [ "$session_sync_sha256" = "$expected_session_sync_sha256" ] || exit 0
 
+if ! command -v unzip >/dev/null; then
+  command -v apt-get >/dev/null || exit 0
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends unzip
+  installed_packages="unzip"
+fi
 if ! command -v make >/dev/null || ! command -v cc >/dev/null; then
   command -v apt-get >/dev/null || exit 0
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential
-  installed_build_tools=true
+  installed_packages="$installed_packages build-essential"
 fi
 
 cd "$source"

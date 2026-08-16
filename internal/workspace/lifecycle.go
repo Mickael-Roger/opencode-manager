@@ -536,6 +536,24 @@ func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string,
 	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"npm", "install", "-g", "opencode-ai@latest"}); err != nil {
 		return "", fmt.Errorf("update OpenCode: %w", err)
 	}
+	assets, err := os.MkdirTemp("", "opencode-manager-patch-")
+	if err != nil {
+		return "", fmt.Errorf("create OpenCode patch assets: %w", err)
+	}
+	defer os.RemoveAll(assets)
+	patcher, patch, err := runtime.WritePendingPromptsPatchAssets(assets)
+	if err != nil {
+		return "", fmt.Errorf("prepare OpenCode patch assets: %w", err)
+	}
+	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"mkdir", "-p", "/usr/local/share/opencode-manager"}); err != nil {
+		return "", fmt.Errorf("create OpenCode patch directory: %w", err)
+	}
+	if err := l.driver.CopyToContainer(ctx, name, patcher, "/usr/local/bin/opencode-manager-patch-pending-prompts"); err != nil {
+		return "", fmt.Errorf("copy OpenCode patcher: %w", err)
+	}
+	if err := l.driver.CopyToContainer(ctx, name, patch, "/usr/local/share/opencode-manager/opencode-pending-prompts.patch"); err != nil {
+		return "", fmt.Errorf("copy OpenCode patch: %w", err)
+	}
 	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"opencode-manager-patch-pending-prompts", "--force"}); err != nil {
 		return "", fmt.Errorf("patch OpenCode pending prompts: %w", err)
 	}
