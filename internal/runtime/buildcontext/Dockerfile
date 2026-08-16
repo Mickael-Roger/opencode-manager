@@ -23,7 +23,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # sudo, or bake it in through the EXTRA_PACKAGES build arg.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl file git jq nodejs npm \
-      openssh-client passwd procps ripgrep sudo ${EXTRA_PACKAGES} \
+      openssh-client passwd procps ripgrep sudo unzip vim ${EXTRA_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 
 # User-provided baseImage.commands, run after package installation (a no-op ":"

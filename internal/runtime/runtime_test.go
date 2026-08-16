@@ -218,7 +218,7 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 		"ARG EXTRA_PACKAGES=",
 		"ARG EXTRA_COMMANDS=",
 		"COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/",
-		"git", "ripgrep", "jq", "nodejs", "npm",
+		"git", "ripgrep", "jq", "nodejs", "npm", "unzip", "vim",
 		"${EXTRA_PACKAGES}",
 		"RUN ${EXTRA_COMMANDS}",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
