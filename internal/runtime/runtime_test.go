@@ -420,7 +420,7 @@ func TestManagerScriptsContent(t *testing.T) {
 		t.Fatalf("entrypoint script missing env sourcing or server launch:\n%s", entrypoint)
 	}
 	patcher := readBuildFile(t, "opencode-manager-patch-pending-prompts")
-	if !strings.Contains(patcher, "expected_session_sync_sha256=") || !strings.Contains(patcher, "git apply --check") {
+	if !strings.Contains(patcher, "expected_session_sync_sha256=") || !strings.Contains(patcher, "git apply --check") || !strings.Contains(patcher, "build-essential") {
 		t.Fatalf("pending-prompt patcher must verify the exact vulnerable functions before applying:\n%s", patcher)
 	}
 }
