@@ -44,9 +44,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-curl -fsSL "https://github.com/anomalyco/opencode/archive/refs/tags/v${version}.tar.gz" | tar -xz -C "$workdir"
-source="$workdir/opencode-${version}"
-[ -d "$source" ] || exit 0
+source="$workdir/opencode"
+git clone --depth 1 --branch "v${version}" https://github.com/anomalyco/opencode.git "$source"
 sync="$source/packages/tui/src/context/sync.tsx"
 state_sha256=$(awk '/^    const fullSyncedSessions = / { capture=1 } capture { print } /^    function sessionListQuery\(\)/ { exit }' "$sync" | sha256sum | awk '{ print $1 }')
 events_sha256=$(awk '/^    event.subscribe\(/ { capture=1 } capture { print } /^    const exit = useExit\(\)/ { exit }' "$sync" | sha256sum | awk '{ print $1 }')
@@ -69,7 +68,7 @@ git apply /usr/local/share/opencode-manager/opencode-pending-prompts.patch
 curl -fsSL https://bun.sh/install | bash
 export PATH=/root/.bun/bin:$PATH
 bun install --frozen-lockfile
-bun run --cwd packages/opencode build -- --single --baseline --skip-install --skip-embed-web-ui
+OPENCODE_CHANNEL=latest OPENCODE_VERSION="$version" bun run --cwd packages/opencode build -- --single --baseline --skip-install --skip-embed-web-ui
 install -m 0755 "packages/opencode/dist/$target/bin/opencode" "$(npm root -g)/opencode-ai/bin/opencode.exe"
 mkdir -p "$(dirname "$marker")"
 printf '%s\n' "$version" > "$marker"
