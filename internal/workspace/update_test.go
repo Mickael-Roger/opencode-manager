@@ -24,14 +24,20 @@ func TestUpdateOpenCodeRunsNpmAndRestarts(t *testing.T) {
 		t.Errorf("version=%q want %q", version, "0.5.7")
 	}
 
-	var sawInstall bool
+	var sawInstall, sawPatch bool
 	for _, args := range fake.gotArgs {
 		if strings.Join(args, " ") == "npm install -g opencode-ai@latest" {
 			sawInstall = true
 		}
+		if strings.Join(args, " ") == "opencode-manager-patch-pending-prompts --force" {
+			sawPatch = true
+		}
 	}
 	if !sawInstall {
 		t.Errorf("expected npm install -g opencode-ai@latest, got calls: %v", fake.gotArgs)
+	}
+	if !sawPatch {
+		t.Errorf("expected pending-prompt patch, got calls: %v", fake.gotArgs)
 	}
 
 	// The container must be restarted once so the persistent `opencode serve`

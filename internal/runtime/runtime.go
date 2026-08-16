@@ -73,7 +73,7 @@ func writeBuildContext(dir string) error {
 			return fmt.Errorf("read embedded %q: %w", entry.Name(), err)
 		}
 		mode := os.FileMode(0o644)
-		if entry.Name() == attachScriptName || entry.Name() == entrypointScriptName {
+		if entry.Name() == attachScriptName || entry.Name() == entrypointScriptName || entry.Name() == "opencode-manager-patch-pending-prompts" {
 			mode = 0o755
 		}
 		if err := os.WriteFile(filepath.Join(dir, entry.Name()), data, mode); err != nil {

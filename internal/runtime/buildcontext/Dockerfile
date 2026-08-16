@@ -67,6 +67,10 @@ RUN set -eux; \
     npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*; \
     opencode --version; command -v tokscale
 
+COPY opencode-pending-prompts.patch /usr/local/share/opencode-manager/opencode-pending-prompts.patch
+COPY opencode-manager-patch-pending-prompts /usr/local/bin/opencode-manager-patch-pending-prompts
+RUN chmod 0755 /usr/local/bin/opencode-manager-patch-pending-prompts && /usr/local/bin/opencode-manager-patch-pending-prompts
+
 # Manager scripts: the attach wrapper and the supervisor entrypoint (PID 1). They
 # are COPYed rather than written via heredoc, which the buildah builder used by
 # Podman does not support.

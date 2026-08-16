@@ -536,6 +536,9 @@ func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string,
 	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"npm", "install", "-g", "opencode-ai@latest"}); err != nil {
 		return "", fmt.Errorf("update OpenCode: %w", err)
 	}
+	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"opencode-manager-patch-pending-prompts", "--force"}); err != nil {
+		return "", fmt.Errorf("patch OpenCode pending prompts: %w", err)
+	}
 
 	version, err := l.openCodeVersion(ctx, name)
 	if err != nil {

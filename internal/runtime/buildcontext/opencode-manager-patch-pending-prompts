@@ -1,0 +1,62 @@
+#!/bin/sh
+set -eu
+
+# Rebuild only when each code region changed by this patch is still exactly the
+# vulnerable version. Unrelated sync.tsx edits do not affect these hashes; a
+# change to any patched function, including an upstream fix, makes this a no-op.
+expected_state_sha256=5cbebe6ab9ffd2bff8e9e9a463cf1a560973e0e00e4a42d8b995625ef1693030
+expected_events_sha256=b179ce649c0e59ace854a21993b1cdc39aab13cd6288e81a8f501b3af554c62c
+expected_session_sync_sha256=0b5c7fdf1d0dc94361614b67e72ee0cbfcc97c7b29866c8bd3284e82f0b8b8fe
+marker=/usr/local/share/opencode-manager/pending-prompts-patch-version
+force=false
+
+if [ "${1:-}" = "--force" ]; then
+  force=true
+fi
+
+version=$(opencode --version | awk 'NR == 1 { print $1 }')
+if [ -z "$version" ]; then
+  exit 0
+fi
+if [ "$force" = false ] && [ -f "$marker" ] && [ "$(cat "$marker")" = "$version" ]; then
+  exit 0
+fi
+
+case "$(uname -m)" in
+  x86_64) target=opencode-linux-x64-baseline ;;
+  aarch64|arm64) target=opencode-linux-arm64 ;;
+  *) exit 0 ;;
+esac
+# The local build produces a glibc binary. Keep npm's musl binary on Alpine.
+if [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; then
+  exit 0
+fi
+
+workdir=$(mktemp -d)
+cleanup() {
+  rm -rf "$workdir" /root/.bun /root/.cache/bun
+}
+trap cleanup EXIT
+
+curl -fsSL "https://github.com/anomalyco/opencode/archive/refs/tags/v${version}.tar.gz" | tar -xz -C "$workdir"
+source="$workdir/opencode-${version}"
+[ -d "$source" ] || exit 0
+sync="$source/packages/tui/src/context/sync.tsx"
+state_sha256=$(awk '/^    const fullSyncedSessions = / { capture=1 } capture { print } /^    function sessionListQuery\(\)/ { exit }' "$sync" | sha256sum | awk '{ print $1 }')
+events_sha256=$(awk '/^    event.subscribe\(/ { capture=1 } capture { print } /^    const exit = useExit\(\)/ { exit }' "$sync" | sha256sum | awk '{ print $1 }')
+session_sync_sha256=$(awk '/async sync\(sessionID: string\)/ { capture=1 } capture { print } capture && /^        },$/ { exit }' "$sync" | sha256sum | awk '{ print $1 }')
+[ "$state_sha256" = "$expected_state_sha256" ] || exit 0
+[ "$events_sha256" = "$expected_events_sha256" ] || exit 0
+[ "$session_sync_sha256" = "$expected_session_sync_sha256" ] || exit 0
+
+cd "$source"
+git apply --check /usr/local/share/opencode-manager/opencode-pending-prompts.patch
+git apply /usr/local/share/opencode-manager/opencode-pending-prompts.patch
+
+curl -fsSL https://bun.sh/install | bash
+export PATH=/root/.bun/bin:$PATH
+bun install --frozen-lockfile
+bun run --cwd packages/opencode build -- --single --baseline --skip-install --skip-embed-web-ui
+install -m 0755 "packages/opencode/dist/$target/bin/opencode" "$(npm root -g)/opencode-ai/bin/opencode.exe"
+mkdir -p "$(dirname "$marker")"
+printf '%s\n' "$version" > "$marker"
