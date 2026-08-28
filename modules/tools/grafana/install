@@ -1,21 +1,42 @@
 #!/bin/sh
-# Install gcx and configure this instance as a distinct stack/context. The URL
-# itself is the multi-instance key; a stable hash makes it safe for gcx's
-# dot-delimited configuration paths without exposing the token in a file name.
+# Install gcx and dashboard-linter, then configure this instance as a distinct
+# gcx stack/context. The URL itself is the multi-instance key; a stable hash
+# makes it safe for dot-delimited configuration paths without exposing the token
+# in a file name.
 set -e
 
 : "${OCM_URL:?Grafana instance URL is required}"
 : "${OCM_TOKEN:?Grafana token is required}"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
 
 if ! command -v gcx >/dev/null 2>&1; then
   if ! command -v curl >/dev/null 2>&1; then
     sudo apt-get update
     sudo apt-get install -y --no-install-recommends curl ca-certificates
   fi
-  installer="$(mktemp)"
-  trap 'rm -f "$installer"' EXIT
+  installer="$tmp/gcx-install.sh"
   curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh -o "$installer"
   sudo env INSTALL_DIR=/usr/local/bin sh "$installer"
+fi
+
+if ! command -v dashboard-linter >/dev/null 2>&1; then
+  version="v0.3.0"
+  case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+    arm64 | aarch64) arch=arm64 ;;
+    *) arch=amd64 ;;
+  esac
+  archive="dashboard-linter_${version#v}_linux_${arch}.tar.gz"
+  release="https://github.com/grafana/dashboard-linter/releases/download/${version}"
+  curl -fsSL "${release}/${archive}" -o "$tmp/$archive"
+  curl -fsSL "${release}/checksums.txt" -o "$tmp/checksums.txt"
+  (
+    cd "$tmp"
+    grep -F " ${archive}" checksums.txt | sha256sum -c -
+  )
+  tar -xzf "$tmp/$archive" -C "$tmp" dashboard-linter
+  sudo install -m 0755 "$tmp/dashboard-linter" /usr/local/bin/dashboard-linter
 fi
 
 instance="ocm-$(printf '%s' "$OCM_URL" | sha256sum | cut -c1-16)"

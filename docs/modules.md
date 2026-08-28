@@ -60,7 +60,7 @@ running). The `c` module only installs system packages, so it does not.
 | --- | --- | --- |
 | **github** | Installs the GitHub CLI (`gh`) and optionally imports this host's `gh` auth (or takes a token). | No |
 | **gitlab** | Installs the GitLab CLI (`glab`) and, with one checkbox, copies this host's `glab` configuration in so the workspace is signed in to the same GitLab instance(s). | No |
-| **grafana** | Installs the Grafana Cloud CLI (`gcx`) and configures Grafana instance URL/token pairs. | Yes (per instance URL) |
+| **grafana** | Installs the Grafana Cloud CLI (`gcx`), `dashboard-linter`, and configures Grafana instance URL/token pairs. | Yes (per instance URL) |
 | **ssh** | Adds an SSH key and host alias (written to `~/.ssh`) for this workspace. | Yes (per host) |
 
 ## Multi-instance modules
