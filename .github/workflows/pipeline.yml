@@ -137,6 +137,7 @@ jobs:
           - tools/ssh
           - tools/github
           - tools/gitlab
+          - tools/grafana
           - language/c
           - language/golang
           - language/nodejs

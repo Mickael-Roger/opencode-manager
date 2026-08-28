@@ -1,0 +1,32 @@
+#!/bin/sh
+# Install gcx and configure this instance as a distinct stack/context. The URL
+# itself is the multi-instance key; a stable hash makes it safe for gcx's
+# dot-delimited configuration paths without exposing the token in a file name.
+set -e
+
+: "${OCM_URL:?Grafana instance URL is required}"
+: "${OCM_TOKEN:?Grafana token is required}"
+
+if ! command -v gcx >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends curl ca-certificates
+  fi
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh -o "$installer"
+  sudo env INSTALL_DIR=/usr/local/bin sh "$installer"
+fi
+
+instance="ocm-$(printf '%s' "$OCM_URL" | sha256sum | cut -c1-16)"
+gcx config set "stacks.${instance}.grafana.server" "$OCM_URL"
+gcx config set "stacks.${instance}.grafana.token" "$OCM_TOKEN"
+gcx config set "contexts.${instance}.stack" "$instance"
+
+# Keep the existing active context stable. A new workspace gets its first
+# instance selected automatically so gcx works without further setup.
+if ! gcx config current-context >/dev/null 2>&1; then
+  gcx config use-context "$instance"
+fi
+
+echo "gcx configured for ${OCM_URL} as ${instance}"

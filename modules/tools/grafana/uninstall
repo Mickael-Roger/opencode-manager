@@ -1,0 +1,13 @@
+#!/bin/sh
+# Remove only this instance's gcx stack and context. The gcx executable and any
+# other Grafana instances stay in place, matching multi-instance module rules.
+set -e
+
+: "${OCM_URL:?Grafana instance URL is required}"
+
+command -v gcx >/dev/null 2>&1 || exit 0
+instance="ocm-$(printf '%s' "$OCM_URL" | sha256sum | cut -c1-16)"
+gcx config unset "contexts.${instance}" 2>/dev/null || true
+gcx config unset "stacks.${instance}" 2>/dev/null || true
+
+echo "gcx instance ${OCM_URL} removed"
