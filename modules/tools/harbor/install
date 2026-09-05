@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs inside the workspace container. Installs the Harbor CLI from its official
+# source repository and imports the selected host configuration. The installer
+# is not used because it runs a Docker availability check, while this container
+# only needs the CLI and its configuration.
+set -e
+
+if ! command -v git >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends git ca-certificates
+fi
+
+if [ ! -x "$HOME/.harbor/harbor.sh" ]; then
+  rm -rf "$HOME/.harbor"
+  git clone --depth 1 https://github.com/av/harbor.git "$HOME/.harbor"
+fi
+
+# Install the executable in the system path without changing shell startup
+# files. Harbor resolves its home from the location of harbor.sh.
+sudo ln -sf "$HOME/.harbor/harbor.sh" /usr/local/bin/harbor
+echo "harbor installed: $(harbor --version | head -n1)"
+
+# The resolve hook supplies a gzipped archive of user-managed Harbor files:
+# .env, custom profiles, and per-service override.env files. It can carry API
+# tokens, but is never persisted to the workspace manifest.
+if [ -n "$OCM_CONFIG_B64" ]; then
+  printf '%s' "$OCM_CONFIG_B64" | base64 -d | tar -xzf - -C "$HOME/.harbor"
+  [ -f "$HOME/.harbor/.env" ] && chmod 600 "$HOME/.harbor/.env"
+  find "$HOME/.harbor/profiles" "$HOME/.harbor/services" -type f \( -path '*/profiles/*' -o -name override.env \) -exec chmod 600 {} + 2>/dev/null || true
+  echo "harbor configured from this host's Harbor configuration"
+else
+  echo "harbor installed without imported configuration"
+fi

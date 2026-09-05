@@ -1,0 +1,9 @@
+#!/bin/sh
+# Removes the Harbor CLI, its configuration, and any imported tokens.
+# Best-effort: nothing here must fail the removal.
+set -e
+
+sudo rm -f /usr/local/bin/harbor
+rm -rf "$HOME/.harbor"
+
+echo "harbor removed"

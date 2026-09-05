@@ -1,0 +1,11 @@
+name: harbor
+version: 1
+description: Install the Harbor CLI and optionally import this host's Harbor configuration, including tokens.
+# Writes only Harbor's own configuration (~/.harbor), which the CLI reads live;
+# nothing in ~/.env, so it never bounces the OpenCode server and can be edited mid-task.
+restartServer: false
+prompts:
+  - name: import_config
+    label: Import this host's Harbor configuration (including tokens)?
+    type: bool
+    default: "true"
