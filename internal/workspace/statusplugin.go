@@ -25,6 +25,11 @@ const statusPluginName = "opencode-manager-status.js"
 // the manager reads (under the host-side workspace home directory).
 var statusFileRelPath = filepath.Join(".local", "state", "opencode-manager", "status.json")
 
+// deepSeekStatusFileRelPath is written by dsh-tui while it is attached to a
+// DeepSeek Harness session. It stays separate from OpenCode's plugin-owned
+// report so either runtime can be observed independently.
+var deepSeekStatusFileRelPath = filepath.Join(".local", "state", "opencode-manager", "deepseek-status.json")
+
 // activityStaleAfter is how long the status file may go without a heartbeat
 // before the manager assumes opencode is no longer running in the container.
 // The plugin heartbeats every 10s, so this leaves room for a couple of misses.
@@ -106,16 +111,23 @@ func EnsureWorkspaceStatusPlugin(configDir string) error {
 //   - file present, container stopped -> ActivityUnknown (used before, now off)
 //   - file present, container running -> mapped from the report (with staleness)
 func readActivity(homeDir string, running bool) (Activity, int) {
+	return readStatusActivity(homeDir, statusFileRelPath, running, true)
+}
+
+func readStatusActivity(homeDir, relativePath string, running, newWhenMissing bool) (Activity, int) {
 	if homeDir == "" {
 		return ActivityUnknown, 0
 	}
 
-	data, err := os.ReadFile(filepath.Join(homeDir, statusFileRelPath))
+	data, err := os.ReadFile(filepath.Join(homeDir, relativePath))
 	if err != nil {
 		if running {
 			return ActivityUnknown, 0
 		}
-		return ActivityNew, 0
+		if newWhenMissing {
+			return ActivityNew, 0
+		}
+		return ActivityUnknown, 0
 	}
 
 	if !running {
@@ -131,6 +143,47 @@ func readActivity(homeDir string, running bool) (Activity, int) {
 	return activityFromReport(report, time.Now())
 }
 
+// readWorkspaceActivity combines OpenCode's status plugin with dsh-tui's
+// optional heartbeat. A fresh DSH "starting" report takes precedence so the
+// dashboard reflects connection/bootstrap before a turn begins; otherwise the
+// most urgent live runtime state wins.
+func readWorkspaceActivity(homeDir string, running, deepSeekEnabled bool) (Activity, int) {
+	openCodeActivity, openCodePending := readActivity(homeDir, running)
+	if !deepSeekEnabled {
+		return openCodeActivity, openCodePending
+	}
+
+	path := filepath.Join(homeDir, deepSeekStatusFileRelPath)
+	if _, err := os.Stat(path); err != nil {
+		return openCodeActivity, openCodePending
+	}
+	deepSeekActivity, deepSeekPending := readStatusActivity(homeDir, deepSeekStatusFileRelPath, running, false)
+	if deepSeekActivity == ActivityUnknown && running {
+		return ActivityUnknown, deepSeekPending
+	}
+	if activityPriority(deepSeekActivity) > activityPriority(openCodeActivity) {
+		return deepSeekActivity, deepSeekPending
+	}
+	return openCodeActivity, openCodePending
+}
+
+func activityPriority(activity Activity) int {
+	switch activity {
+	case ActivityWaiting:
+		return 5
+	case ActivityError:
+		return 4
+	case ActivityWorking:
+		return 3
+	case ActivitySleeping:
+		return 2
+	case ActivityNew:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // activityFromReport maps a raw plugin report to a manager-side Activity,
 // accounting for heartbeat staleness. Split out for testing.
 func activityFromReport(report statusReport, now time.Time) (Activity, int) {
@@ -139,6 +192,8 @@ func activityFromReport(report statusReport, now time.Time) (Activity, int) {
 	}
 
 	switch report.Activity {
+	case "starting":
+		return ActivityUnknown, 0
 	case "working":
 		return ActivityWorking, report.PendingApproval
 	case "needs-approval":
