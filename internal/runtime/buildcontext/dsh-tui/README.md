@@ -28,6 +28,10 @@ While attached, `dsh-tui` writes a 10-second manager heartbeat at
 show `starting`, `working`, `waiting`, `sleeping`, or `error` in the workspace
 dashboard; closing the TUI marks the DSH client off after the heartbeat expires.
 
+Submitted composer prompts are retained across dsh-tui restarts for up-arrow
+recall in `$HOME/.local/state/opencode-manager/dsh-prompt-history.json`. The
+file is owned by the workspace user and written with mode `0600`.
+
 When the `dsh-agent-teams` plugin is installed, `Ctrl+X T` or
 `/agent-teams-dag` opens a task-DAG overlay (tasks layered by dependencies,
 state markers, assignees, member progress) fed by the plugin's
