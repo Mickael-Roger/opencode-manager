@@ -87,21 +87,22 @@ host's loopback — a local model server, a database, a dev server, etc. With an
 isolated network those `127.0.0.1` services are unreachable from inside the
 container.
 
-Inside every container an OpenCode server runs on the loopback interface. With
-isolated networking they could all share one port, but under host networking they
-share the host's loopback, so a fixed port would collide. To avoid that, each
-workspace is assigned a **unique loopback port** (range `4096–4999`), recorded as
-`openCodePort` in its `workspace.yaml` and reused across restarts. Existing
-workspaces created before this option are assigned a port automatically on their
-next start. The assignment happens regardless of `hostNetwork`, so toggling the
-option never requires a migration.
+Inside every container OpenCode, and when enabled DeepSeek Harness Web, run on
+loopback interfaces. With isolated networking they could share a port, but under
+host networking they share the host's loopback, so fixed ports would collide. To
+avoid that, each runtime receives a **unique loopback port** (range `4096–4999`),
+recorded as `openCodePort` or `deepSeekPort` in `workspace.yaml` and reused across
+restarts. Existing DSH-enabled workspaces without `deepSeekPort` receive one on
+their next start. Assignment happens regardless of `hostNetwork`, so toggling the
+option never requires a migration. DSH Web's changing startup token is stored
+only in `home/.config/deepseek/web-token`, never in shared configuration or the
+workspace manifest.
 
 Toggling `hostNetwork` (or otherwise changing a workspace's network namespace or
 assigned port) takes effect the next time the workspace starts: the manager
-recreates a container whose live network mode or `OCM_OPENCODE_PORT` no longer
-matches, so it can never keep serving on the stale fallback port (`4096`) and
-collide with another workspace under host networking. Recreation preserves the
-workspace (the home is bind-mounted and modules reinstall idempotently).
+recreates a container whose live network mode, `OCM_OPENCODE_PORT`, or
+`OCM_DSH_PORT` no longer matches. Recreation preserves the workspace (the home
+is bind-mounted and modules reinstall idempotently).
 
 > **Note:** host networking is opt-in because it weakens isolation — the
 > container can reach (and bind) anything on the host's network interfaces. It
@@ -248,6 +249,23 @@ The base image to use. Defaults to the published, prebuilt
 (`npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `tokscale`, and the manager
 scripts). With this default and no extras, `ocm` simply **pulls** that image
 instead of building one, so the first start is fast.
+
+With opencode-manager `2.x`, an explicitly versioned managed base image below
+`2.0.0` triggers a TUI/CLI warning because it does not contain DeepSeek Harness.
+Use `mroger78/ocm-base:2.0.0` or newer. Floating tags such as `latest` and `dev`
+are not warned about because their resolved version is not present in the image
+reference.
+
+### Shared DeepSeek Harness configuration
+
+OCM creates `~/.config/opencode-manager/deepseek/` as the shared source for
+non-secret DSH configuration. It is copied one way into DSH-enabled workspaces at
+`~/.config/deepseek/`. Keep credentials and runtime state out of this source:
+`profiles/<name>/package.json` is synchronized so profile modules can be managed
+centrally. `.credentials.yaml`, `.env`, sessions, `node_modules`, and package
+lockfiles are ignored and remain workspace-local; pnpm regenerates each
+workspace profile's lockfile from the shared manifest through `dsh plugin --profile
+<name> install` at startup.
 
 ### `baseImage.packages` / `baseImage.commands`
 

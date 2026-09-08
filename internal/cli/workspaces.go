@@ -20,19 +20,21 @@ import (
 // `--output json`. It is decoupled from the internal Manifest so the JSON
 // contract does not shift when internal fields change.
 type workspaceJSON struct {
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	Status    string    `json:"status"`
-	Activity  string    `json:"activity"`
-	Pending   int       `json:"pending"`
-	Runtime   string    `json:"runtime"`
-	Image     string    `json:"image"`
-	Container string    `json:"container"`
-	Port      int       `json:"port"`
-	Modules   []string  `json:"modules"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Error     string    `json:"error,omitempty"`
+	Name           string    `json:"name"`
+	Slug           string    `json:"slug"`
+	Status         string    `json:"status"`
+	Activity       string    `json:"activity"`
+	Pending        int       `json:"pending"`
+	Runtime        string    `json:"runtime"`
+	Image          string    `json:"image"`
+	Container      string    `json:"container"`
+	Port           int       `json:"port"`
+	DefaultRuntime string    `json:"defaultRuntime"`
+	Runtimes       []string  `json:"runtimes"`
+	Modules        []string  `json:"modules"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+	Error          string    `json:"error,omitempty"`
 }
 
 func statusToJSON(s workspace.Status) workspaceJSON {
@@ -42,19 +44,21 @@ func statusToJSON(s workspace.Status) workspaceJSON {
 		mods = append(mods, inst.InstanceID())
 	}
 	return workspaceJSON{
-		Name:      m.Name,
-		Slug:      workspace.SafeName(m.Name),
-		Status:    s.Container,
-		Activity:  string(s.Activity),
-		Pending:   s.Pending,
-		Runtime:   m.Runtime,
-		Image:     m.ImageName,
-		Container: m.ContainerName,
-		Port:      m.OpenCodePort,
-		Modules:   mods,
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
-		Error:     s.Error,
+		Name:           m.Name,
+		Slug:           workspace.SafeName(m.Name),
+		Status:         s.Container,
+		Activity:       string(s.Activity),
+		Pending:        s.Pending,
+		Runtime:        m.Runtime,
+		Image:          m.ImageName,
+		Container:      m.ContainerName,
+		Port:           m.OpenCodePort,
+		DefaultRuntime: m.EffectiveDefaultRuntime(),
+		Runtimes:       m.EnabledRuntimeNames(),
+		Modules:        mods,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
+		Error:          s.Error,
 	}
 }
 
@@ -188,13 +192,18 @@ func newWorkspacesGetCmd(cfg config.Config) *cobra.Command {
 func newWorkspacesCreateCmd(cfg config.Config) *cobra.Command {
 	var template string
 	var start bool
+	var defaultRuntime string
+	var enableDeepSeek bool
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a workspace, optionally from a template",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			result, err := workspace.NewRegistry(cfg).Create(name)
+			result, err := workspace.NewRegistry(cfg).CreateWithOptions(name, workspace.CreateOptions{
+				DefaultRuntime: defaultRuntime,
+				EnableDeepSeek: enableDeepSeek,
+			})
 			if err != nil {
 				return err
 			}
@@ -232,6 +241,8 @@ func newWorkspacesCreateCmd(cfg config.Config) *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&template, "template", "t", "", "apply a template's modules to the new workspace")
 	cmd.Flags().BoolVar(&start, "start", false, "build the image and start the container after creating")
+	cmd.Flags().BoolVar(&enableDeepSeek, "deepseek", false, "enable DeepSeek Harness for the workspace")
+	cmd.Flags().StringVar(&defaultRuntime, "default-runtime", "", "default agent runtime (opencode or deepseek)")
 	return cmd
 }
 
@@ -327,15 +338,15 @@ func newWorkspacesUpdateCmd(cfg config.Config) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "update [workspace]",
-		Short: "Update OpenCode to the latest release inside the workspace",
+		Short: "Update OpenCode and DeepSeek Harness runtimes inside the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return forEachTarget(cfg, cmd, args, all, 15*time.Minute, "Updated",
 				func(lc workspace.Lifecycle, ctx context.Context, s workspace.Summary) error {
-					v, err := lc.UpdateOpenCode(ctx, s)
+					versions, err := lc.UpdateRuntimes(ctx, s)
 					if err != nil {
 						return err
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s now on OpenCode %s\n", s.Manifest.Name, v)
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s: OpenCode %s, DSH %s, ACP %s, pnpm %s\n", s.Manifest.Name, versions.OpenCode, versions.DeepSeek, versions.ACP, versions.PNPM)
 					return nil
 				})
 		},
@@ -374,9 +385,10 @@ func newWorkspacesVersionCmd(cfg config.Config) *cobra.Command {
 }
 
 func newWorkspacesAttachCmd(cfg config.Config) *cobra.Command {
-	return &cobra.Command{
+	var runtimeName string
+	cmd := &cobra.Command{
 		Use:   "attach <workspace>",
-		Short: "Attach the terminal to a workspace's OpenCode session",
+		Short: "Attach the terminal to a workspace's default agent runtime",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := findWorkspace(cfg, args[0])
@@ -389,13 +401,18 @@ func newWorkspacesAttachCmd(cfg config.Config) *cobra.Command {
 			}
 			ctx, cancel := cmdContext(15 * time.Minute)
 			defer cancel()
-			c, err := lc.AttachCommand(ctx, s)
+			if runtimeName == "" {
+				runtimeName = s.Manifest.EffectiveDefaultRuntime()
+			}
+			c, err := lc.AttachRuntimeCommand(ctx, s, runtimeName)
 			if err != nil {
 				return err
 			}
 			return runInteractive(c)
 		},
 	}
+	cmd.Flags().StringVarP(&runtimeName, "runtime", "r", "", "agent runtime to attach (opencode or deepseek)")
+	return cmd
 }
 
 func newWorkspacesShellCmd(cfg config.Config) *cobra.Command {

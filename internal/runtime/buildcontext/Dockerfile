@@ -8,12 +8,20 @@
 # step is idempotent so the recipe can also layer on a base that already provides
 # some of these tools without failing (e.g. "user already exists").
 ARG BASE_IMAGE=debian:stable-slim
+ARG BUN_VERSION=1.3.0
+
+FROM oven/bun:${BUN_VERSION} AS bun
 FROM ${BASE_IMAGE}
 
 # Extra packages/commands from the user's baseImage config. Empty by default, so
 # the published image carries only the standard tooling.
 ARG EXTRA_PACKAGES=""
 ARG EXTRA_COMMANDS=":"
+
+ARG DSH_VERSION=0.1.2-rc.1
+ARG DSH_ACP_VERSION=0.4.29
+ARG PNPM_VERSION=11.25.0
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
@@ -25,6 +33,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl file git jq nodejs npm \
       openssh-client passwd procps ripgrep sudo ${EXTRA_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian stable may ship Node older than the ACP adapter's supported Node 22
+# baseline. Upgrade only when needed so compatible custom bases stay intact.
+RUN set -eux; \
+    node_major="$(node --version | sed 's/^v//' | cut -d. -f1)"; \
+    if [ "$node_major" -lt 22 ]; then \
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; \
+      apt-get install -y --no-install-recommends nodejs; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    node --version
 
 # User-provided baseImage.commands, run after package installation (a no-op ":"
 # by default).
@@ -67,6 +86,26 @@ RUN set -eux; \
     npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*; \
     opencode --version; command -v tokscale
 
+# DeepSeek Harness runs its Web profile inside the workspace. DSH_HOME below is
+# bind-backed by the workspace home, so credentials, settings, and sessions
+# survive container restarts. Versions are intentionally pinned because this
+# ecosystem is still pre-release.
+RUN set -eux; \
+    npm install -g \
+      "@deepseek-ai/dsh@${DSH_VERSION}" \
+      "@openma/deepseek-harness-acp@${DSH_ACP_VERSION}" \
+      "pnpm@${PNPM_VERSION}"; \
+    dsh --version; \
+    dsh-acp --version; \
+    pnpm --version; \
+     npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*
+
+# dsh-tui is a Bun/OpenTUI client kept in this build context so published base
+# images and manager-triggered local builds contain the identical frontend.
+COPY dsh-tui /opt/dsh-tui
+COPY dsh-tui/dsh-tui /usr/local/bin/dsh-tui
+RUN cd /opt/dsh-tui && bun install --frozen-lockfile --production && bun run build && chmod 0755 /usr/local/bin/dsh-tui
+
 # Manager scripts: the attach wrapper and the supervisor entrypoint (PID 1). They
 # are COPYed rather than written via heredoc, which the buildah builder used by
 # Podman does not support.
@@ -91,4 +130,5 @@ RUN grep -qF '[ -f "$HOME/.env" ]' /etc/bash.bashrc || echo '[ -f "$HOME/.env" ]
 # curl|sh installers) are visible to the OpenCode server and everything it
 # spawns. HOME is always /home/debian for the workspace user, so the path is
 # hardcoded here ($HOME is not /home/debian at image-build time).
-ENV PATH=/home/debian/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/home/debian/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    DSH_HOME=/home/debian/.config/deepseek

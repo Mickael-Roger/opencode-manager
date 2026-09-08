@@ -43,3 +43,18 @@ func TestNewManifestAssignsUniquePorts(t *testing.T) {
 		t.Fatalf("zeta port = %d, want a different port from alpha", second.OpenCodePort)
 	}
 }
+
+func TestCreateWithDeepSeekAssignsDistinctRuntimePorts(t *testing.T) {
+	registry := NewRegistry(testConfig(t))
+
+	created, err := registry.CreateWithOptions("deepseek", CreateOptions{EnableDeepSeek: true})
+	if err != nil {
+		t.Fatalf("CreateWithOptions returned error: %v", err)
+	}
+	if created.Manifest.DeepSeekPort < OpenCodePortMin || created.Manifest.DeepSeekPort > OpenCodePortMax {
+		t.Fatalf("DeepSeek port = %d, want within [%d, %d]", created.Manifest.DeepSeekPort, OpenCodePortMin, OpenCodePortMax)
+	}
+	if created.Manifest.DeepSeekPort == created.Manifest.OpenCodePort {
+		t.Fatalf("DeepSeek port must differ from OpenCode port %d", created.Manifest.OpenCodePort)
+	}
+}

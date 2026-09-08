@@ -36,14 +36,14 @@ Diagnostic logs go to a file, not the terminal, so CLI output stays clean — se
 | --- | --- |
 | `ws list` (`ls`) | List workspaces with status, activity, module count, and age. |
 | `ws get <ws>` | Show one workspace's details, status, OpenCode version, installed modules, and token usage. |
-| `ws create <name>` | Create a workspace. `--template <t>` applies a template's modules; `--start` builds the image and starts the container. |
+| `ws create <name>` | Create a workspace. `--template <t>` applies modules, `--deepseek` enables DSH, `--default-runtime opencode\|deepseek` chooses Enter's target, and `--start` starts it. |
 | `ws delete <ws>` (`rm`) | Delete the workspace, its container, and its image. `--force`/`-f` skips the confirmation prompt. |
 | `ws start [ws]` | Start a container (building the image if needed). `--all` starts every workspace. |
 | `ws stop [ws]` | Stop a running container. `--all` stops every workspace. |
 | `ws restart [ws]` | Stop then start. `--all` for every workspace. |
-| `ws update [ws]` | Update OpenCode to the latest release inside the container. `--all` for every workspace. |
+| `ws update [ws]` | Update OpenCode, DeepSeek Harness, its ACP adapter, and pnpm inside the container. `--all` for every workspace. |
 | `ws version <ws>` | Print the OpenCode version running in the workspace. |
-| `ws attach <ws>` | Attach the terminal to the workspace's OpenCode session (same as `Enter` in the dashboard). |
+| `ws attach <ws>` | Attach to the default agent runtime. `--runtime opencode\|deepseek` overrides it. |
 | `ws shell <ws>` (`sh`) | Open an interactive shell inside the container. |
 | `ws exec <ws> -- <cmd>` | Run a one-off command inside the container. |
 | `ws run <ws> --prompt …` | Run a **non-interactive** OpenCode turn and print the result (headless). |
@@ -53,6 +53,7 @@ Diagnostic logs go to a file, not the terminal, so CLI output stays clean — se
 ```sh
 # Create a workspace from a template and start it immediately.
 ocm workspaces create api --template backend --start
+ocm workspaces create research --deepseek --default-runtime deepseek --start
 
 # Inspect it, as JSON, for a script.
 ocm ws get api -o json | jq '.tokenUsage.totalTokens'
@@ -67,11 +68,14 @@ echo "review this diff" | ocm ws run api --prompt-file -
 # Attach interactively (the building block for tmux automation).
 tmux new-window  'ocm ws attach api'
 tmux split-window 'ocm ws attach frontend'
+ocm ws attach research --runtime deepseek
 ```
 
 `ocm workspaces run` executes a single OpenCode turn inside the workspace project
 directory and exits, printing the agent's output. The prompt comes from
 `--prompt`, `--prompt-file <path>`, or stdin (`--prompt-file -`).
+DeepSeek Harness does not currently expose a supported headless ACP command, so
+`run` returns an error when it is the workspace's default runtime.
 
 ## Templates (`ocm templates`, alias `tmpl`)
 

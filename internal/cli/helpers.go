@@ -124,6 +124,8 @@ func printWorkspaceDetail(w io.Writer, st workspace.Status, ocVersion string, us
 		row("OpenCode:", ocVersion)
 	}
 	row("Runtime:", m.Runtime)
+	row("Default agent:", m.EffectiveDefaultRuntime())
+	row("Agent runtimes:", strings.Join(m.EnabledRuntimeNames(), ", "))
 	row("Image:", m.ImageName)
 	row("Container:", m.ContainerName)
 	row("Port:", fmt.Sprintf("%d", m.OpenCodePort))

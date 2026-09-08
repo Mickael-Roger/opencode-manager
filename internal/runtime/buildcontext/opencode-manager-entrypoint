@@ -1,11 +1,8 @@
 #!/bin/sh
-# Container main process (PID 1). It sources the per-workspace ~/.env before
-# launching the OpenCode server so module-provided environment variables reach the
-# server (and every tool it spawns). The server runs as a background child;
-# killing only that child (e.g. `pkill -f 'opencode serve'`, which the manager
-# does after a module edits ~/.env) makes the loop re-source ~/.env and relaunch
-# it, so an env change needs only a cheap in-place bounce, not a container
-# recreate. A SIGTERM from `docker stop` is forwarded to the child for a clean stop.
+# Container main process (PID 1). It independently supervises OpenCode and DSH
+# Web when enabled. Each loop reloads ~/.env before launching its child so module
+# environment changes take effect after a cheap child bounce rather than a full
+# container recreation.
 
 # Every workspace is assigned its own loopback port by the manager (passed in as
 # OCM_OPENCODE_PORT). There is no shared default: under host networking a fallback
@@ -28,19 +25,83 @@ if [ "$installed" = true ]; then
   sudo update-ca-certificates || exit 1
 fi
 
-child=""
+serve_opencode() {
+  child=""
+  shutdown() { [ -n "$child" ] && kill -TERM "$child" 2>/dev/null; exit 0; }
+  trap shutdown TERM INT
+  while true; do
+    set -a
+    [ -f "$HOME/.env" ] && . "$HOME/.env"
+    set +a
+    opencode serve --hostname 127.0.0.1 --port "$OCM_OPENCODE_PORT" &
+    child=$!
+    wait "$child"
+    child=""
+    sleep 0.5
+  done
+}
+
+serve_dsh() {
+  child=""
+  output=""
+  shutdown() {
+    [ -n "$child" ] && kill -TERM "$child" 2>/dev/null
+    [ -n "$output" ] && kill -TERM "$output" 2>/dev/null
+    exit 0
+  }
+  trap shutdown TERM INT
+  while true; do
+    set -a
+    [ -f "$HOME/.env" ] && . "$HOME/.env"
+    set +a
+
+    token_file="$DSH_HOME/web-token"
+    token_pipe="$(mktemp -u)"
+    mkfifo "$token_pipe"
+    rm -f "$token_file"
+    dsh web --port "$OCM_DSH_PORT" --no-open >"$token_pipe" 2>&1 &
+    child=$!
+    (
+      while IFS= read -r line; do
+        printf '%s\n' "$line"
+        case "$line" in
+          *"?token="*)
+            token="${line##*?token=}"
+            token="${token%%[[:space:]]*}"
+            if [ -n "$token" ]; then
+              umask 077
+              temporary="${token_file}.tmp"
+              printf '%s\n' "$token" >"$temporary"
+              mv -f "$temporary" "$token_file"
+            fi
+            ;;
+        esac
+      done <"$token_pipe"
+    ) &
+    output=$!
+    wait "$child"
+    child=""
+    wait "$output" 2>/dev/null
+    output=""
+    rm -f "$token_pipe"
+    sleep 0.5
+  done
+}
+
+serve_opencode &
+opencode_supervisor=$!
+dsh_supervisor=""
+if [ -n "${OCM_DSH_PORT:-}" ]; then
+  serve_dsh &
+  dsh_supervisor=$!
+fi
+
 shutdown() {
-  [ -n "$child" ] && kill -TERM "$child" 2>/dev/null
+  kill -TERM "$opencode_supervisor" 2>/dev/null
+  [ -n "$dsh_supervisor" ] && kill -TERM "$dsh_supervisor" 2>/dev/null
+  wait "$opencode_supervisor" 2>/dev/null
+  [ -n "$dsh_supervisor" ] && wait "$dsh_supervisor" 2>/dev/null
   exit 0
 }
 trap shutdown TERM INT
-while true; do
-  set -a
-  [ -f "$HOME/.env" ] && . "$HOME/.env"
-  set +a
-  opencode serve --hostname 127.0.0.1 --port "$OCM_OPENCODE_PORT" &
-  child=$!
-  wait "$child"
-  child=""
-  sleep 0.5
-done
+wait "$opencode_supervisor"

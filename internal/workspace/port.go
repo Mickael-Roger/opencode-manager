@@ -16,6 +16,7 @@ const (
 	// OpenCodePortEnv is the environment variable carrying the assigned port into
 	// the container, read by the entrypoint and attach scripts.
 	OpenCodePortEnv = "OCM_OPENCODE_PORT"
+	DeepSeekPortEnv = "OCM_DSH_PORT"
 )
 
 // AllocateOpenCodePort returns a port in [OpenCodePortMin, OpenCodePortMax] that
@@ -23,6 +24,22 @@ const (
 // loopback. It scans existing workspace manifests to avoid reassigning a port,
 // which keeps assignments stable even before the owning containers are running.
 func (r Registry) AllocateOpenCodePort() (int, error) {
+	return r.AllocateRuntimePort()
+}
+
+// AllocateDeepSeekPort returns a unique loopback port for a DSH Web server.
+func (r Registry) AllocateDeepSeekPort() (int, error) {
+	return r.AllocateRuntimePort()
+}
+
+// AllocateRuntimePort reserves a port across every managed agent runtime in all
+// workspaces. A shared range avoids host-network collisions between OpenCode and
+// DSH Web servers.
+func (r Registry) AllocateRuntimePort() (int, error) {
+	return r.allocateRuntimePort()
+}
+
+func (r Registry) allocateRuntimePort(reserved ...int) (int, error) {
 	summaries, err := r.List()
 	if err != nil {
 		return 0, err
@@ -32,6 +49,14 @@ func (r Registry) AllocateOpenCodePort() (int, error) {
 	for _, s := range summaries {
 		if s.Manifest.OpenCodePort != 0 {
 			used[s.Manifest.OpenCodePort] = true
+		}
+		if s.Manifest.DeepSeekPort != 0 {
+			used[s.Manifest.DeepSeekPort] = true
+		}
+	}
+	for _, port := range reserved {
+		if port != 0 {
+			used[port] = true
 		}
 	}
 

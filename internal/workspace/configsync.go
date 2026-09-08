@@ -16,10 +16,15 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
+	"github.com/mickael-menu/opencode-manager/internal/runtime"
 )
 
-const openCodeSyncJournal = ".ocm-opencode-sync.json"
+const (
+	openCodeSyncJournal = ".ocm-opencode-sync.json"
+	deepSeekSyncJournal = ".ocm-deepseek-sync.json"
+)
 
 var (
 	openCodeSyncMu              sync.Mutex
@@ -33,6 +38,15 @@ var (
 		"pnpm-lock.yaml":      {},
 		"yarn.lock":           {},
 		"node_modules":        {},
+	}
+	reservedDeepSeekSourceNames = map[string]struct{}{
+		".credentials.yaml":   {},
+		".env":                {},
+		"sessions":            {},
+		"web-token":           {},
+		"node_modules":        {},
+		"npm-shrinkwrap.json": {},
+		"yarn.lock":           {},
 	}
 )
 
@@ -130,6 +144,10 @@ func (s openCodeConfigSyncer) watch(ctx context.Context, watcher *fsnotify.Watch
 }
 
 func addOpenCodeWatches(watcher *fsnotify.Watcher, source string) error {
+	return addConfigWatches(watcher, source, "OpenCode")
+}
+
+func addConfigWatches(watcher *fsnotify.Watcher, source, runtimeName string) error {
 	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -138,10 +156,117 @@ func addOpenCodeWatches(watcher *fsnotify.Watcher, source string) error {
 			return nil
 		}
 		if err := watcher.Add(path); err != nil && !errors.Is(err, fsnotify.ErrNonExistentWatch) {
-			return fmt.Errorf("watch shared OpenCode directory %q: %w", path, err)
+			return fmt.Errorf("watch shared %s directory %q: %w", runtimeName, path, err)
 		}
 		return nil
 	})
+}
+
+// StartDeepSeekConfigSync reconciles the shared, non-secret DeepSeek Harness
+// configuration into every DeepSeek-enabled workspace and watches for changes.
+func StartDeepSeekConfigSync(ctx context.Context, cfg config.Config) error {
+	if err := config.EnsureGlobalConfig(); err != nil {
+		return err
+	}
+	lifecycle, err := NewLifecycle(cfg)
+	if err != nil {
+		return err
+	}
+	syncer := deepSeekConfigSyncer{registry: NewRegistry(cfg), lifecycle: lifecycle}
+	if err := syncer.reconcile(); err != nil {
+		return err
+	}
+
+	source, err := config.DeepSeekDir()
+	if err != nil {
+		return err
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("create shared DeepSeek config watcher: %w", err)
+	}
+	if err := addConfigWatches(watcher, source, "DeepSeek"); err != nil {
+		watcher.Close()
+		return err
+	}
+
+	go syncer.watch(ctx, watcher, source)
+	return nil
+}
+
+type deepSeekConfigSyncer struct {
+	registry  Registry
+	lifecycle Lifecycle
+}
+
+func (s deepSeekConfigSyncer) reconcile() error {
+	workspaces, err := s.registry.List()
+	if err != nil {
+		return fmt.Errorf("list workspaces for shared DeepSeek config sync: %w", err)
+	}
+	for _, workspace := range workspaces {
+		if !workspace.Manifest.RuntimeEnabled(agent.DeepSeek) {
+			continue
+		}
+		if err := syncWorkspaceDeepSeekConfig(workspace.Manifest.HomeDir); err != nil {
+			return fmt.Errorf("sync shared DeepSeek config to workspace %q: %w", workspace.Manifest.Name, err)
+		}
+		status, err := s.lifecycle.driver.ContainerStatus(context.Background(), workspace.Manifest.ContainerName)
+		if err != nil || status != runtime.StatusRunning {
+			continue
+		}
+		if err := s.lifecycle.reconcileDeepSeekProfiles(context.Background(), workspace); err != nil {
+			return fmt.Errorf("install synchronized DeepSeek profile dependencies in workspace %q: %w", workspace.Manifest.Name, err)
+		}
+	}
+	return nil
+}
+
+func (s deepSeekConfigSyncer) watch(ctx context.Context, watcher *fsnotify.Watcher, source string) {
+	defer watcher.Close()
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Create) {
+				if err := addConfigWatches(watcher, source, "DeepSeek"); err != nil {
+					slog.Warn("refresh shared DeepSeek config watches", "error", err)
+				}
+			}
+			if timer == nil {
+				timer = time.NewTimer(100 * time.Millisecond)
+				timerC = timer.C
+			} else if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+				timer.Reset(100 * time.Millisecond)
+			} else {
+				timer.Reset(100 * time.Millisecond)
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Warn("shared DeepSeek config watcher error", "error", err)
+		case <-timerC:
+			timer = nil
+			timerC = nil
+			if err := s.reconcile(); err != nil {
+				slog.Warn("synchronize changed shared DeepSeek config", "error", err)
+			}
+		}
+	}
 }
 
 // syncWorkspaceOpenCodeConfig copies every shared source entry one way into a
@@ -206,6 +331,65 @@ func syncWorkspaceOpenCodeConfig(homeDir string) error {
 	return EnsureWorkspaceStatusPlugin(destination)
 }
 
+// syncWorkspaceDeepSeekConfig copies shared DeepSeek Harness configuration and
+// profile manifests. Credentials, session logs, package installs, and lockfiles
+// remain local to each workspace.
+func syncWorkspaceDeepSeekConfig(homeDir string) error {
+	openCodeSyncMu.Lock()
+	defer openCodeSyncMu.Unlock()
+
+	if err := config.EnsureGlobalConfig(); err != nil {
+		return err
+	}
+	source, err := config.DeepSeekDir()
+	if err != nil {
+		return err
+	}
+	entries, err := deepSeekSourceEntries(source)
+	if err != nil {
+		return err
+	}
+
+	destination := filepath.Join(homeDir, ".config", "deepseek")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		return fmt.Errorf("create workspace DeepSeek directory %q: %w", destination, err)
+	}
+	journalPath := filepath.Join(homeDir, deepSeekSyncJournal)
+	previous, err := loadOpenCodeSyncJournal(journalPath)
+	if err != nil {
+		return err
+	}
+	sort.Slice(previous, func(i, j int) bool {
+		return len(previous[i]) > len(previous[j])
+	})
+	for _, rel := range previous {
+		if _, exists := entries[rel]; exists {
+			continue
+		}
+		if err := removeManagedOpenCodeEntry(destination, rel); err != nil {
+			return err
+		}
+	}
+
+	paths := make([]string, 0, len(entries))
+	for rel := range entries {
+		paths = append(paths, rel)
+	}
+	sort.Strings(paths)
+	for _, rel := range paths {
+		if entries[rel] {
+			if err := os.MkdirAll(filepath.Join(destination, rel), 0o700); err != nil {
+				return fmt.Errorf("create workspace DeepSeek directory %q: %w", rel, err)
+			}
+			continue
+		}
+		if err := copyOpenCodeFile(filepath.Join(source, rel), filepath.Join(destination, rel)); err != nil {
+			return err
+		}
+	}
+	return saveOpenCodeSyncJournal(journalPath, paths)
+}
+
 // sourceEntries validates the top-level shared source and returns relative paths
 // with true for directories and false for regular files.
 func sourceEntries(source string) (map[string]bool, error) {
@@ -243,6 +427,60 @@ func sourceEntries(source string) (map[string]bool, error) {
 		return nil, fmt.Errorf("read shared OpenCode config %q: %w", source, err)
 	}
 	return entries, nil
+}
+
+func deepSeekSourceEntries(source string) (map[string]bool, error) {
+	entries := make(map[string]bool)
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == source {
+			return nil
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if _, reserved := reservedDeepSeekSourceNames[entry.Name()]; reserved || deepSeekPackageStateEntry(rel, entry.Name()) {
+			// DSH profile tooling may create package metadata alongside user-managed
+			// patches. Ignore runtime state instead of blocking the safe config files
+			// in the same shared tree, and never record it in the sync journal.
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("shared DeepSeek config entry %q must not be a symbolic link", path)
+		}
+		if entry.IsDir() {
+			entries[rel] = true
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("shared DeepSeek config entry %q must be a regular file or directory", path)
+		}
+		entries[rel] = false
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read shared DeepSeek config %q: %w", source, err)
+	}
+	return entries, nil
+}
+
+// deepSeekPackageStateEntry allows only the package.json that defines a named
+// DSH profile. Lockfiles remain workspace-local and are regenerated by pnpm.
+func deepSeekPackageStateEntry(rel, name string) bool {
+	if name != "package.json" && name != "pnpm-lock.yaml" && name != "package-lock.json" {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) == 3 && parts[0] == "profiles" && name == "package.json" {
+		return false
+	}
+	return true
 }
 
 func copyOpenCodeFile(source, destination string) error {

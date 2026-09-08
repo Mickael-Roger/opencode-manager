@@ -32,7 +32,8 @@ general command line. The available views (*kinds*) are:
 | `k` / `↑` | Move up |
 | `g` / `G` | Jump to top / bottom |
 | `^f` / `^b` | Page down / page up |
-| `↵` (Enter) | **Attach** to the selected workspace's OpenCode session |
+| `↵` (Enter) | **Attach** to the selected workspace's default agent runtime |
+| `^o` (Ctrl+O) | Open the **runtime picker**, then attach with the chosen harness |
 | `s` | Open a **shell** in the workspace container |
 | `t` | **Start / stop** the container (toggle) |
 | `d` | **Describe** the workspace (details + token breakdown) |
@@ -47,9 +48,38 @@ general command line. The available views (*kinds*) are:
 
 ### Attach (`Enter`)
 
-Drops you straight into the selected workspace's OpenCode TUI, running inside the
-isolated container. Detaching returns you to the dashboard; the container keeps
-running.
+Drops you into the selected workspace's default runtime. OpenCode is the default
+for existing and newly created workspaces. A DeepSeek Harness workspace opens its
+dedicated `dsh-tui` client and resumes its most recent session for the workspace.
+
+`Ctrl+O` opens a runtime picker listing the workspace's enabled runtimes (the
+default preselected); pick one with `↑`/`↓` and attach with `Enter`. New harnesses
+added to the manager appear there automatically.
+
+#### Inside `dsh-tui`
+
+A DeepSeek attach opens the embedded `dsh-tui` client on the workspace's most
+recent DSH session. Beyond the composer, session picker (`Ctrl+L`), model
+picker (`Ctrl+M`), and `@` file references, it provides:
+
+- **Dynamic slash commands** — every command DSH advertises for the session,
+  including plugin commands such as `/agent-teams`, `/compact`, or `/plan`,
+  appears in `/` completion and the `Ctrl+P` palette with its description and
+  input hint, and runs on the host. TUI-local commands (`/model`, `/sessions`,
+  `/new`, `/continue`, `/help`, `/quit`) take precedence on name collisions.
+- **Context meter** — the sidebar shows `used / context-window tokens (percent)`
+  with the same bounded calculation as DSH Web, updated live through compaction
+  and model switches. Until the host reports both usage and capacity, the plain
+  token count is shown.
+- **MCP section** — when DSH's MCP client plugin is loaded, the sidebar lists
+  each configured server with a colored activation dot (green active, amber
+  starting/stopping, red failed, gray disabled). The section is hidden when no
+  MCP plugin is configured.
+- **AgentTeams DAG** — when the [`dsh-agent-teams`](https://github.com/NanmiCoder/dsh-agent-teams)
+  plugin is installed, `Ctrl+X T` or `/agent-teams-dag` overlays the team's task
+  graph: tasks layered by dependencies with state markers, assignees, and
+  dependency trails, plus member progress. `Enter` refreshes the view. Both the
+  shortcut and the command exist only when the plugin is detected.
 
 ### Shell (`s`)
 
@@ -89,12 +119,13 @@ plus an **Add manually…** option:
 
 ### Create (`c`)
 
-Opens the **New Workspace** dialog. Type a name; if you have templates, a
-**Template (optional)** selector appears under the name — press `Tab` to focus it
-and `←`/`→` to choose a template (or *None*). Choosing a template starts the
-workspace with its modules pre-installed. `Tab`/`Shift+Tab` (or `↑`/`↓`) move
-between the name, selector, and the OK/Cancel buttons; `Enter` creates, `Esc`
-cancels.
+Opens the **New Workspace** dialog. Type a name; a compact **Default runtime**
+selector appears under the name. Use `Tab` to focus it and `←`/`→` to choose
+OpenCode or DeepSeek Harness. Selecting DeepSeek enables it for the new workspace
+and makes it the `Enter` target. If you have templates, a **Template** selector
+appears below it; choose one to pre-install its modules.
+`Tab`/`Shift+Tab` (or `↑`/`↓`) move between fields and the OK/Cancel buttons;
+`Enter` creates, `Esc` cancels.
 
 ## Filtering
 

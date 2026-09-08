@@ -11,3 +11,7 @@
 # Local npm installation artifacts.
 /node_modules/
 /package-lock.json
+
+# Embedded dsh-tui development artifacts.
+/internal/runtime/buildcontext/dsh-tui/node_modules/
+/internal/runtime/buildcontext/dsh-tui/dist/

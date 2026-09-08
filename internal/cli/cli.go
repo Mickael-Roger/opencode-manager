@@ -44,6 +44,11 @@ func NewRootCommand(cfg config.Config) *cobra.Command {
 			"subcommands below to manage workspaces, templates, and modules from scripts.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			if warning := config.BaseImageCompatibilityWarning(version, cfg.BaseImage.Name); warning != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), warning)
+			}
+		},
 		// With no subcommand, launch the TUI. An unrecognized first token is a
 		// usage error rather than being silently swallowed as a TUI launch.
 		RunE: func(cmd *cobra.Command, args []string) error {

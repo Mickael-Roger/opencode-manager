@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 )
 
@@ -31,6 +32,18 @@ func TestOpenCodeSessionCommand(t *testing.T) {
 	want := []string{"/usr/local/bin/opencode-manager-attach"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("openCodeSessionCommand = %#v, want %#v", got, want)
+	}
+}
+
+func TestDeepSeekRunFailsBeforeProvisioning(t *testing.T) {
+	l := Lifecycle{agents: agent.NewRegistry()}
+	summary := Summary{Manifest: Manifest{
+		Name: "demo", ContainerName: "demo", HomeDir: t.TempDir(),
+		DefaultRuntime: agent.DeepSeek,
+		Runtimes:       RuntimeConfigMap{agent.DeepSeek: {Enabled: true}},
+	}}
+	if _, err := l.RunCommand(context.Background(), summary, "hello"); err == nil || !strings.Contains(err.Error(), "non-interactive") {
+		t.Fatalf("RunCommand error = %v, want unsupported non-interactive error", err)
 	}
 }
 
