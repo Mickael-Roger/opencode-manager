@@ -6,7 +6,7 @@ import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentu
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js"
 import type { InitialState } from "./bootstrap"
 import type { DshGateway } from "./dsh/gateway"
-import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure } from "./dsh/projection"
+import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure, updateCompaction } from "./dsh/projection"
 import type { OcmStatusReporter } from "./ocm-status"
 import { appendPromptHistory, type PromptHistoryStore } from "./prompt-history"
 import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary } from "./dsh/types"
@@ -55,6 +55,7 @@ export function App(props: AppProps) {
   const [remoteCommands, setRemoteCommands] = createSignal<readonly CommandDescriptor[]>(props.initial.commands)
   const [commandOptions, setCommandOptions] = createSignal<readonly CommandCandidate[]>(commandCandidates(props.initial.commands, commandFlags))
   const [running, setRunning] = createSignal(false)
+  const [compacting, setCompacting] = createSignal<string>()
   const [status, setStatus] = createSignal<"connected" | "reconnecting">("connected")
   const [error, setError] = createSignal<string>()
   const [approval, setApproval] = createSignal<ApprovalRequest>()
@@ -72,9 +73,10 @@ export function App(props: AppProps) {
   const models = (): readonly ModelOption[] => modelOptions(props.initial.catalog)
   const reasoningEfforts = () => pendingModel()?.reasoningEfforts ?? []
   const occupancy = () => contextOccupancy(contextPressures()[sessionId()]?.pressure)
+  const busy = () => running() || compacting() !== undefined
   createEffect(() => {
     props.statusReporter.set(
-      approval() ? "needs-approval" : status() === "reconnecting" ? "starting" : running() ? "working" : "idle",
+      approval() ? "needs-approval" : status() === "reconnecting" ? "starting" : busy() ? "working" : "idle",
       approval() ? 1 : 0,
     )
   })
@@ -156,7 +158,7 @@ export function App(props: AppProps) {
     setPromptHistory(nextHistory)
     props.promptHistoryStore.save(nextHistory)
     if (text.startsWith("/")) { setDraft(""); editor?.clear(); await runCommand(text); return }
-    if (running()) return
+    if (busy()) return
     setDraft(""); editor?.clear(); setRunning(true); setError(undefined)
     try { await props.gateway.sendPrompt(sessionId(), text) } catch (cause) { setError(String(cause)); setRunning(false) }
   }
@@ -170,6 +172,7 @@ export function App(props: AppProps) {
           const pressure = snapshotContextPressure(frame)
           if (pressure) setContextPressures(current => pressure.seq >= (current[id]?.seq ?? -1) ? { ...current, [id]: pressure } : current)
           for (const event of expandFrames(frame)) {
+            setCompacting(active => updateCompaction(active, event))
             setNodes(current => projectFrame(current, event))
             if (event.type === "turn/start") setRunning(true)
             if (event.type === "session/title") {
@@ -272,7 +275,7 @@ export function App(props: AppProps) {
       if (key.name === "escape" || (key.ctrl && key.name === "c")) void answerApproval("rejected")
       return
     }
-    if (key.name === "escape") { if (overlay()) setOverlay(undefined); else if (running()) void props.gateway.cancel(sessionId()) }
+    if (key.name === "escape") { if (overlay()) setOverlay(undefined); else if (busy()) void props.gateway.cancel(sessionId()) }
     if (key.ctrl && key.name === "c") { if (overlay()) setOverlay(undefined); else renderer.destroy() }
     if (overlay() && (key.name === "down" || (key.ctrl && key.name === "n"))) move(1)
     if (overlay() && (key.name === "up" || (key.ctrl && key.name === "p"))) move(-1)
@@ -289,22 +292,22 @@ export function App(props: AppProps) {
         <For each={nodes()}>{node => <Message node={node} syntax={syntax} />}</For>
       </scrollbox>
       <Show when={error()}>{message => <box paddingLeft={1} paddingRight={1} marginBottom={1} backgroundColor="#351c22"><text fg={theme.error}>{message()}</text></box>}</Show>
-      <Show when={approval()} fallback={<Composer ref={value => { editor = value }} value={draft()} running={running()} syntax={syntax} history={promptHistory()} historyActive={!overlay()} maxHeight={Math.max(6, Math.floor(dimensions().height / 3))} onInput={onInput} onSubmit={value => void submit(value)} />}>
+      <Show when={approval()} fallback={<Composer ref={value => { editor = value }} value={draft()} running={busy()} syntax={syntax} history={promptHistory()} historyActive={!overlay()} maxHeight={Math.max(6, Math.floor(dimensions().height / 3))} onInput={onInput} onSubmit={value => void submit(value)} />}>
         {request => <PermissionPrompt request={request()} selected={approvalChoice()} pending={approvalPending()} tool={nodes().find(node => node.toolArgs && node.id === `tool:${request().callId}`)} />}
       </Show>
-      <WorkingIndicator active={running() && !approval()} />
+      <WorkingIndicator active={busy() && !approval()} label={compacting() ? "Compacting context..." : undefined} />
     </box>
-    <Show when={dimensions().width >= 120}><Sidebar title={title()} cwd={props.cwd} model={activeModel()} tokens={tokens()} occupancy={occupancy()} mcp={props.initial.mcp} status={running() ? "working" : status()} /></Show>
+    <Show when={dimensions().width >= 120}><Sidebar title={title()} cwd={props.cwd} model={activeModel()} tokens={tokens()} occupancy={occupancy()} mcp={props.initial.mcp} status={compacting() ? "compacting" : running() ? "working" : status()} /></Show>
     <Show when={overlay()}>{value => <Dialog overlay={value()} selected={selected()} sessions={sessions()} models={models()} reasoningEfforts={reasoningEfforts()} references={references()} commands={commandOptions()} teamLines={teamLines()} hasAgentTeams={props.initial.agentTeams} />}</Show>
   </box>
 }
 
-function WorkingIndicator(props: { active: boolean }) {
+function WorkingIndicator(props: { active: boolean; label?: string }) {
   const frames = [".  ", ".. ", "...", " ..", "  ."]
   const [frame, setFrame] = createSignal(0)
   const timer = setInterval(() => setFrame(value => (value + 1) % frames.length), 180)
   onCleanup(() => clearInterval(timer))
-  return <box height={1} paddingLeft={2}><text fg={theme.muted}>{props.active ? frames[frame()] : ""}</text></box>
+  return <box height={1} paddingLeft={2}><text fg={theme.muted}>{props.active ? `${props.label ? `${props.label} ` : ""}${frames[frame()]}` : ""}</text></box>
 }
 
 function PermissionPrompt(props: { request: ApprovalRequest; selected: number; pending: boolean; tool?: ConversationNode }) {
@@ -440,7 +443,7 @@ function Composer(props: { ref(value: TextareaRenderable): void; value: string; 
     event.preventDefault()
   }
   return <box minHeight={3} flexShrink={0} backgroundColor={theme.panel} border={["left"]} borderColor={theme.accent} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-    <textarea ref={value => { textarea = value; props.ref(value) }} initialValue={props.value} width="100%" minHeight={1} maxHeight={props.maxHeight} wrapMode="word" syntaxStyle={props.syntax} textColor={theme.text} focusedTextColor={theme.text} placeholderColor={theme.muted} backgroundColor={theme.panel} focusedBackgroundColor={theme.panel} onPaste={onPaste} onKeyDown={onHistoryKey} onContentChange={() => props.onInput(textarea?.plainText ?? "")} onSubmit={() => { historyIndex = -1; props.onSubmit(expandTrackedPastes(textarea?.plainText ?? "", trackedPastes())) }} keyBindings={[{ name: "return", action: "submit" }, { name: "j", ctrl: true, action: "newline" }, { name: "return", shift: true, action: "newline" }, { name: "return", ctrl: true, action: "newline" }, { name: "return", meta: true, action: "newline" }]} placeholder={props.running ? "Agent is working; press Esc to interrupt" : "Ask anything..."} focused />
+    <textarea ref={value => { textarea = value; props.ref(value) }} initialValue={props.value} width="100%" minHeight={1} maxHeight={props.maxHeight} wrapMode="word" syntaxStyle={props.syntax} textColor={theme.text} focusedTextColor={theme.text} placeholderColor={theme.muted} backgroundColor={theme.panel} focusedBackgroundColor={theme.panel} onPaste={onPaste} onKeyDown={onHistoryKey} onContentChange={() => props.onInput(textarea?.plainText ?? "")} onSubmit={() => { historyIndex = -1; props.onSubmit(expandTrackedPastes(textarea?.plainText ?? "", trackedPastes())) }} keyBindings={[{ name: "return", action: "submit" }, { name: "j", ctrl: true, action: "newline" }, { name: "return", shift: true, action: "newline" }, { name: "return", ctrl: true, action: "newline" }, { name: "return", meta: true, action: "newline" }]} placeholder={props.running ? "Agent is working or compacting context; press Esc to interrupt" : "Ask anything..."} focused />
   </box>
 }
 

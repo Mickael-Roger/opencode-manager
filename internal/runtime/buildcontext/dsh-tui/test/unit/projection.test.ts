@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure } from "../../src/dsh/projection"
+import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure, updateCompaction } from "../../src/dsh/projection"
 
 test("reads context pressure and calculates the bounded web-compatible occupancy", () => {
   const snapshot = { type: "snapshot", projections: { asOfSeq: 9, values: { contextPressure: { pressureTokens: 20_000, projectedTokens: 32_100, contextWindow: 128_000 } } } }
@@ -22,6 +22,15 @@ test("projects DSH nested user content and recognizes completed turns", () => {
   const nodes = projectFrame([], { type: "user/message", seq: 7, data: { content: [{ type: "text", text: "hello" }] } })
   expect(nodes).toEqual([{ id: "7", kind: "user", text: "hello", complete: true }])
   expect(isTurnFinished({ type: "turn/end" })).toBe(true)
+})
+
+test("tracks a compaction until its matching end event", () => {
+  let active = updateCompaction(undefined, { type: "compaction/start", data: { compactionId: "compact-a" } })
+  expect(active).toBe("compact-a")
+  active = updateCompaction(active, { type: "compaction/end", data: { compactionId: "compact-b", error: "stale" } })
+  expect(active).toBe("compact-a")
+  active = updateCompaction(active, { type: "compaction/end", data: { compactionId: "compact-a" } })
+  expect(active).toBeUndefined()
 })
 
 test("ignores internal DSH bookkeeping events", () => {
