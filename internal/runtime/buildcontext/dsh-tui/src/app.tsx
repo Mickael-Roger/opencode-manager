@@ -8,6 +8,7 @@ import type { InitialState } from "./bootstrap"
 import type { DshGateway } from "./dsh/gateway"
 import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure } from "./dsh/projection"
 import type { OcmStatusReporter } from "./ocm-status"
+import { appendPromptHistory, type PromptHistoryStore } from "./prompt-history"
 import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary } from "./dsh/types"
 import { findActiveMention, replaceMention } from "./features/composer/mention"
 import { expandTrackedPastes, pasteSummary, type TrackedPaste } from "./features/composer/paste"
@@ -25,7 +26,7 @@ import { createSyntaxStyle } from "./ui/theme"
 const theme = { bg: "#0c0c0c", sidebar: "#151515", panel: "#1d1d1d", panelActive: "#262626", accent: "#5da9ff", text: "#e5e5e5", muted: "#777777", good: "#86d993", warn: "#e9b872", error: "#ed8796" }
 const dshLogo = ["██████╗ ███████╗██╗  ██╗", "██╔══██╗██╔════╝██║  ██║", "██║  ██║███████╗███████║", "██║  ██║╚════██║██╔══██║", "██████╔╝███████║██║  ██║", "╚═════╝ ╚══════╝╚═╝  ╚═╝"]
 type Overlay = "sessions" | "models" | "reasoning" | "references" | "help" | "commands" | "team" | undefined
-export interface AppProps { cwd: string; dshOrigin: string; gateway: DshGateway; initial: InitialState; statusReporter: OcmStatusReporter }
+export interface AppProps { cwd: string; dshOrigin: string; gateway: DshGateway; initial: InitialState; statusReporter: OcmStatusReporter; promptHistoryStore: PromptHistoryStore; initialPromptHistory: string[] }
 
 function modelLabel(model?: ModelSelection): string { return model ? `${model.provider}/${model.model}${model.reasoningEffort ? ` (${model.reasoningEffort})` : ""}` : "default" }
 function sessionLabel(session: SessionSummary): string { return session.title ?? session.sessionId }
@@ -46,7 +47,7 @@ export function App(props: AppProps) {
   const [activeModel, setActiveModel] = createSignal<ModelSelection>(props.initial.model)
   const [nodes, setNodes] = createSignal<ConversationNode[]>([])
   const [draft, setDraft] = createSignal("")
-  const [promptHistory, setPromptHistory] = createSignal<string[]>([])
+  const [promptHistory, setPromptHistory] = createSignal(props.initialPromptHistory)
   const [overlay, setOverlay] = createSignal<Overlay>()
   const [selected, setSelected] = createSignal(0)
   const [pendingModel, setPendingModel] = createSignal<ModelOption>()
@@ -151,7 +152,9 @@ export function App(props: AppProps) {
   const submit = async (value = draft()) => {
     const text = value.trim()
     if (!text || overlay()) return
-    setPromptHistory(current => current.at(-1) === text ? current : [...current, text].slice(-100))
+    const nextHistory = appendPromptHistory(promptHistory(), text)
+    setPromptHistory(nextHistory)
+    props.promptHistoryStore.save(nextHistory)
     if (text.startsWith("/")) { setDraft(""); editor?.clear(); await runCommand(text); return }
     if (running()) return
     setDraft(""); editor?.clear(); setRunning(true); setError(undefined)
