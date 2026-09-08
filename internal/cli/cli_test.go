@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
 )
@@ -21,6 +23,34 @@ func testConfig(t *testing.T) config.Config {
 	// Point module discovery at an empty dir so Catalog is deterministic.
 	cfg.ModuleDirs = []string{t.TempDir()}
 	return cfg
+}
+
+func TestWorkspacesCreateWithDeepSeek(t *testing.T) {
+	cfg := testConfig(t)
+	if _, _, err := run(t, cfg, "workspaces", "create", "Research", "--deepseek", "--default-runtime", "deepseek"); err != nil {
+		t.Fatalf("create with DeepSeek: %v", err)
+	}
+	manifest, err := workspace.LoadManifest(filepath.Join(cfg.WorkspaceRoot, "workspaces", "research", workspace.ManifestFile))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if manifest.EffectiveDefaultRuntime() != agent.DeepSeek || !manifest.RuntimeEnabled(agent.DeepSeek) || !manifest.RuntimeEnabled(agent.OpenCode) {
+		t.Fatalf("runtime config = default %q, %#v", manifest.EffectiveDefaultRuntime(), manifest.Runtimes)
+	}
+}
+
+func TestWorkspacesCreateEnablesSelectedDefaultRuntime(t *testing.T) {
+	cfg := testConfig(t)
+	if _, _, err := run(t, cfg, "workspaces", "create", "Selected", "--default-runtime", "deepseek"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	manifest, err := workspace.LoadManifest(filepath.Join(cfg.WorkspaceRoot, "workspaces", "selected", workspace.ManifestFile))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if !manifest.RuntimeEnabled(agent.DeepSeek) {
+		t.Fatal("selected default runtime should be enabled")
+	}
 }
 
 // run executes the command tree with args and returns captured stdout, stderr,
@@ -140,6 +170,22 @@ func TestVersionCommand(t *testing.T) {
 	}
 	if !strings.Contains(out, "opencode-manager") {
 		t.Fatalf("version output = %q", out)
+	}
+}
+
+func TestCLIWarnsWhenV2UsesPreV2ManagedBase(t *testing.T) {
+	original := version
+	version = "2.0.0"
+	t.Cleanup(func() { version = original })
+
+	cfg := testConfig(t)
+	cfg.BaseImage.Name = "mroger78/ocm-base:1.9.9"
+	_, stderr, err := run(t, cfg, "version")
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if !strings.Contains(stderr, "does not include DeepSeek Harness") {
+		t.Fatalf("stderr = %q, want compatibility warning", stderr)
 	}
 }
 

@@ -191,6 +191,20 @@ func TestEntrypointInstallsExtraCACertificate(t *testing.T) {
 	}
 }
 
+func TestEntrypointStartsDSHWebAndStoresToken(t *testing.T) {
+	content := readBuildFile(t, "opencode-manager-entrypoint")
+	for _, want := range []string{
+		`dsh web --port "$OCM_DSH_PORT" --no-open`,
+		"?token=",
+		"web-token",
+		`[ -n "${OCM_DSH_PORT:-}" ]`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("entrypoint missing DSH web supervision value %q:\n%s", want, content)
+		}
+	}
+}
+
 func readBuildFile(t *testing.T, name string) string {
 	t.Helper()
 	data, err := buildContextFS.ReadFile("buildcontext/" + name)
@@ -257,6 +271,31 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 	opencodeInstall := strings.Index(content, "npm install -g opencode-ai")
 	if packages == -1 || command == -1 || opencodeInstall == -1 || !(packages < command && command < opencodeInstall) {
 		t.Fatalf("expected user commands after package install and before OpenCode install:\n%s", content)
+	}
+}
+
+func TestBaseDockerfilePinsDeepSeekRuntimeStack(t *testing.T) {
+	content := readBuildFile(t, baseDockerfile)
+	for _, want := range []string{
+		"ARG BUN_VERSION=1.3.0",
+		"FROM oven/bun:${BUN_VERSION} AS bun",
+		"COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun",
+		"COPY dsh-tui /opt/dsh-tui",
+		"bun install --frozen-lockfile --production",
+		"COPY dsh-tui/dsh-tui /usr/local/bin/dsh-tui",
+		"chmod 0755 /usr/local/bin/dsh-tui",
+		"ARG DSH_VERSION=0.1.2-rc.1",
+		"ARG DSH_ACP_VERSION=0.4.29",
+		"ARG PNPM_VERSION=11.25.0",
+		`"@deepseek-ai/dsh@${DSH_VERSION}"`,
+		`"@openma/deepseek-harness-acp@${DSH_ACP_VERSION}"`,
+		`"pnpm@${PNPM_VERSION}"`,
+		"https://deb.nodesource.com/setup_22.x",
+		"DSH_HOME=/home/debian/.config/deepseek",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Dockerfile missing pinned DeepSeek stack value %q", want)
+		}
 	}
 }
 
@@ -406,6 +445,16 @@ func TestWriteBuildContextMaterializesFiles(t *testing.T) {
 				t.Fatalf("script %q must be executable, got %v", name, info.Mode())
 			}
 		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dsh-tui", "src", "main.ts")); err != nil {
+		t.Fatalf("build context missing embedded dsh-tui source: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dsh-tui", "bun.lock")); err != nil {
+		t.Fatalf("build context missing dsh-tui lockfile: %v", err)
+	}
+	launcher, err := os.Stat(filepath.Join(dir, "dsh-tui", "dsh-tui"))
+	if err != nil || launcher.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("build context dsh-tui launcher must be executable: %v", err)
 	}
 }
 

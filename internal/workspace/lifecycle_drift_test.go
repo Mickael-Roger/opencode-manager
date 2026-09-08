@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 )
@@ -40,6 +41,12 @@ func TestContainerSpecDrift(t *testing.T) {
 		spec  runtime.ContainerSpec
 		want  bool
 	}{
+		{
+			name: "DeepSeek port stale",
+			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "bridge", Env: map[string]string{OpenCodePortEnv: "4097", DeepSeekPortEnv: "4098"}},
+			spec: runtime.ContainerSpec{HostNetwork: false},
+			want: true,
+		},
 		{
 			name: "matches host and port",
 			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "host", Env: map[string]string{OpenCodePortEnv: "4097"}},
@@ -88,10 +95,15 @@ func TestContainerSpecDrift(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &driftDriver{fakeDriver: &fakeDriver{}, rc: tc.rc, rcErr: tc.rcErr}
 			l := Lifecycle{driver: d}
+			testManifest := manifest
+			if tc.name == "DeepSeek port stale" {
+				testManifest.Runtimes = RuntimeConfigMap{agent.OpenCode: {Enabled: true}, agent.DeepSeek: {Enabled: true}}
+				testManifest.DeepSeekPort = 4099
+			}
 			if tc.name == "workspace environment changed" {
 				l.cfg.WorkspaceEnv = map[string]string{"API_TOKEN": "new"}
 			}
-			if got := l.containerSpecDrift(context.Background(), manifest, tc.spec); got != tc.want {
+			if got := l.containerSpecDrift(context.Background(), testManifest, tc.spec); got != tc.want {
 				t.Fatalf("containerSpecDrift = %v, want %v", got, tc.want)
 			}
 		})

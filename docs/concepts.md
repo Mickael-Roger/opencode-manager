@@ -1,7 +1,7 @@
 # Concepts
 
-Four ideas explain almost everything about `opencode-manager`: **workspaces**,
-**modules**, **templates**, and the **security principle** that ties them
+Five ideas explain almost everything about `opencode-manager`: **workspaces**,
+**agent runtimes**, **modules**, **templates**, and the **security principle** that ties them
 together.
 
 ## Security principle
@@ -19,7 +19,7 @@ to that one workspace.
 
 ## Workspaces
 
-A **workspace** is one isolated OpenCode environment, backed by a long-lived
+A **workspace** is one isolated coding-agent environment, backed by a long-lived
 container. Each workspace has:
 
 - a **name**;
@@ -28,16 +28,55 @@ container. Each workspace has:
 - a one-way copy of shared OpenCode configuration, including `opencode.json`,
   commands, skills, agents, and plugins;
 - its selected **module** configuration;
-- a generated **image** and a long-lived, attachable **container** that runs
-  OpenCode interactively.
+- a generated **image** and a long-lived, attachable **container**;
+- OpenCode by default and, when enabled, DeepSeek Harness with its `web` profile.
 
 At the workspace root only `workspace.yaml` and `home/` are created. Environment
 values, image/package requirements, module state, and generated OpenCode paths
 are tracked through `workspace.yaml` and files under `home/`. You clone your
 project repositories inside the workspace home directory.
 
-The container runs a small entrypoint that starts `opencode` for the first
-session and `opencode -c` when sessions already exist.
+The container runs a supervised OpenCode server. DeepSeek Harness configuration
+and state are stored below `home/.config/deepseek/`; OCM will supervise its Web
+server as a separate loopback runtime.
+
+## Agent runtimes
+
+Agent runtimes consume the workspace's files, tools, credentials, and isolation;
+they are not modules. A workspace records `defaultRuntime` and enabled `runtimes`
+in `workspace.yaml`. Existing manifests without these fields behave exactly as
+before: OpenCode is enabled and remains the default.
+
+```yaml
+defaultRuntime: opencode
+runtimes:
+  opencode:
+    enabled: true
+  deepseek:
+    enabled: true
+```
+
+The runtimes have independent configuration and session state but see the same
+project filesystem and module-provisioned capabilities. Each DeepSeek-enabled
+workspace starts `dsh web --port <port> --no-open`. DSH emits a new startup URL
+with a token on every restart; OCM stores just that token, with owner-only
+permissions, at `home/.config/deepseek/web-token`. Attaching a DeepSeek
+workspace opens the embedded `dsh-tui` terminal client against that server
+(see the [TUI guide](tui.md#attach-enter)).
+
+## Shared DeepSeek Harness config
+
+DeepSeek-enabled workspaces receive a one-way copy of non-secret configuration
+from `~/.config/opencode-manager/deepseek/`. For example, place `settings.yaml`,
+`cordis.patch.yml`, or other managed patches there. Source changes reconcile into
+each enabled workspace at `/home/debian/.config/deepseek/` while OCM is running.
+
+OCM synchronizes `profiles/<name>/package.json` so you can centrally add or
+remove profile modules. It ignores runtime state: `.credentials.yaml`, `.env`,
+sessions, `node_modules/`, and package lockfiles are never copied.
+After each managed workspace start, OCM runs `dsh plugin --profile <name> install
+--no-frozen-lockfile` and each workspace maintains its own lockfile. OAuth/Codex logins and DSH
+sessions are likewise never overwritten by configuration synchronization.
 
 ## Modules
 

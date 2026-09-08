@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 )
 
@@ -30,6 +31,11 @@ type Summary struct {
 type CreateResult struct {
 	Manifest Manifest
 	Path     string
+}
+
+type CreateOptions struct {
+	DefaultRuntime string
+	EnableDeepSeek bool
 }
 
 func NewRegistry(cfg config.Config) Registry {
@@ -104,26 +110,48 @@ func (r Registry) NewManifest(name string) (Manifest, error) {
 	}
 
 	return Manifest{
-		Name:          name,
-		Runtime:       r.cfg.Runtime,
-		ImageName:     "opencode-manager/" + safeName + ":latest",
-		Image:         imageConfigFromConfig(r.cfg),
-		ContainerName: "opencode-manager-" + safeName,
-		HomeDir:       filepath.Join(r.WorkspaceDir(safeName), workspaceHomeSubdir),
-		OpenCodePort:  port,
-		Env:           map[string]string{},
-		Modules:       nil,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		Name:           name,
+		Runtime:        r.cfg.Runtime,
+		ImageName:      "opencode-manager/" + safeName + ":latest",
+		Image:          imageConfigFromConfig(r.cfg),
+		ContainerName:  "opencode-manager-" + safeName,
+		HomeDir:        filepath.Join(r.WorkspaceDir(safeName), workspaceHomeSubdir),
+		OpenCodePort:   port,
+		DefaultRuntime: agent.OpenCode,
+		Runtimes: RuntimeConfigMap{
+			agent.OpenCode: {Enabled: true},
+		},
+		Env:       map[string]string{},
+		Modules:   nil,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, nil
 }
 
 func (r Registry) Create(name string) (CreateResult, error) {
+	return r.CreateWithOptions(name, CreateOptions{})
+}
+
+func (r Registry) CreateWithOptions(name string, options CreateOptions) (CreateResult, error) {
 	slog.Info("creating workspace", "name", name, "slug", SafeName(name))
 
 	manifest, err := r.NewManifest(name)
 	if err != nil {
 		return CreateResult{}, err
+	}
+	if options.EnableDeepSeek || options.DefaultRuntime == agent.DeepSeek {
+		manifest.Runtimes[agent.DeepSeek] = RuntimeConfig{Enabled: true}
+		port, err := r.allocateRuntimePort(manifest.OpenCodePort)
+		if err != nil {
+			return CreateResult{}, err
+		}
+		manifest.DeepSeekPort = port
+	}
+	if options.DefaultRuntime != "" {
+		manifest.DefaultRuntime = options.DefaultRuntime
+	}
+	if err := manifest.Validate(); err != nil {
+		return CreateResult{}, fmt.Errorf("configure workspace runtimes: %w", err)
 	}
 
 	safeName := SafeName(name)
@@ -211,6 +239,7 @@ func (r Registry) createLayout(workspacePath string) error {
 		workspaceHomeSubdir,
 		filepath.Join(workspaceHomeSubdir, "workspace"),
 		filepath.Join(workspaceHomeSubdir, ".config", "opencode"),
+		filepath.Join(workspaceHomeSubdir, ".config", "deepseek"),
 	}
 
 	for _, dir := range dirs {

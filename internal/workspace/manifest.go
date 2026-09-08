@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -24,11 +25,48 @@ type Manifest struct {
 	// per workspace so the servers do not collide when config.HostNetwork makes
 	// every container share the host loopback. Zero in manifests written before
 	// this field existed; the lifecycle assigns and persists one on next start.
-	OpenCodePort int               `yaml:"openCodePort,omitempty"`
-	Env          map[string]string `yaml:"env"`
-	Modules      []ModuleInstance  `yaml:"modules"`
-	CreatedAt    time.Time         `yaml:"createdAt"`
-	UpdatedAt    time.Time         `yaml:"updatedAt"`
+	OpenCodePort int `yaml:"openCodePort,omitempty"`
+	// DeepSeekPort is the loopback TCP port for this workspace's optional DSH Web
+	// server. Like OpenCodePort, zero is backfilled when an older workspace starts.
+	DeepSeekPort   int               `yaml:"deepSeekPort,omitempty"`
+	DefaultRuntime string            `yaml:"defaultRuntime,omitempty"`
+	Runtimes       RuntimeConfigMap  `yaml:"runtimes,omitempty"`
+	Env            map[string]string `yaml:"env"`
+	Modules        []ModuleInstance  `yaml:"modules"`
+	CreatedAt      time.Time         `yaml:"createdAt"`
+	UpdatedAt      time.Time         `yaml:"updatedAt"`
+}
+
+type RuntimeConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type RuntimeConfigMap map[string]RuntimeConfig
+
+func (m Manifest) EffectiveDefaultRuntime() string {
+	if m.DefaultRuntime != "" {
+		return m.DefaultRuntime
+	}
+	return agent.OpenCode
+}
+
+func (m Manifest) RuntimeEnabled(name string) bool {
+	if len(m.Runtimes) == 0 {
+		return name == agent.OpenCode
+	}
+	configured, ok := m.Runtimes[name]
+	return ok && configured.Enabled
+}
+
+func (m Manifest) EnabledRuntimeNames() []string {
+	names := make([]string, 0, 2)
+	for _, runtime := range agent.All() {
+		name := runtime.Name()
+		if m.RuntimeEnabled(name) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type ImageConfig struct {
@@ -119,6 +157,20 @@ func (m Manifest) Validate() error {
 
 	if m.HomeDir == "" {
 		return fmt.Errorf("manifest homeDir is required")
+	}
+
+	registry := agent.NewRegistry()
+	for name := range m.Runtimes {
+		if _, err := registry.Get(name); err != nil {
+			return err
+		}
+	}
+	defaultRuntime := m.EffectiveDefaultRuntime()
+	if _, err := registry.Get(defaultRuntime); err != nil {
+		return err
+	}
+	if !m.RuntimeEnabled(defaultRuntime) {
+		return fmt.Errorf("default agent runtime %q is not enabled", defaultRuntime)
 	}
 
 	return nil

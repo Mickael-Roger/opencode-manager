@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 )
 
@@ -92,6 +93,7 @@ func TestCreateWorkspaceWritesLayoutAndManifest(t *testing.T) {
 		"home",
 		filepath.Join("home", "workspace"),
 		filepath.Join("home", ".config", "opencode"),
+		filepath.Join("home", ".config", "deepseek"),
 	}
 
 	for _, path := range paths {
@@ -128,6 +130,9 @@ func TestCreateWorkspaceWritesLayoutAndManifest(t *testing.T) {
 	}
 	if result.Manifest.Env == nil {
 		t.Fatal("manifest env map should be initialized")
+	}
+	if result.Manifest.EffectiveDefaultRuntime() != agent.OpenCode || !result.Manifest.RuntimeEnabled(agent.OpenCode) {
+		t.Fatalf("new workspace runtimes = %#v, default %q", result.Manifest.Runtimes, result.Manifest.EffectiveDefaultRuntime())
 	}
 
 	workspaces, err := registry.List()

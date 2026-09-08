@@ -353,6 +353,13 @@ func TestEnsureGlobalConfigCreatesTemplates(t *testing.T) {
 			t.Fatalf("template %q should be a directory", name)
 		}
 	}
+	deepSeekDir, err := DeepSeekDir()
+	if err != nil {
+		t.Fatalf("DeepSeekDir: %v", err)
+	}
+	if info, err := os.Stat(deepSeekDir); err != nil || !info.IsDir() {
+		t.Fatalf("shared DeepSeek directory = %v, %v; want directory", info, err)
+	}
 }
 
 // Shared source files remain readable for host-side OpenCode tooling.
@@ -495,5 +502,31 @@ func TestIsManagedBaseImage(t *testing.T) {
 		if got := IsManagedBaseImage(c.name); got != c.want {
 			t.Errorf("IsManagedBaseImage(%q) = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestBaseImageCompatibilityWarning(t *testing.T) {
+	cases := []struct {
+		manager string
+		image   string
+		want    bool
+	}{
+		{"2.0.0", "mroger78/ocm-base:1.9.9", true},
+		{"v2.4.1", "docker.io/mroger78/ocm-base:0.9.0", true},
+		{"2.0.0", "mroger78/ocm-base:2.0.0", false},
+		{"2.1.0", "mroger78/ocm-base:2.1.0", false},
+		{"1.9.0", "mroger78/ocm-base:1.9.9", false},
+		{"dev", "mroger78/ocm-base:1.9.9", false},
+		{"2.0.0", "mroger78/ocm-base:latest", false},
+		{"2.0.0", "mroger78/ocm-base:dev", false},
+		{"2.0.0", "debian:stable-slim", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.manager+"/"+tc.image, func(t *testing.T) {
+			got := BaseImageCompatibilityWarning(tc.manager, tc.image)
+			if (got != "") != tc.want {
+				t.Fatalf("BaseImageCompatibilityWarning(%q, %q) = %q, warning wanted=%v", tc.manager, tc.image, got, tc.want)
+			}
+		})
 	}
 }

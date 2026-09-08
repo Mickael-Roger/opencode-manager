@@ -349,19 +349,20 @@ func (l Lifecycle) moduleRestartServer(category, name string) bool {
 	return mod.RestartServer
 }
 
-// bounceServer kills the running OpenCode server so the supervisor entrypoint
-// relaunches it with a freshly sourced ~/.env. It is best-effort: pkill exits
-// non-zero when nothing matched (server not yet started), which is fine.
+// bounceServer kills the running agent servers so the supervisor entrypoint
+// relaunches them with a freshly sourced ~/.env. It is best-effort: pkill exits
+// non-zero when nothing matched (a runtime is disabled or not yet started).
 func (l Lifecycle) bounceServer(ctx context.Context, containerName string) {
-	if _, err := l.driver.Exec(ctx, runtime.ExecSpec{
-		Container: containerName,
-		User:      "0",
-		Args:      []string{"pkill", "-f", "opencode serve"},
-	}); err != nil {
-		slog.Debug("bounce server: pkill returned non-zero (likely no match)", "container", containerName, "error", err)
-		return
+	for _, pattern := range []string{"opencode serve", "dsh web"} {
+		if _, err := l.driver.Exec(ctx, runtime.ExecSpec{
+			Container: containerName,
+			User:      "0",
+			Args:      []string{"pkill", "-f", pattern},
+		}); err != nil {
+			slog.Debug("bounce server: pkill returned non-zero (likely no match)", "container", containerName, "pattern", pattern, "error", err)
+		}
 	}
-	slog.Debug("bounced OpenCode server to reload environment", "container", containerName)
+	slog.Debug("bounced agent servers to reload environment", "container", containerName)
 }
 
 type markerEntry struct {

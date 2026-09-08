@@ -188,6 +188,28 @@ func TestProvisionInjectsPortAndHostNetwork(t *testing.T) {
 	}
 }
 
+func TestProvisionInjectsDeepSeekStateDirectoriesOnlyWhenEnabled(t *testing.T) {
+	cfg := testConfig(t)
+	registry := NewRegistry(cfg)
+	created, err := registry.CreateWithOptions("deepseek", CreateOptions{EnableDeepSeek: true})
+	if err != nil {
+		t.Fatalf("CreateWithOptions returned error: %v", err)
+	}
+	rec := &recordingDriver{fakeDriver: &fakeDriver{}}
+	l := Lifecycle{cfg: cfg, registry: registry, driver: rec}
+	_, spec, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path})
+	if err != nil {
+		t.Fatalf("provision returned error: %v", err)
+	}
+	if spec.Env["DSH_HOME"] != "/home/debian/.config/deepseek" {
+		t.Fatalf("DeepSeek state env = %#v", spec.Env)
+	}
+	wantPort := strconv.Itoa(created.Manifest.DeepSeekPort)
+	if got := spec.Env[DeepSeekPortEnv]; got != wantPort {
+		t.Fatalf("spec.Env[%s] = %q, want %q", DeepSeekPortEnv, got, wantPort)
+	}
+}
+
 func TestProvisionBackfillsMissingPort(t *testing.T) {
 	rec := &specRecordingDriver{fakeDriver: &fakeDriver{}}
 	cfg := config.Config{
@@ -218,6 +240,34 @@ func TestProvisionBackfillsMissingPort(t *testing.T) {
 	}
 	if saved.OpenCodePort < OpenCodePortMin || saved.OpenCodePort > OpenCodePortMax {
 		t.Fatalf("backfilled port = %d, want within [%d, %d]", saved.OpenCodePort, OpenCodePortMin, OpenCodePortMax)
+	}
+}
+
+func TestProvisionBackfillsMissingDeepSeekPort(t *testing.T) {
+	cfg := testConfig(t)
+	registry := NewRegistry(cfg)
+	created, err := registry.CreateWithOptions("deepseek", CreateOptions{EnableDeepSeek: true})
+	if err != nil {
+		t.Fatalf("CreateWithOptions: %v", err)
+	}
+	created.Manifest.DeepSeekPort = 0
+	if err := SaveManifest(filepath.Join(created.Path, ManifestFile), created.Manifest); err != nil {
+		t.Fatalf("SaveManifest: %v", err)
+	}
+
+	l := Lifecycle{cfg: cfg, registry: registry, driver: &specRecordingDriver{fakeDriver: &fakeDriver{}}}
+	if _, _, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path}); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	saved, err := LoadManifest(filepath.Join(created.Path, ManifestFile))
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if saved.DeepSeekPort < OpenCodePortMin || saved.DeepSeekPort > OpenCodePortMax {
+		t.Fatalf("backfilled DeepSeek port = %d, want within [%d, %d]", saved.DeepSeekPort, OpenCodePortMin, OpenCodePortMax)
+	}
+	if saved.DeepSeekPort == saved.OpenCodePort {
+		t.Fatalf("backfilled DeepSeek port must differ from OpenCode port %d", saved.OpenCodePort)
 	}
 }
 

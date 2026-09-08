@@ -15,4 +15,5 @@ RUN echo 'ALL ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode-manager && c
 COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach
 COPY opencode-manager-entrypoint /usr/local/bin/opencode-manager-entrypoint
 RUN chmod 0755 /usr/local/bin/opencode-manager-attach /usr/local/bin/opencode-manager-entrypoint
+ENV DSH_HOME=/home/debian/.config/deepseek
 WORKDIR /home/debian/workspace

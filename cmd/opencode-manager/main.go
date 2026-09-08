@@ -52,6 +52,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to synchronize shared OpenCode config: %v\n", err)
 		os.Exit(1)
 	}
+	if err := workspace.StartDeepSeekConfigSync(syncContext, cfg); err != nil {
+		slog.Error("failed to synchronize shared DeepSeek config", "error", err)
+		fmt.Fprintf(os.Stderr, "failed to synchronize shared DeepSeek config: %v\n", err)
+		os.Exit(1)
+	}
 
 	if err := cli.NewRootCommand(cfg).Execute(); err != nil {
 		slog.Error("command failed", "args", os.Args[1:], "error", err)

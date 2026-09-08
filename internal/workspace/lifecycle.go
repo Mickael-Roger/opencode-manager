@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 )
@@ -25,6 +26,7 @@ type Lifecycle struct {
 	cfg      config.Config
 	registry Registry
 	driver   runtime.Driver
+	agents   agent.Registry
 }
 
 type Status struct {
@@ -56,7 +58,7 @@ func NewLifecycle(cfg config.Config) (Lifecycle, error) {
 		return Lifecycle{}, err
 	}
 
-	return Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: driver}, nil
+	return Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: driver, agents: agent.NewRegistry()}, nil
 }
 
 // RuntimeAvailable reports whether the configured container runtime (docker or
@@ -174,6 +176,9 @@ func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
 	if err := l.reconcile(ctx, summary); err != nil {
 		slog.Warn("module reconcile failed", "workspace", summary.Manifest.Name, "container", name, "error", err)
 	}
+	if err := l.reconcileDeepSeekProfiles(ctx, summary); err != nil {
+		return err
+	}
 
 	// Run the one-shot post-create commands the first time this workspace starts,
 	// after modules are in place. Best-effort: failures are logged, not fatal.
@@ -239,6 +244,13 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		}
 		manifest.OpenCodePort = port
 	}
+	if manifest.RuntimeEnabled(agent.DeepSeek) && manifest.DeepSeekPort == 0 {
+		port, err := l.ensureDeepSeekPort(summary)
+		if err != nil {
+			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+		}
+		manifest.DeepSeekPort = port
+	}
 
 	baseImageName, err := l.resolveBaseImage(ctx, manifest.Image)
 	if err != nil {
@@ -258,6 +270,11 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	// copy before starting the server.
 	if err := syncWorkspaceOpenCodeConfig(manifest.HomeDir); err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+	if manifest.RuntimeEnabled(agent.DeepSeek) {
+		if err := syncWorkspaceDeepSeekConfig(manifest.HomeDir); err != nil {
+			return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+		}
 	}
 
 	mounts, err := openCodeMounts(l.cfg.UseLocalOpenCodeAuth)
@@ -285,7 +302,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	// Carry the workspace's manifest env plus the assigned OpenCode port into the
 	// container without mutating the persisted env map. The entrypoint binds the
 	// server to this port and the attach client connects to it.
-	env := make(map[string]string, len(manifest.Env)+len(workspaceEnv)+3)
+	env := make(map[string]string, len(manifest.Env)+len(workspaceEnv)+5)
 	for k, v := range manifest.Env {
 		env[k] = v
 	}
@@ -293,6 +310,10 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		env[k] = v
 	}
 	env[OpenCodePortEnv] = strconv.Itoa(manifest.OpenCodePort)
+	if manifest.RuntimeEnabled(agent.DeepSeek) {
+		env[DeepSeekPortEnv] = strconv.Itoa(manifest.DeepSeekPort)
+		env["DSH_HOME"] = openCodeHomeDir + "/.config/deepseek"
+	}
 	env[workspaceEnvKeysEnv] = l.cfg.WorkspaceEnvKeys()
 	if extraCAFingerprint != "" {
 		env[extraCACertificateFingerprintEnv] = extraCAFingerprint
@@ -390,6 +411,27 @@ func (l Lifecycle) ensureOpenCodePort(summary Summary) (int, error) {
 		return 0, err
 	}
 	slog.Info("assigned OpenCode port to workspace", "workspace", onDisk.Name, "port", port)
+	return port, nil
+}
+
+func (l Lifecycle) ensureDeepSeekPort(summary Summary) (int, error) {
+	path := filepath.Join(summary.Path, ManifestFile)
+	onDisk, err := LoadManifest(path)
+	if err != nil {
+		return 0, fmt.Errorf("load workspace manifest for DeepSeek port: %w", err)
+	}
+	if onDisk.DeepSeekPort != 0 {
+		return onDisk.DeepSeekPort, nil
+	}
+	port, err := l.registry.allocateRuntimePort(onDisk.OpenCodePort)
+	if err != nil {
+		return 0, err
+	}
+	onDisk.DeepSeekPort = port
+	if err := SaveManifest(path, onDisk); err != nil {
+		return 0, err
+	}
+	slog.Info("assigned DeepSeek port to workspace", "workspace", onDisk.Name, "port", port)
 	return port, nil
 }
 
@@ -514,9 +556,17 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 	return l.driver.StopContainer(ctx, name)
 }
 
-// UpdateOpenCode upgrades OpenCode to the latest npm release inside the
-// workspace container and restarts it so the new binary becomes the running
-// server. It returns the resulting OpenCode version.
+type RuntimeVersions struct {
+	OpenCode string
+	DeepSeek string
+	ACP      string
+	PNPM     string
+}
+
+// UpdateRuntimes upgrades OpenCode and the DeepSeek Harness runtime stack to
+// their latest npm releases inside the workspace container, then restarts it so
+// the OpenCode server reloads. The DSH stack is updated even when disabled for a
+// specific workspace, keeping the shared workspace image ready for later enable.
 //
 // OpenCode must be idle: the TUI only invokes this when no task is running, so a
 // restart cannot interrupt active work. OpenCode is installed globally under
@@ -524,34 +574,69 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 // container's main process is the unprivileged workspace user. A stop/start
 // restart preserves the container's writable layer, so the freshly installed
 // package survives and the persistent `opencode serve` process reloads it.
-func (l Lifecycle) UpdateOpenCode(ctx context.Context, summary Summary) (string, error) {
+func (l Lifecycle) UpdateRuntimes(ctx context.Context, summary Summary) (RuntimeVersions, error) {
 	name := summary.Manifest.ContainerName
-	slog.Info("updating OpenCode in workspace", "workspace", summary.Manifest.Name, "container", name)
+	slog.Info("updating agent runtimes in workspace", "workspace", summary.Manifest.Name, "container", name)
 
 	// The container must be running to exec the upgrade into it.
 	if err := l.EnsureStarted(ctx, summary); err != nil {
-		return "", err
+		return RuntimeVersions{}, err
 	}
 
-	if _, err := l.driver.ExecOutputAs(ctx, name, "0", []string{"npm", "install", "-g", "opencode-ai@latest"}); err != nil {
-		return "", fmt.Errorf("update OpenCode: %w", err)
+	packages := []string{
+		"opencode-ai@latest",
+		"@deepseek-ai/dsh@latest",
+		"@openma/deepseek-harness-acp@latest",
+		"pnpm@latest",
+	}
+	args := append([]string{"npm", "install", "-g"}, packages...)
+	if _, err := l.driver.ExecOutputAs(ctx, name, "0", args); err != nil {
+		return RuntimeVersions{}, fmt.Errorf("update agent runtimes: %w", err)
 	}
 
-	version, err := l.openCodeVersion(ctx, name)
+	versions, err := l.runtimeVersions(ctx, name)
 	if err != nil {
-		return "", err
+		return RuntimeVersions{}, err
 	}
 
-	slog.Debug("restarting container after OpenCode update", "workspace", summary.Manifest.Name, "container", name, "version", version)
+	slog.Debug("restarting container after runtime update", "workspace", summary.Manifest.Name, "container", name, "opencode", versions.OpenCode, "dsh", versions.DeepSeek)
 	if err := l.driver.StopContainer(ctx, name); err != nil {
-		return "", fmt.Errorf("restart after update: stop container: %w", err)
+		return RuntimeVersions{}, fmt.Errorf("restart after update: stop container: %w", err)
 	}
 	if err := l.driver.StartContainer(ctx, name); err != nil {
-		return "", fmt.Errorf("restart after update: start container: %w", err)
+		return RuntimeVersions{}, fmt.Errorf("restart after update: start container: %w", err)
 	}
 
-	slog.Info("OpenCode updated in workspace", "workspace", summary.Manifest.Name, "container", name, "version", version)
-	return version, nil
+	slog.Info("agent runtimes updated in workspace", "workspace", summary.Manifest.Name, "container", name, "opencode", versions.OpenCode, "dsh", versions.DeepSeek, "acp", versions.ACP, "pnpm", versions.PNPM)
+	return versions, nil
+}
+
+func (l Lifecycle) runtimeVersions(ctx context.Context, containerName string) (RuntimeVersions, error) {
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{"OpenCode", []string{"opencode", "--version"}},
+		{"DeepSeek Harness", []string{"dsh", "--version"}},
+		{"DeepSeek ACP adapter", []string{"dsh-acp", "--version"}},
+		{"pnpm", []string{"pnpm", "--version"}},
+	}
+	versions := make([]string, 0, len(commands))
+	for _, command := range commands {
+		output, err := l.driver.ExecOutput(ctx, containerName, command.args)
+		if err != nil {
+			return RuntimeVersions{}, fmt.Errorf("read %s version: %w", command.name, err)
+		}
+		value := strings.TrimSpace(string(output))
+		if i := strings.IndexByte(value, '\n'); i >= 0 {
+			value = strings.TrimSpace(value[:i])
+		}
+		if value == "" {
+			value = "unknown"
+		}
+		versions = append(versions, value)
+	}
+	return RuntimeVersions{OpenCode: versions[0], DeepSeek: versions[1], ACP: versions[2], PNPM: versions[3]}, nil
 }
 
 // OpenCodeVersion returns the OpenCode version installed in the workspace's
@@ -601,12 +686,27 @@ func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {
 }
 
 func (l Lifecycle) AttachCommand(ctx context.Context, summary Summary) (*exec.Cmd, error) {
-	slog.Info("attaching to workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
+	return l.AttachRuntimeCommand(ctx, summary, summary.Manifest.EffectiveDefaultRuntime())
+}
+
+func (l Lifecycle) AttachRuntimeCommand(ctx context.Context, summary Summary, runtimeName string) (*exec.Cmd, error) {
+	if !summary.Manifest.RuntimeEnabled(runtimeName) {
+		return nil, fmt.Errorf("agent runtime %q is not enabled for workspace %q", runtimeName, summary.Manifest.Name)
+	}
+	provider, err := l.agents.Get(runtimeName)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("attaching to workspace runtime", "workspace", summary.Manifest.Name, "runtime", runtimeName, "container", summary.Manifest.ContainerName)
 	if err := l.ensureCurrentRunning(ctx, summary); err != nil {
 		return nil, err
 	}
 
-	return l.driver.ExecCommand(summary.Manifest.ContainerName, openCodeSessionCommand()), nil
+	args, err := provider.AttachCommand()
+	if err != nil {
+		return nil, err
+	}
+	return l.driver.ExecCommand(summary.Manifest.ContainerName, args), nil
 }
 
 // ensureCurrentRunning converges the workspace before we exec into it so changes
@@ -661,6 +761,15 @@ func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, sp
 		return true
 	}
 
+	wantDeepSeekPort := ""
+	if manifest.RuntimeEnabled(agent.DeepSeek) {
+		wantDeepSeekPort = strconv.Itoa(manifest.DeepSeekPort)
+	}
+	if rc.Env[DeepSeekPortEnv] != wantDeepSeekPort {
+		slog.Debug("container DeepSeek port differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName, "have", rc.Env[DeepSeekPortEnv], "want", wantDeepSeekPort)
+		return true
+	}
+
 	if rc.Env[extraCACertificateFingerprintEnv] != spec.Env[extraCACertificateFingerprintEnv] {
 		slog.Debug("container extra CA certificate differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
 		return true
@@ -681,7 +790,11 @@ func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, sp
 }
 
 func (l Lifecycle) Attach(ctx context.Context, summary Summary) (tea.Cmd, error) {
-	cmd, err := l.AttachCommand(ctx, summary)
+	return l.AttachRuntime(ctx, summary, summary.Manifest.EffectiveDefaultRuntime())
+}
+
+func (l Lifecycle) AttachRuntime(ctx context.Context, summary Summary, runtimeName string) (tea.Cmd, error) {
+	cmd, err := l.AttachRuntimeCommand(ctx, summary, runtimeName)
 	if err != nil {
 		return nil, err
 	}
@@ -731,10 +844,17 @@ func (l Lifecycle) RunCommand(ctx context.Context, summary Summary, prompt strin
 		return nil, fmt.Errorf("run requires a non-empty prompt")
 	}
 	slog.Info("headless run in workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
+	provider, err := l.agents.Get(summary.Manifest.EffectiveDefaultRuntime())
+	if err != nil {
+		return nil, err
+	}
+	argv, err := provider.RunCommand(prompt)
+	if err != nil {
+		return nil, err
+	}
 	if err := l.EnsureStarted(ctx, summary); err != nil {
 		return nil, err
 	}
-	argv := []string{"opencode", "run", "--dir", runtime.ContainerWorkspaceDir, prompt}
 	return l.driver.ExecCommand(summary.Manifest.ContainerName, argv), nil
 }
 
@@ -832,7 +952,9 @@ func openCodeServeCommand() []string {
 // issue. The wrapper script waits for the server and picks --continue when a
 // session already exists.
 func openCodeSessionCommand() []string {
-	return []string{"/usr/local/bin/opencode-manager-attach"}
+	provider, _ := agent.NewRegistry().Get(agent.OpenCode)
+	args, _ := provider.AttachCommand()
+	return args
 }
 
 // TokenUsage is a synthesis of OpenCode token usage for a workspace, as
@@ -1017,7 +1139,12 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 // Revision 11: make the passwordless sudoers rule explicit for target user and
 // group with (ALL:ALL), and repeat it in the workspace image layer so older
 // cached base images cannot reintroduce password prompts.
-const baseImageRevision = 11
+//
+// Revision 12: install pinned DeepSeek Harness and ACP adapter binaries.
+// Revision 13: export the persistent DeepSeek Harness home from the image.
+// Revision 14: install pinned pnpm for synchronized DSH profile dependencies.
+// Revision 15: remove the terminal ACP client and use DSH Web profiles.
+const baseImageRevision = 15
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {

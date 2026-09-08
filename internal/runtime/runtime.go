@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -31,7 +32,7 @@ const (
 // directly, and the runtime materializes this directory to a temp dir and runs the
 // container builder against it (see writeBuildContext).
 //
-//go:embed buildcontext
+//go:embed buildcontext/Dockerfile buildcontext/Dockerfile.overlay buildcontext/Dockerfile.workspace buildcontext/opencode-manager-attach buildcontext/opencode-manager-entrypoint buildcontext/dsh-tui/package.json buildcontext/dsh-tui/bun.lock buildcontext/dsh-tui/tsconfig.json buildcontext/dsh-tui/README.md buildcontext/dsh-tui/AGENTS.md buildcontext/dsh-tui/dsh-tui buildcontext/dsh-tui/src/* buildcontext/dsh-tui/scripts/* buildcontext/dsh-tui/docs/*
 var buildContextFS embed.FS
 
 // Build context file names.
@@ -56,31 +57,41 @@ const EntrypointPath = "/usr/local/bin/" + entrypointScriptName
 // Dockerfile.workspace and the --workdir used for container creation.
 const ContainerWorkspaceDir = "/home/debian/workspace"
 
-// writeBuildContext materializes the embedded build context (Dockerfiles +
-// scripts) into dir so the container builder can run against it. The binary ships
-// these files embedded, so they must be written to disk before a build.
+// ContainerHomeDir is the workspace user's persistent home directory.
+const ContainerHomeDir = "/home/debian"
+
+// writeBuildContext materializes the embedded build context into dir so the
+// container builder can run against it. The binary ships these files embedded,
+// including dsh-tui, so they must be written to disk before a build.
 func writeBuildContext(dir string) error {
-	entries, err := buildContextFS.ReadDir("buildcontext")
-	if err != nil {
-		return fmt.Errorf("read embedded build context: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		data, err := buildContextFS.ReadFile("buildcontext/" + entry.Name())
+	return fs.WalkDir(buildContextFS, "buildcontext", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("read embedded %q: %w", entry.Name(), err)
+			return err
+		}
+		if path == "buildcontext" {
+			return nil
+		}
+		rel, err := filepath.Rel("buildcontext", path)
+		if err != nil {
+			return fmt.Errorf("resolve embedded build context path %q: %w", path, err)
+		}
+		destination := filepath.Join(dir, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		data, err := buildContextFS.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read embedded %q: %w", rel, err)
 		}
 		mode := os.FileMode(0o644)
-		if entry.Name() == attachScriptName || entry.Name() == entrypointScriptName {
+		if filepath.Base(rel) == attachScriptName || filepath.Base(rel) == entrypointScriptName || filepath.Base(rel) == "dsh-tui" {
 			mode = 0o755
 		}
-		if err := os.WriteFile(filepath.Join(dir, entry.Name()), data, mode); err != nil {
-			return fmt.Errorf("write build context file %q: %w", entry.Name(), err)
+		if err := os.WriteFile(destination, data, mode); err != nil {
+			return fmt.Errorf("write build context file %q: %w", rel, err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // baseBuildArgs returns the Dockerfile to use and the --build-arg pairs for a
@@ -570,8 +581,9 @@ func (d CLIDriver) ExecOutputAs(ctx context.Context, name, user string, command 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		slog.Debug("container exec failed", "runtime", d.binary, "container", name, "command", command, "error", err, "stderr", strings.TrimSpace(stderr.String()))
-		return nil, fmt.Errorf("%s exec %s: %w: %s", d.binary, name, err, strings.TrimSpace(stderr.String()))
+		output := strings.TrimSpace(stdout.String() + stderr.String())
+		slog.Debug("container exec failed", "runtime", d.binary, "container", name, "command", command, "error", err, "output", output)
+		return nil, fmt.Errorf("%s exec %s: %w: %s", d.binary, name, err, output)
 	}
 
 	return stdout.Bytes(), nil

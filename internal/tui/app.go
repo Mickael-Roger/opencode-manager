@@ -21,6 +21,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/module"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
@@ -62,8 +63,9 @@ type model struct {
 	// ignores every key except quit, so a workspace can't be created against a
 	// base image that does not exist yet. baseImageErr holds the build failure,
 	// if any, so the overlay can surface it instead of spinning forever.
-	baseImageReady bool
-	baseImageErr   string
+	baseImageReady       bool
+	baseImageErr         string
+	compatibilityWarning string
 	// baseSpinnerFrame advances on baseSpinnerTickMsg to animate the building
 	// indicator; it only ticks while the base image is still being built.
 	baseSpinnerFrame int
@@ -104,14 +106,23 @@ type model struct {
 	templateCreateMode bool
 	templateCreateName string
 
-	// New Workspace dialog template selector: createTemplates are the templates
+	// New Workspace dialog selectors: createDefaultRuntime is always shown;
+	// createTemplates are optional templates shown below it.
 	// available to optionally seed the workspace, shown as an inline selector under
 	// the name field. createTemplatePos == 0 means "no template"; i means
 	// createTemplates[i-1]. createFocus tracks which dialog element has focus (see
 	// the createFocus* constants).
-	createTemplates   []workspace.Template
-	createTemplatePos int
-	createFocus       int
+	createTemplates      []workspace.Template
+	createTemplatePos    int
+	createDefaultRuntime string
+	createFocus          int
+
+	// attach picker dialog (Ctrl+O): choose which agent runtime to attach with.
+	// attachPickChoices holds the selected workspace's enabled runtimes and
+	// attachPickCursor the highlighted row, preseeded with the default runtime.
+	attachPickMode    bool
+	attachPickChoices []string
+	attachPickCursor  int
 
 	// installing holds workspaces whose module install/uninstall job is still
 	// running. Interactive container access (attach/shell) is frozen for these
@@ -205,6 +216,7 @@ type action struct {
 
 var actions = []action{
 	{Key: "", Cmd: "attach", Desc: "Attach"},
+	{Key: "ctrl+o", Cmd: "attach-pick", Desc: "Attach with…"},
 	{Key: "s", Cmd: "shell", Desc: "Shell"},
 	{Key: "t", Cmd: "toggle", Desc: "Start/Stop"},
 	{Key: "d", Cmd: "describe", Desc: "Describe"},
@@ -343,9 +355,9 @@ type provisionWorkspaceMsg struct {
 }
 
 type updateActionMsg struct {
-	name    string
-	version string
-	err     error
+	name     string
+	versions workspace.RuntimeVersions
+	err      error
 }
 
 type baseImageReadyMsg struct {
@@ -492,21 +504,22 @@ func newModel(cfg config.Config) model {
 	}
 
 	return model{
-		cfg:              cfg,
-		registry:         workspace.NewRegistry(cfg),
-		templateRegistry: workspace.NewTemplateRegistry(cfg),
-		lifecycle:        lifecycle,
-		lifecycleErr:     lifecycleErr,
-		statuses:         map[string]workspace.Status{},
-		statusRecency:    map[string]uint64{},
-		tokens:           map[string]tokenState{},
-		versions:         map[string]versionState{},
-		installing:       map[string]bool{},
-		provisioning:     map[string]bool{},
-		updating:         map[string]bool{},
-		width:            100,
-		height:           30,
-		message:          "Creating the base image...",
+		cfg:                  cfg,
+		registry:             workspace.NewRegistry(cfg),
+		templateRegistry:     workspace.NewTemplateRegistry(cfg),
+		lifecycle:            lifecycle,
+		lifecycleErr:         lifecycleErr,
+		statuses:             map[string]workspace.Status{},
+		statusRecency:        map[string]uint64{},
+		tokens:               map[string]tokenState{},
+		versions:             map[string]versionState{},
+		installing:           map[string]bool{},
+		provisioning:         map[string]bool{},
+		updating:             map[string]bool{},
+		width:                100,
+		height:               30,
+		message:              "Creating the base image...",
+		compatibilityWarning: config.BaseImageCompatibilityWarning(appVersion, cfg.BaseImage.Name),
 	}
 }
 
@@ -646,12 +659,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateActionMsg:
 		delete(m.updating, msg.name)
 		if msg.err != nil {
-			slog.Error("OpenCode update failed", "workspace", msg.name, "error", msg.err)
-			m.showError("Update OpenCode", fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err))
+			slog.Error("runtime update failed", "workspace", msg.name, "error", msg.err)
+			m.showError("Update Agent Runtimes", fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err))
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
-		slog.Info("OpenCode updated", "workspace", msg.name, "version", msg.version)
-		m.message = fmt.Sprintf("OpenCode updated to %s in %s.", msg.version, msg.name)
+		slog.Info("agent runtimes updated", "workspace", msg.name, "opencode", msg.versions.OpenCode, "dsh", msg.versions.DeepSeek)
+		m.message = fmt.Sprintf("Updated agent runtimes in %s: OpenCode %s, DSH %s.", msg.name, msg.versions.OpenCode, msg.versions.DeepSeek)
 		delete(m.versions, msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case editApplyMsg:
@@ -675,6 +688,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.baseImageReady = true
 		m.baseImageErr = ""
 		m.message = "Base image ready. Press : for commands, / to filter, ? for help."
+		if m.compatibilityWarning != "" {
+			m.message = m.compatibilityWarning
+		}
 		return m, nil
 	case attachReadyMsg:
 		if msg.err != nil {
@@ -808,6 +824,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.createMode {
 		return m.updateCreate(msg)
+	}
+	if m.attachPickMode {
+		return m.updateAttachPick(msg)
 	}
 	if m.templateCreateMode {
 		return m.updateTemplateCreate(msg)
@@ -982,6 +1001,7 @@ func (m model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // element is skipped when no templates exist (see createFocusOrder).
 const (
 	createFocusName = iota
+	createFocusRuntime
 	createFocusTemplate
 	createFocusOK
 	createFocusCancel
@@ -991,9 +1011,9 @@ const (
 // state: the template selector is included only when templates are available.
 func (m model) createFocusOrder() []int {
 	if len(m.createTemplates) > 0 {
-		return []int{createFocusName, createFocusTemplate, createFocusOK, createFocusCancel}
+		return []int{createFocusName, createFocusRuntime, createFocusTemplate, createFocusOK, createFocusCancel}
 	}
-	return []int{createFocusName, createFocusOK, createFocusCancel}
+	return []int{createFocusName, createFocusRuntime, createFocusOK, createFocusCancel}
 }
 
 // moveCreateFocus advances the dialog focus by delta (+1 next, -1 previous),
@@ -1024,6 +1044,14 @@ func (m *model) cycleCreateTemplate(delta int) {
 	m.createTemplatePos = pos
 }
 
+func (m *model) cycleCreateDefaultRuntime() {
+	if m.createDefaultRuntime == agent.DeepSeek {
+		m.createDefaultRuntime = agent.OpenCode
+		return
+	}
+	m.createDefaultRuntime = agent.DeepSeek
+}
+
 func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -1038,12 +1066,18 @@ func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCreateFocus(-1)
 		return m, nil
 	case "left":
-		if m.createFocus == createFocusTemplate {
+		switch m.createFocus {
+		case createFocusRuntime:
+			m.cycleCreateDefaultRuntime()
+		case createFocusTemplate:
 			m.cycleCreateTemplate(-1)
 		}
 		return m, nil
 	case "right":
-		if m.createFocus == createFocusTemplate {
+		switch m.createFocus {
+		case createFocusRuntime:
+			m.cycleCreateDefaultRuntime()
+		case createFocusTemplate:
 			m.cycleCreateTemplate(1)
 		}
 		return m, nil
@@ -1058,7 +1092,7 @@ func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		name := strings.TrimSpace(m.createName)
 		tmpl := m.selectedCreateTemplate()
-		return m.createWorkspace(name, tmpl)
+		return m.createWorkspace(name, tmpl, m.createDefaultRuntime)
 	case "backspace", "ctrl+h":
 		if m.createFocus == createFocusName && len(m.createName) > 0 {
 			m.createName = m.createName[:len(m.createName)-1]
@@ -1090,6 +1124,7 @@ func (m *model) cancelCreate() {
 	m.createName = ""
 	m.createTemplates = nil
 	m.createTemplatePos = 0
+	m.createDefaultRuntime = agent.OpenCode
 	m.createFocus = createFocusName
 	m.message = "Create cancelled."
 }
@@ -1148,13 +1183,13 @@ func (m model) validateCreateName() (string, bool) {
 	return "", true
 }
 
-func (m model) createWorkspace(name string, tmpl *workspace.Template) (tea.Model, tea.Cmd) {
+func (m model) createWorkspace(name string, tmpl *workspace.Template, defaultRuntime string) (tea.Model, tea.Cmd) {
 	if name == "" {
 		m.showError("Create Workspace", "Workspace name is required.")
 		return m, nil
 	}
 
-	result, err := m.registry.Create(name)
+	result, err := m.registry.CreateWithOptions(name, workspace.CreateOptions{DefaultRuntime: defaultRuntime})
 	if err != nil {
 		slog.Error("failed to create workspace", "name", name, "error", err)
 		m.showError("Create Workspace", fmt.Sprintf("Create failed: %v", err))
@@ -1180,6 +1215,7 @@ func (m model) createWorkspace(name string, tmpl *workspace.Template) (tea.Model
 	m.createName = ""
 	m.createTemplates = nil
 	m.createTemplatePos = 0
+	m.createDefaultRuntime = agent.OpenCode
 	m.createFocus = createFocusName
 	if tmpl != nil && len(tmpl.Modules) > 0 {
 		m.message = fmt.Sprintf("Created workspace %s from template %q. Building image, starting container, installing modules...", result.Manifest.Name, tmpl.Name)
@@ -1267,6 +1303,108 @@ func (m model) attachSelected() (tea.Model, tea.Cmd) {
 		m.message = "Attach requires a selected workspace."
 		return m, nil
 	}
+	return m.attachRuntimeSelected(selected.Manifest.EffectiveDefaultRuntime())
+}
+
+// openAttachPicker opens the Ctrl+O runtime chooser for the selected workspace,
+// listing its enabled runtimes with the default preselected.
+func (m model) openAttachPicker() (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Attach requires a selected workspace."
+		return m, nil
+	}
+	choices := selected.Manifest.EnabledRuntimeNames()
+	if len(choices) == 0 {
+		m.message = selected.Manifest.Name + " has no enabled agent runtime."
+		return m, nil
+	}
+	def := selected.Manifest.EffectiveDefaultRuntime()
+	cursor := 0
+	for i, name := range choices {
+		if name == def {
+			cursor = i
+			break
+		}
+	}
+	m.attachPickMode = true
+	m.attachPickChoices = choices
+	m.attachPickCursor = cursor
+	m.message = "Pick the runtime to attach with. Enter to attach, Esc to cancel."
+	return m, nil
+}
+
+func (m model) updateAttachPick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.attachPickMode = false
+		m.message = ""
+	case "up", "k":
+		if m.attachPickCursor > 0 {
+			m.attachPickCursor--
+		}
+	case "down", "j":
+		if m.attachPickCursor < len(m.attachPickChoices)-1 {
+			m.attachPickCursor++
+		}
+	case "enter":
+		if m.attachPickCursor >= len(m.attachPickChoices) {
+			m.attachPickMode = false
+			return m, nil
+		}
+		runtimeName := m.attachPickChoices[m.attachPickCursor]
+		m.attachPickMode = false
+		return m.attachRuntimeSelected(runtimeName)
+	}
+	return m, nil
+}
+
+// runtimeDisplayName resolves a runtime name to its display label, falling back
+// to the raw name for unknown runtimes.
+func runtimeDisplayName(name string) string {
+	provider, err := agent.NewRegistry().Get(name)
+	if err != nil {
+		return name
+	}
+	return provider.DisplayName()
+}
+
+func (m model) renderAttachPicker() string {
+	selected, _ := m.selectedWorkspace()
+	def := selected.Manifest.EffectiveDefaultRuntime()
+
+	rows := make([]string, 0, len(m.attachPickChoices))
+	for i, name := range m.attachPickChoices {
+		suffix := ""
+		if name == def {
+			suffix = mutedStyle.Render("  (default)")
+		}
+		label := "  " + runtimeDisplayName(name) + suffix
+		if i == m.attachPickCursor {
+			label = cursorStyle.Render("› "+runtimeDisplayName(name)) + suffix
+		}
+		rows = append(rows, label)
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		dialogText.Render("Attach "+selected.Manifest.Name+" with:"),
+		"",
+		lipgloss.JoinVertical(lipgloss.Left, rows...),
+		"",
+		mutedStyle.Render("↑/↓ move · Enter attach · Esc cancel"),
+	)
+	return k9sDialog("Attach", content, colBorder)
+}
+
+func (m model) attachRuntimeSelected(runtimeName string) (tea.Model, tea.Cmd) {
+	selected, ok := m.selectedWorkspace()
+	if !ok {
+		m.message = "Attach requires a selected workspace."
+		return m, nil
+	}
 	if m.lifecycleErr != "" {
 		m.showError("Attach Workspace", "Attach failed: "+m.lifecycleErr)
 		return m, nil
@@ -1280,7 +1418,7 @@ func (m model) attachSelected() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		cmd, err := m.lifecycle.Attach(ctx, selected)
+		cmd, err := m.lifecycle.AttachRuntime(ctx, selected, runtimeName)
 		return attachReadyMsg{noun: "Attach", name: selected.Manifest.Name, cmd: cmd, err: err}
 	}
 }
@@ -1344,7 +1482,7 @@ func (m model) startSelected() (tea.Model, tea.Cmd) {
 	}
 }
 
-// updateSelected upgrades OpenCode inside the selected workspace container. It
+// updateSelected upgrades the agent runtimes inside the selected workspace container. It
 // is gated on OpenCode being idle: while a task is running (the agent is
 // generating) or blocked on an approval prompt, the update is refused so the
 // post-update container restart cannot interrupt active work.
@@ -1355,7 +1493,7 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.showError("Update OpenCode", "Update failed: "+m.lifecycleErr)
+		m.showError("Update Agent Runtimes", "Update failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
@@ -1370,12 +1508,12 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 		m.updating = map[string]bool{}
 	}
 	m.updating[name] = true
-	m.message = "Updating OpenCode in " + name + " (this restarts the container)..."
+	m.message = "Updating agent runtimes in " + name + " (this restarts the container)..."
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		version, err := m.lifecycle.UpdateOpenCode(ctx, selected)
-		return updateActionMsg{name: name, version: version, err: err}
+		versions, err := m.lifecycle.UpdateRuntimes(ctx, selected)
+		return updateActionMsg{name: name, versions: versions, err: err}
 	}
 }
 
@@ -1403,11 +1541,14 @@ func (m model) executeCommandName(command string) (tea.Model, tea.Cmd) {
 		return m.stopSelected()
 	case "attach":
 		return m.attachSelected()
+	case "attach-pick":
+		return m.openAttachPicker()
 	case "create":
 		m.createMode = true
 		m.createName = ""
 		m.createFocus = createFocusName
 		m.createTemplatePos = 0
+		m.createDefaultRuntime = agent.OpenCode
 		// Load templates so the dialog can offer them as an optional selector under
 		// the name. A load failure is non-fatal: the dialog just omits the selector.
 		if templates, err := m.templateRegistry.List(); err == nil {
@@ -1507,6 +1648,9 @@ func (m model) View() string {
 	}
 	if m.createMode {
 		view = overlayCentered(view, m.renderCreatePrompt(), width, height)
+	}
+	if m.attachPickMode {
+		view = overlayCentered(view, m.renderAttachPicker(), width, height)
 	}
 	if m.templateCreateMode {
 		view = overlayCentered(view, m.renderTemplateCreatePrompt(), width, height)
@@ -1672,12 +1816,13 @@ func (m model) renderMenu() string {
 		{"/", "Filter"},
 		{"?", "Help"},
 		{"↵", "Attach"},
+		{"^o", "Attach with…"},
 		{"s", "Shell"},
 		{"t", "Start/Stop"},
 		{"d", "Describe"},
 		{"l", "Logs"},
 		{"e", "Edit"},
-		{"u", "Update"},
+		{"u", "Update runtimes"},
 		{"c", "Create"},
 		{"^d", "Delete"},
 		{"q", "Quit"},
@@ -1702,11 +1847,22 @@ func (m model) renderMenu() string {
 		lines[i] = menuKeyStyle.Render(fmt.Sprintf("<%s>", e.key)) + " " + menuTextStyle.Render(e.desc)
 	}
 
-	half := (len(lines) + 1) / 2
-	col1 := lipgloss.JoinVertical(lipgloss.Left, lines[:half]...)
-	col2 := lipgloss.JoinVertical(lipgloss.Left, lines[half:]...)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, col1, "   ", col2)
+	// Keep each column at most maxMenuRows tall; a third column appears when the
+	// entries no longer fit two.
+	const maxMenuRows = 6
+	cols := (len(lines) + maxMenuRows - 1) / maxMenuRows
+	perCol := (len(lines) + cols - 1) / cols
+	menu := ""
+	for start := 0; start < len(lines); start += perCol {
+		end := min(start+perCol, len(lines))
+		column := lipgloss.JoinVertical(lipgloss.Left, lines[start:end]...)
+		if menu == "" {
+			menu = column
+			continue
+		}
+		menu = lipgloss.JoinHorizontal(lipgloss.Top, menu, "   ", column)
+	}
+	return menu
 }
 
 func (m model) renderTable(width, height int) string {
@@ -1911,13 +2067,14 @@ func (m model) renderHelp() string {
 		{"k / ↑", "up"},
 		{"g / G", "top / bottom"},
 		{"^f / ^b", "page down / up"},
-		{"↵", "attach to workspace"},
+		{"↵", "attach to workspace (default runtime)"},
+		{"^o", "pick the runtime, then attach"},
 		{"s", "shell into container"},
 		{"t", "start / stop container"},
 		{"d", "describe"},
 		{"l", "view session logs"},
 		{"e", "edit"},
-		{"u", "update OpenCode"},
+		{"u", "update agent runtimes"},
 		{"c", "create"},
 		{"^d", "delete"},
 		{"q / ^c", "quit"},
@@ -1967,6 +2124,8 @@ func (m model) describeFields(selected workspace.Summary) []describeField {
 		{key: "Status", value: statusText, color: statusColor},
 		{key: "Activity", value: activityText, color: activityColor},
 		{key: "Runtime", value: manifest.Runtime},
+		{key: "Default agent", value: manifest.EffectiveDefaultRuntime()},
+		{key: "Agent runtimes", value: strings.Join(manifest.EnabledRuntimeNames(), ", ")},
 		{key: "Image", value: manifest.ImageName},
 		{key: "Container", value: manifest.ContainerName},
 		{key: "Home", value: manifest.HomeDir},
@@ -2272,7 +2431,7 @@ func (m model) renderCreatePrompt() string {
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(nameBorder).
 		Padding(0, 1).
-		Width(34).
+		Width(30).
 		Render(nameText)
 
 	reason, ok := m.validateCreateName()
@@ -2282,23 +2441,19 @@ func (m model) renderCreatePrompt() string {
 		hint = errorStyle.Render(reason)
 	}
 
+	selectorRows := []string{m.renderCreateRuntimeSelector()}
+	if len(m.createTemplates) > 0 {
+		selectorRows = append(selectorRows, m.renderCreateTemplateSelector())
+	}
+
 	parts := []string{
 		dialogText.Render("Enter a name for the new workspace."),
 		"",
 		dialogText.Render("Name"),
 		field,
 		hint,
-	}
-
-	// Optional template selector, shown only when templates exist.
-	if len(m.createTemplates) > 0 {
-		parts = append(parts,
-			dialogText.Render("Template (optional)"),
-			m.renderCreateTemplateSelector(),
-			"",
-		)
-	} else {
-		parts = append(parts, "")
+		lipgloss.JoinVertical(lipgloss.Left, selectorRows...),
+		"",
 	}
 
 	parts = append(parts, createDialogButtons(m.createFocus, ok))
@@ -2307,34 +2462,42 @@ func (m model) renderCreatePrompt() string {
 	return k9sDialog("New Workspace", content, colBorder)
 }
 
-// renderCreateTemplateSelector renders the inline ‹ name › template chooser under
-// the name field: ‹ / › arrows cycle through "None" plus each template. The box is
-// highlighted when the selector has focus.
+// createSelectorLabel pads a selector label ("Default runtime", "Template") so
+// the inline ‹ value › chips line up in a tidy column.
+func createSelectorLabel(label string) string {
+	return lipgloss.NewStyle().Width(len("Default runtime") + 2).Render(dialogText.Render(label))
+}
+
+func (m model) renderCreateRuntimeSelector() string {
+	label := "OpenCode"
+	if m.createDefaultRuntime == agent.DeepSeek {
+		label = "DeepSeek Harness"
+	}
+	return createSelectorLabel("Default runtime") + renderCreateChoice(label, m.createFocus == createFocusRuntime)
+}
+
+// renderCreateTemplateSelector renders the inline ‹ name › template chooser row:
+// ‹ / › arrows cycle through "None" plus each template.
 func (m model) renderCreateTemplateSelector() string {
 	label := "None"
 	if t := m.selectedCreateTemplate(); t != nil {
 		label = fmt.Sprintf("%s  (%d module%s)", t.Name, len(t.Modules), plural(len(t.Modules), "", "s"))
 	}
+	return createSelectorLabel("Template") + renderCreateChoice(label, m.createFocus == createFocusTemplate)
+}
 
-	focused := m.createFocus == createFocusTemplate
-	leftArrow := mutedStyle.Render("‹ ")
-	rightArrow := mutedStyle.Render(" ›")
-	value := dialogText.Render(label)
+// renderCreateChoice renders a compact inline ‹ value › selector. A focused chip
+// reuses the button focus look (black on dodgerblue) so the active control stays
+// obvious without a bulky bordered box.
+func renderCreateChoice(value string, focused bool) string {
 	if focused {
-		value = dialogLabel.Render(label)
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#000000")).
+			Background(colBorder).
+			Bold(true).
+			Render("‹ " + value + " ›")
 	}
-
-	border := colBorder
-	if focused {
-		border = colBorderFocus
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(border).
-		Padding(0, 1).
-		Width(34).
-		Align(lipgloss.Center).
-		Render(leftArrow + value + rightArrow)
+	return mutedStyle.Render("‹ ") + dialogText.Render(value) + mutedStyle.Render(" ›")
 }
 
 // createDialogButtons renders the create dialog's OK/Cancel row. OK is greyed

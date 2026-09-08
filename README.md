@@ -11,8 +11,8 @@
 ```
 
 > **`ocm` is k9s for [OpenCode](https://opencode.ai).**
-> One terminal dashboard to create, attach, edit, and tear down OpenCode
-> sessions — each one running in its own isolated, per-project container.
+> One terminal dashboard to create, attach, edit, and tear down coding-agent
+> workspaces, with OpenCode by default and optional DeepSeek Harness support.
 
 📖 **[Read the documentation](https://mickael-roger.github.io/opencode-manager/)** — installation, getting started, concepts, TUI/CLI guides, and modules.
 
@@ -101,12 +101,24 @@ ocm                              # launch the TUI dashboard
 ocm workspaces list              # list workspaces (alias: ocm ws ls)
 ocm workspaces attach <ws>       # attach to a workspace session
 ocm workspaces create <name> --template backend --start
+ocm workspaces create <name> --deepseek --start
+ocm workspaces attach <ws> --runtime deepseek
 ocm ws exec <ws> -- go test ./... # run a command in the sandbox
 ocm ws run <ws> --prompt "..."   # headless OpenCode run (CI/scripts)
 ```
 
 From the dashboard you create, attach, edit (`e`), stop, delete, and update
 workspaces — all from the keyboard.
+
+DeepSeek Harness is opt-in. OCM enables DSH's `web` profile per workspace,
+supervises its web server alongside OpenCode, and attaches through `dsh-tui` —
+a terminal client with the session stream, dynamic slash commands, a
+context-usage meter, an MCP status panel, and an AgentTeams task-DAG view.
+DSH configuration, credentials, and sessions persist in the workspace home.
+
+Shared non-secret DSH configuration is synchronized one way from
+`~/.config/opencode-manager/deepseek/` to DeepSeek-enabled workspaces. OAuth
+credentials and session state remain isolated per workspace.
 
 The CLI mirrors the dashboard with a `kubectl`-style `ocm <resource> <verb>`
 surface (`workspaces`/`ws`, `templates`/`tmpl`, `modules`/`mod`, plus `config`,

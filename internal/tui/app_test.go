@@ -10,6 +10,7 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
@@ -180,13 +181,13 @@ func updateTestModel(activity workspace.Activity) model {
 
 func TestCreateFocusOrderSkipsTemplateWhenNone(t *testing.T) {
 	m := model{}
-	if got := m.createFocusOrder(); len(got) != 3 {
-		t.Fatalf("focus order without templates = %v, want 3 elements (name, OK, cancel)", got)
+	if got := m.createFocusOrder(); len(got) != 4 {
+		t.Fatalf("focus order without templates = %v, want 4 elements (name, runtime, OK, cancel)", got)
 	}
 
 	m.createTemplates = []workspace.Template{{Name: "a"}}
-	if got := m.createFocusOrder(); len(got) != 4 {
-		t.Fatalf("focus order with templates = %v, want 4 elements", got)
+	if got := m.createFocusOrder(); len(got) != 5 {
+		t.Fatalf("focus order with templates = %v, want 5 elements", got)
 	}
 }
 
@@ -284,22 +285,26 @@ func TestWorkspaceOrderDoesNotReuseDeletedWorkspaceRecency(t *testing.T) {
 }
 
 func TestMoveCreateFocus(t *testing.T) {
-	// Without templates, Tab from the name field skips straight to OK.
+	// The runtime selector always follows the name field.
 	m := model{createFocus: createFocusName}
 	m.moveCreateFocus(1)
-	if m.createFocus != createFocusOK {
-		t.Fatalf("focus after move (no templates) = %d, want OK (%d)", m.createFocus, createFocusOK)
+	if m.createFocus != createFocusRuntime {
+		t.Fatalf("focus after move (no templates) = %d, want Runtime (%d)", m.createFocus, createFocusRuntime)
 	}
 	m.moveCreateFocus(-1)
 	if m.createFocus != createFocusName {
 		t.Fatalf("focus after move back = %d, want Name", m.createFocus)
 	}
 
-	// With templates, the selector sits between name and OK.
+	// With templates, runtime remains first, followed by the template selector.
 	m = model{createFocus: createFocusName, createTemplates: []workspace.Template{{Name: "a"}}}
 	m.moveCreateFocus(1)
+	if m.createFocus != createFocusRuntime {
+		t.Fatalf("focus after move (with templates) = %d, want Runtime (%d)", m.createFocus, createFocusRuntime)
+	}
+	m.moveCreateFocus(1)
 	if m.createFocus != createFocusTemplate {
-		t.Fatalf("focus after move (with templates) = %d, want Template (%d)", m.createFocus, createFocusTemplate)
+		t.Fatalf("second focus after move (with templates) = %d, want Template (%d)", m.createFocus, createFocusTemplate)
 	}
 
 	// Wrapping: previous from Name lands on the last element (Cancel).
@@ -307,6 +312,29 @@ func TestMoveCreateFocus(t *testing.T) {
 	m.moveCreateFocus(-1)
 	if m.createFocus != createFocusCancel {
 		t.Fatalf("focus wrapping backwards = %d, want Cancel", m.createFocus)
+	}
+}
+
+func TestCycleCreateDefaultRuntime(t *testing.T) {
+	m := model{createDefaultRuntime: agent.OpenCode}
+	m.cycleCreateDefaultRuntime()
+	if m.createDefaultRuntime != agent.DeepSeek {
+		t.Fatalf("runtime after one step = %q, want %q", m.createDefaultRuntime, agent.DeepSeek)
+	}
+	m.cycleCreateDefaultRuntime()
+	if m.createDefaultRuntime != agent.OpenCode {
+		t.Fatalf("runtime after two steps = %q, want %q", m.createDefaultRuntime, agent.OpenCode)
+	}
+}
+
+func TestNewModelWarnsWhenV2UsesPreV2ManagedBase(t *testing.T) {
+	original := appVersion
+	appVersion = "2.0.0"
+	t.Cleanup(func() { appVersion = original })
+
+	cfg := config.Config{BaseImage: config.BaseImageConfig{Name: "mroger78/ocm-base:1.9.9"}}
+	if got := newModel(cfg).compatibilityWarning; !strings.Contains(got, "does not include DeepSeek Harness") {
+		t.Fatalf("compatibility warning = %q", got)
 	}
 }
 
@@ -425,7 +453,7 @@ func TestUpdateDispatchedWhenIdle(t *testing.T) {
 		if cmd == nil {
 			t.Fatalf("activity %q: expected an update command", activity)
 		}
-		if msg := next.(model).message; !strings.Contains(msg, "Updating OpenCode") {
+		if msg := next.(model).message; !strings.Contains(msg, "Updating agent runtimes") {
 			t.Fatalf("activity %q: message = %q, want progress message", activity, msg)
 		}
 		if label, _ := next.(model).workspaceStatus(m.workspaces[0]); label != "updating" {
@@ -529,6 +557,15 @@ func TestActionsUseK9sBindings(t *testing.T) {
 	// Attach has no letter shortcut anymore; it is reached via Enter or :attach.
 	if key, ok := keys["attach"]; !ok || key != "" {
 		t.Fatalf("attach key = %q (present=%v), want empty", key, ok)
+	}
+	// Per-runtime attach goes through one picker instead of one key per harness.
+	if keys["attach-pick"] != "ctrl+o" {
+		t.Fatalf("runtime picker key = %q, want ctrl+o", keys["attach-pick"])
+	}
+	for _, cmd := range []string{"attach-opencode", "attach-deepseek"} {
+		if _, ok := keys[cmd]; ok {
+			t.Fatalf("action %q still exists; the picker replaced it", cmd)
+		}
 	}
 
 	// s opens a shell in the container (k9s uses s for shell).

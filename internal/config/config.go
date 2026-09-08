@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -39,6 +40,8 @@ const BaseImageRepository = "docker.io/mroger78/ocm-base"
 // locally.
 const DefaultBaseImage = BaseImageRepository + ":latest"
 
+var deepSeekBaseImageMinimumVersion = [3]int{2, 0, 0}
+
 // IsManagedBaseImage reports whether name refers to the published ocm-base image,
 // at any tag or digest. Such an image already embeds all required tools, so it
 // must only be pulled — never rebuilt and never have tools (re)installed on top.
@@ -54,6 +57,67 @@ func IsManagedBaseImage(name string) bool {
 		repo = repo[:i]
 	}
 	return strings.TrimPrefix(repo, "docker.io/") == strings.TrimPrefix(BaseImageRepository, "docker.io/")
+}
+
+// BaseImageCompatibilityWarning reports when a 2.x manager is explicitly
+// configured with an older published base image that predates DeepSeek Harness.
+// Floating tags and digests are intentionally not warned about: their version
+// cannot be determined from the reference alone.
+func BaseImageCompatibilityWarning(managerVersion, image string) string {
+	manager, ok := parseVersion(managerVersion)
+	if !ok || manager[0] != 2 || !IsManagedBaseImage(image) {
+		return ""
+	}
+	imageVersion, ok := managedBaseImageVersion(image)
+	if !ok || !versionLess(imageVersion, deepSeekBaseImageMinimumVersion) {
+		return ""
+	}
+	return fmt.Sprintf("WARNING: opencode-manager %s is configured to use %s, which predates 2.0.0 and does not include DeepSeek Harness. Use %s:2.0.0 or newer.", managerVersion, image, BaseImageRepository)
+}
+
+func managedBaseImageVersion(image string) ([3]int, bool) {
+	if strings.Contains(image, "@") {
+		return [3]int{}, false
+	}
+	colon := strings.LastIndexByte(image, ':')
+	if colon <= strings.LastIndexByte(image, '/') {
+		return [3]int{}, false
+	}
+	return parseVersion(image[colon+1:])
+}
+
+func parseVersion(value string) ([3]int, bool) {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var version [3]int
+	for i, part := range parts {
+		if part == "" {
+			return [3]int{}, false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return [3]int{}, false
+			}
+		}
+		var err error
+		version[i], err = strconv.Atoi(part)
+		if err != nil {
+			return [3]int{}, false
+		}
+	}
+	return version, true
+}
+
+func versionLess(a, b [3]int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }
 
 type Config struct {
@@ -199,6 +263,17 @@ func OpenCodeDir() (string, error) {
 	return filepath.Join(dir, "opencode"), nil
 }
 
+// DeepSeekDir returns the host-side DeepSeek Harness configuration copied into
+// DeepSeek-enabled workspaces. Runtime state and credentials remain local to
+// each workspace.
+func DeepSeekDir() (string, error) {
+	dir, err := GlobalDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "deepseek"), nil
+}
+
 // DataDir returns the opencode-manager data directory
 // (~/.local/share/opencode-manager). It holds workspaces and logs.
 func DataDir() (string, error) {
@@ -266,6 +341,11 @@ func EnsureGlobalConfig() error {
 		if err := ensureFile(path, content); err != nil {
 			return err
 		}
+	}
+
+	deepSeekDir := filepath.Join(dir, "deepseek")
+	if err := os.MkdirAll(deepSeekDir, 0o700); err != nil {
+		return fmt.Errorf("create shared DeepSeek directory %q: %w", deepSeekDir, err)
 	}
 
 	return nil
