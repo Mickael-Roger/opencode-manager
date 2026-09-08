@@ -36,6 +36,7 @@ function ensureConfig() {
     "useLocalOpenCodeAuth: false",
     "extraCACertificate: []",
     "workspaceEnv: {}",
+    "extraMounts: []",
     "baseImage:",
     "  name: docker.io/mroger78/ocm-base:latest",
     "  packages: []",

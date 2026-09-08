@@ -59,6 +59,41 @@ func TestLoadParsesHostNetwork(t *testing.T) {
 	}
 }
 
+func TestLoadParsesExtraMounts(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "shared")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, []byte("extraMounts:\n  - source: "+source+"\n    target: /home/debian/shared\n  - source: "+source+"\n    target: /opt/shared\n    readOnly: true\n"))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	want := []ExtraMount{{Source: source, Target: "/home/debian/shared"}, {Source: source, Target: "/opt/shared", ReadOnly: true}}
+	if !reflect.DeepEqual(cfg.ExtraMounts, want) {
+		t.Fatalf("ExtraMounts = %#v, want %#v", cfg.ExtraMounts, want)
+	}
+}
+
+func TestLoadRejectsInvalidExtraMount(t *testing.T) {
+	dir := t.TempDir()
+	cases := []string{
+		"extraMounts:\n  - source: relative\n    target: /opt/shared\n",
+		"extraMounts:\n  - source: " + dir + "\n    target: relative\n",
+		"extraMounts:\n  - source: " + dir + "\n    target: /home/debian\n",
+	}
+	for _, contents := range cases {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		writeFile(t, path, []byte(contents))
+		if _, err := Load(path); err == nil {
+			t.Fatalf("Load(%q) succeeded, want invalid extra mount error", contents)
+		}
+	}
+}
+
 func TestLoadParsesExtraCACertificate(t *testing.T) {
 	dir := t.TempDir()
 	certificate := filepath.Join(dir, "company-ca.crt")

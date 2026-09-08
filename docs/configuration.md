@@ -17,6 +17,7 @@ runtime: docker
 useLocalOpenCodeAuth: false
 extraCACertificate: []
 workspaceEnv: {}
+extraMounts: []
 hostNetwork: false
 runtimeArgs:
   - --dns
@@ -75,6 +76,27 @@ Every path must point to an existing, readable regular file. Certificate list or
 content changes take effect the next time a workspace starts; its container is
 recreated while the workspace home and module state are preserved. Existing
 single-path configurations remain supported.
+
+### `extraMounts`
+
+Optional bind mounts added to every workspace container. Each `source` is an
+absolute existing host path, and `target` is its absolute path inside the
+container. Mounts are read-write by default; set `readOnly: true` to prevent
+container writes.
+
+```yaml
+extraMounts:
+  - source: /home/user/projects/shared
+    target: /home/debian/shared
+  - source: /home/user/.ssh/known_hosts
+    target: /home/debian/.ssh/known_hosts
+    readOnly: true
+```
+
+The workspace home target (`/home/debian`) cannot be replaced. Changing a mount
+definition, including its source, target, or read-only setting, recreates each
+workspace container the next time OCM starts it. The workspace home and module
+state remain preserved.
 
 ### `hostNetwork`
 

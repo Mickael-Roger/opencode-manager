@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -301,6 +302,48 @@ func TestProvisionMountsExtraCACertificate(t *testing.T) {
 		}
 	}
 	t.Fatalf("extra CA mount not found in %#v", rec.created.Mounts)
+}
+
+func TestProvisionMountsExtraMounts(t *testing.T) {
+	rec := &specRecordingDriver{fakeDriver: &fakeDriver{}}
+	root := t.TempDir()
+	source := filepath.Join(root, "shared")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		WorkspaceRoot: root,
+		Runtime:       config.RuntimeDocker,
+		ExtraMounts: []config.ExtraMount{
+			{Source: source, Target: "/home/debian/shared"},
+			{Source: source, Target: "/opt/shared", ReadOnly: true},
+		},
+		BaseImage: config.BaseImageConfig{Name: "debian:stable-slim"},
+	}
+	l := Lifecycle{cfg: cfg, registry: NewRegistry(cfg), driver: rec}
+
+	created, err := l.registry.Create("demo")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, spec, err := l.provision(context.Background(), Summary{Manifest: created.Manifest, Path: created.Path}); err != nil {
+		t.Fatalf("provision: %v", err)
+	} else if spec.Env[extraMountsFingerprintEnv] == "" {
+		t.Fatalf("spec.Env[%s] should contain mount fingerprint", extraMountsFingerprintEnv)
+	}
+
+	for _, want := range []runtime.Mount{{Source: source, Target: "/home/debian/shared"}, {Source: source, Target: "/opt/shared", ReadOnly: true}} {
+		found := false
+		for _, mount := range rec.created.Mounts {
+			if mount == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("extra mount %#v not found in %#v", want, rec.created.Mounts)
+		}
+	}
 }
 
 func TestProvisionResolvesWorkspaceEnv(t *testing.T) {

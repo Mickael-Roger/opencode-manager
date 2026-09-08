@@ -130,6 +130,9 @@ type Config struct {
 	// WorkspaceEnv defines environment variables passed to every workspace
 	// container. Values may be literal or {env:HOST_VARIABLE} references.
 	WorkspaceEnv map[string]string `yaml:"workspaceEnv"`
+	// ExtraMounts bind host files or directories into every workspace container.
+	// ReadOnly defaults to false, making the mount read-write.
+	ExtraMounts []ExtraMount `yaml:"extraMounts"`
 	// HostNetwork shares the host's network namespace with each workspace
 	// container (docker/podman `--network host`) instead of giving it an isolated
 	// one. Off by default. Because every workspace then shares the host loopback,
@@ -163,6 +166,14 @@ type Config struct {
 	// home (WorkspaceDir/home) is left in place so its contents survive. Off by
 	// default, in which case a deleted workspace is removed entirely.
 	PreserveData bool `yaml:"preserveData"`
+}
+
+// ExtraMount is a host bind mount made available to every workspace container.
+// Source and Target must be absolute paths; ReadOnly selects a read-only mount.
+type ExtraMount struct {
+	Source   string `yaml:"source"`
+	Target   string `yaml:"target"`
+	ReadOnly bool   `yaml:"readOnly"`
 }
 
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -488,6 +499,26 @@ func (c Config) Validate() error {
 		}
 		if strings.HasPrefix(value, "{env:") && (!strings.HasSuffix(value, "}") || !environmentName.MatchString(strings.TrimSuffix(strings.TrimPrefix(value, "{env:"), "}"))) {
 			return fmt.Errorf("workspaceEnv.%s has an invalid host environment reference", key)
+		}
+	}
+
+	targets := make(map[string]struct{}, len(c.ExtraMounts))
+	for _, mount := range c.ExtraMounts {
+		if mount.Source == "" || mount.Target == "" {
+			return errors.New("extraMounts source and target are required")
+		}
+		if !filepath.IsAbs(mount.Source) || !filepath.IsAbs(mount.Target) {
+			return errors.New("extraMounts source and target must be absolute")
+		}
+		if filepath.Clean(mount.Target) == "/home/debian" {
+			return errors.New("extraMounts cannot replace the workspace home directory")
+		}
+		if _, ok := targets[mount.Target]; ok {
+			return fmt.Errorf("extraMounts target %q is duplicated", mount.Target)
+		}
+		targets[mount.Target] = struct{}{}
+		if _, err := os.Stat(mount.Source); err != nil {
+			return fmt.Errorf("check extra mount source %q: %w", mount.Source, err)
 		}
 	}
 

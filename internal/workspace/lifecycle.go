@@ -293,6 +293,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	// Mount the host module directory read-only so module install/uninstall
 	// scripts are runnable inside the container.
 	mounts = append(mounts, moduleMounts(l.cfg)...)
+	mounts = append(mounts, extraMounts(l.cfg)...)
 	if l.cfg.UseLocalOpenCodeAuth {
 		if err := os.MkdirAll(filepath.Join(manifest.HomeDir, ".local", "share", "opencode"), 0o700); err != nil {
 			return runtime.StatusUnknown, runtime.ContainerSpec{}, fmt.Errorf("create workspace OpenCode data directory: %w", err)
@@ -321,6 +322,9 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 	env[workspaceEnvKeysEnv] = l.cfg.WorkspaceEnvKeys()
 	if extraCAFingerprint != "" {
 		env[extraCACertificateFingerprintEnv] = extraCAFingerprint
+	}
+	if fingerprint := extraMountsFingerprint(l.cfg.ExtraMounts); fingerprint != "" {
+		env[extraMountsFingerprintEnv] = fingerprint
 	}
 
 	spec := runtime.ContainerSpec{
@@ -450,8 +454,29 @@ const openCodeAuthRelPath = ".local/share/opencode/auth.json"
 
 const (
 	extraCACertificateFingerprintEnv = "OCM_EXTRA_CA_CERTIFICATE_SHA256"
+	extraMountsFingerprintEnv        = "OCM_EXTRA_MOUNTS_SHA256"
 	workspaceEnvKeysEnv              = "OCM_WORKSPACE_ENV_KEYS"
 )
+
+func extraMounts(cfg config.Config) []runtime.Mount {
+	mounts := make([]runtime.Mount, 0, len(cfg.ExtraMounts))
+	for _, mount := range cfg.ExtraMounts {
+		mounts = append(mounts, runtime.Mount{Source: mount.Source, Target: mount.Target, ReadOnly: mount.ReadOnly})
+	}
+	return mounts
+}
+
+func extraMountsFingerprint(mounts []config.ExtraMount) string {
+	if len(mounts) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(mounts)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 // extraCACertificateMounts returns mounts and a combined fingerprint for all
 // optional host CA certificates. Any list or content change recreates containers.
@@ -776,6 +801,11 @@ func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, sp
 
 	if rc.Env[extraCACertificateFingerprintEnv] != spec.Env[extraCACertificateFingerprintEnv] {
 		slog.Debug("container extra CA certificate differs from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
+		return true
+	}
+
+	if rc.Env[extraMountsFingerprintEnv] != spec.Env[extraMountsFingerprintEnv] {
+		slog.Debug("container extra mounts differ from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
 		return true
 	}
 
