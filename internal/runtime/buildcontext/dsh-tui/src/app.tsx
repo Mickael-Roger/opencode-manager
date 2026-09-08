@@ -276,7 +276,10 @@ export function App(props: AppProps) {
     if (key.ctrl && key.name === "c") { if (overlay()) setOverlay(undefined); else renderer.destroy() }
     if (overlay() && (key.name === "down" || (key.ctrl && key.name === "n"))) move(1)
     if (overlay() && (key.name === "up" || (key.ctrl && key.name === "p"))) move(-1)
-    if (overlay() && (key.name === "return" || key.name === "tab")) void acceptOverlay()
+    if (overlay() && (key.name === "return" || key.name === "tab")) {
+      key.preventDefault()
+      void acceptOverlay()
+    }
   })
 
   return <box flexDirection="row" height="100%" backgroundColor={theme.bg}>
