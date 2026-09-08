@@ -138,7 +138,11 @@ func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status 
 		if err != nil {
 			status.Error = err.Error()
 		}
-		status.Activity, status.Pending = readActivity(ws.Manifest.HomeDir, containerStatus == runtime.StatusRunning)
+		status.Activity, status.Pending = readWorkspaceActivity(
+			ws.Manifest.HomeDir,
+			containerStatus == runtime.StatusRunning,
+			ws.Manifest.RuntimeEnabled(agent.DeepSeek),
+		)
 		statuses = append(statuses, status)
 	}
 

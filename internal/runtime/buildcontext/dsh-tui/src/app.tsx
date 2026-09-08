@@ -7,6 +7,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js"
 import type { InitialState } from "./bootstrap"
 import type { DshGateway } from "./dsh/gateway"
 import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure } from "./dsh/projection"
+import type { OcmStatusReporter } from "./ocm-status"
 import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary } from "./dsh/types"
 import { findActiveMention, replaceMention } from "./features/composer/mention"
 import { expandTrackedPastes, pasteSummary, type TrackedPaste } from "./features/composer/paste"
@@ -22,8 +23,9 @@ import { shellFallback } from "./ui/shell"
 import { createSyntaxStyle } from "./ui/theme"
 
 const theme = { bg: "#0c0c0c", sidebar: "#151515", panel: "#1d1d1d", panelActive: "#262626", accent: "#5da9ff", text: "#e5e5e5", muted: "#777777", good: "#86d993", warn: "#e9b872", error: "#ed8796" }
+const dshLogo = ["██████╗ ███████╗██╗  ██╗", "██╔══██╗██╔════╝██║  ██║", "██║  ██║███████╗███████║", "██║  ██║╚════██║██╔══██║", "██████╔╝███████║██║  ██║", "╚═════╝ ╚══════╝╚═╝  ╚═╝"]
 type Overlay = "sessions" | "models" | "reasoning" | "references" | "help" | "commands" | "team" | undefined
-export interface AppProps { cwd: string; dshOrigin: string; gateway: DshGateway; initial: InitialState }
+export interface AppProps { cwd: string; dshOrigin: string; gateway: DshGateway; initial: InitialState; statusReporter: OcmStatusReporter }
 
 function modelLabel(model?: ModelSelection): string { return model ? `${model.provider}/${model.model}${model.reasoningEffort ? ` (${model.reasoningEffort})` : ""}` : "default" }
 function sessionLabel(session: SessionSummary): string { return session.title ?? session.sessionId }
@@ -69,6 +71,12 @@ export function App(props: AppProps) {
   const models = (): readonly ModelOption[] => modelOptions(props.initial.catalog)
   const reasoningEfforts = () => pendingModel()?.reasoningEfforts ?? []
   const occupancy = () => contextOccupancy(contextPressures()[sessionId()]?.pressure)
+  createEffect(() => {
+    props.statusReporter.set(
+      approval() ? "needs-approval" : status() === "reconnecting" ? "starting" : running() ? "working" : "idle",
+      approval() ? 1 : 0,
+    )
+  })
   const refreshSessions = async () => setSessions(await props.gateway.listSessions())
   const refreshCommands = async (id: string) => {
     try {
@@ -439,7 +447,8 @@ function mcpColor(server: McpStatus): string {
 
 function Sidebar(props: { title: string; cwd: string; model: ModelSelection; tokens: number; occupancy?: { percent: number; usedTokens: number; contextWindow: number }; mcp: readonly McpStatus[]; status: string }) {
   return <box width={42} backgroundColor={theme.sidebar} padding={2} flexDirection="column">
-    <text fg={theme.text}>{props.title}</text><text> </text>
+    <box alignItems="flex-end" flexDirection="column"><text fg="#8b5cf6">{dshLogo.slice(0, 3).join("\n")}</text><text fg={theme.accent}>{dshLogo.slice(3).join("\n")}</text></box>
+    <text> </text><text fg={theme.text}>{props.title}</text><text> </text>
     <text fg={theme.text}>Context</text><text fg={theme.muted}>{props.occupancy ? `${props.occupancy.usedTokens.toLocaleString()} / ${props.occupancy.contextWindow.toLocaleString()} tokens (${props.occupancy.percent}%)` : `${props.tokens.toLocaleString()} tokens`}</text><text> </text>
     <text fg={theme.text}>Model</text><text fg={theme.muted}>{modelLabel(props.model)}</text><text> </text>
     <text fg={theme.text}>Workspace</text><text fg={theme.muted}>{props.cwd}</text>

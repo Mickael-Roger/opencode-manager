@@ -21,6 +21,7 @@ func TestActivityFromReport(t *testing.T) {
 		{"idle maps to sleeping", statusReport{Activity: "idle", UpdatedAt: fresh}, ActivitySleeping, 0},
 		{"needs-approval maps to waiting", statusReport{Activity: "needs-approval", PendingApproval: 2, UpdatedAt: fresh}, ActivityWaiting, 2},
 		{"error", statusReport{Activity: "error", UpdatedAt: fresh}, ActivityError, 0},
+		{"starting maps to unknown", statusReport{Activity: "starting", UpdatedAt: fresh}, ActivityUnknown, 0},
 		{"unknown activity is off", statusReport{Activity: "weird", UpdatedAt: fresh}, ActivityOff, 0},
 		{"stale heartbeat is off", statusReport{Activity: "working", PendingApproval: 1, UpdatedAt: now.Add(-time.Minute)}, ActivityOff, 0},
 	}
@@ -35,6 +36,27 @@ func TestActivityFromReport(t *testing.T) {
 				t.Fatalf("pending = %d, want %d", pend, tc.wantPend)
 			}
 		})
+	}
+}
+
+func TestReadWorkspaceActivityPrefersLiveDeepSeekState(t *testing.T) {
+	home := writeStatus(t, `{"activity":"idle","updatedAt":"`+time.Now().UTC().Format(time.RFC3339)+`"}`)
+	writeStatusAt(t, home, deepSeekStatusFileRelPath, `{"activity":"working","updatedAt":"`+time.Now().UTC().Format(time.RFC3339)+`"}`)
+	if act, _ := readWorkspaceActivity(home, true, true); act != ActivityWorking {
+		t.Fatalf("readWorkspaceActivity = %q, want working", act)
+	}
+
+	writeStatusAt(t, home, deepSeekStatusFileRelPath, `{"activity":"needs-approval","pendingApproval":1,"updatedAt":"`+time.Now().UTC().Format(time.RFC3339)+`"}`)
+	if act, pending := readWorkspaceActivity(home, true, true); act != ActivityWaiting || pending != 1 {
+		t.Fatalf("readWorkspaceActivity = %q,%d, want waiting,1", act, pending)
+	}
+}
+
+func TestReadWorkspaceActivityShowsDeepSeekStarting(t *testing.T) {
+	home := writeStatus(t, `{"activity":"idle","updatedAt":"`+time.Now().UTC().Format(time.RFC3339)+`"}`)
+	writeStatusAt(t, home, deepSeekStatusFileRelPath, `{"activity":"starting","updatedAt":"`+time.Now().UTC().Format(time.RFC3339)+`"}`)
+	if act, _ := readWorkspaceActivity(home, true, true); act != ActivityUnknown {
+		t.Fatalf("readWorkspaceActivity = %q, want unknown", act)
 	}
 }
 
@@ -68,12 +90,17 @@ func TestReadActivityParsesFile(t *testing.T) {
 func writeStatus(t *testing.T, content string) string {
 	t.Helper()
 	home := t.TempDir()
-	path := filepath.Join(home, statusFileRelPath)
+	writeStatusAt(t, home, statusFileRelPath, content)
+	return home
+}
+
+func writeStatusAt(t *testing.T, home, relativePath, content string) {
+	t.Helper()
+	path := filepath.Join(home, relativePath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return home
 }

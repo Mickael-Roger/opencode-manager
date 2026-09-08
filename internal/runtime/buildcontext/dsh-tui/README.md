@@ -23,6 +23,11 @@ derived from DSH's `contextPressure` projection and updated live via
 `session/control`, and — when DSH's MCP client plugin is loaded — an MCP
 section listing each configured server with a colored activation dot.
 
+While attached, `dsh-tui` writes a 10-second manager heartbeat at
+`$HOME/.local/state/opencode-manager/deepseek-status.json`. OCM uses it to
+show `starting`, `working`, `waiting`, `sleeping`, or `error` in the workspace
+dashboard; closing the TUI marks the DSH client off after the heartbeat expires.
+
 When the `dsh-agent-teams` plugin is installed, `Ctrl+X T` or
 `/agent-teams-dag` opens a task-DAG overlay (tasks layered by dependencies,
 state markers, assignees, member progress) fed by the plugin's
