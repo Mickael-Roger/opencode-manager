@@ -100,3 +100,14 @@ export function expandFrames(frame: SessionFrame): SessionFrame[] {
 export function isTurnFinished(frame: SessionFrame): boolean {
   return frame.type === "turn/end" || frame.type === "turn/cancel"
 }
+
+// Compaction may run between turns, so it cannot be inferred from turn state.
+// Keep the ID to avoid a stale end event clearing a newer compaction.
+export function updateCompaction(active: string | undefined, frame: SessionFrame): string | undefined {
+  const data = frame.data as Record<string, unknown> | undefined
+  const id = data?.compactionId
+  if (typeof id !== "string") return active
+  if (frame.type === "compaction/start") return id
+  if (frame.type === "compaction/end" && active === id) return undefined
+  return active
+}
