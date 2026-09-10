@@ -67,6 +67,7 @@ export function App(props: AppProps) {
   const [teamLines, setTeamLines] = createSignal<readonly string[]>([])
   let editor: TextareaRenderable | undefined
   let transcript: ScrollBoxRenderable | undefined
+  let acceptingOverlay = false
   const syntax = createSyntaxStyle()
   onCleanup(() => syntax.destroy())
 
@@ -280,6 +281,10 @@ export function App(props: AppProps) {
     if (overlay() && (key.name === "down" || (key.ctrl && key.name === "n"))) move(1)
     if (overlay() && (key.name === "up" || (key.ctrl && key.name === "p"))) move(-1)
     if (overlay() && (key.name === "return" || key.name === "tab")) {
+      // Also guard in Composer in case a runtime dispatches this key after the
+      // overlay state has synchronously changed during acceptance.
+      acceptingOverlay = true
+      queueMicrotask(() => { acceptingOverlay = false })
       key.preventDefault()
       void acceptOverlay()
     }
@@ -292,7 +297,7 @@ export function App(props: AppProps) {
         <For each={nodes()}>{node => <Message node={node} syntax={syntax} />}</For>
       </scrollbox>
       <Show when={error()}>{message => <box paddingLeft={1} paddingRight={1} marginBottom={1} backgroundColor="#351c22"><text fg={theme.error}>{message()}</text></box>}</Show>
-      <Show when={approval()} fallback={<Composer ref={value => { editor = value }} value={draft()} running={busy()} syntax={syntax} history={promptHistory()} historyActive={!overlay()} maxHeight={Math.max(6, Math.floor(dimensions().height / 3))} onInput={onInput} onSubmit={value => void submit(value)} />}>
+      <Show when={approval()} fallback={<Composer ref={value => { editor = value }} value={draft()} running={busy()} syntax={syntax} history={promptHistory()} historyActive={!overlay()} suppressCompletionSubmit={() => acceptingOverlay} maxHeight={Math.max(6, Math.floor(dimensions().height / 3))} onInput={onInput} onSubmit={value => void submit(value)} />}>
         {request => <PermissionPrompt request={request()} selected={approvalChoice()} pending={approvalPending()} tool={nodes().find(node => node.toolArgs && node.id === `tool:${request().callId}`)} />}
       </Show>
       <WorkingIndicator active={busy() && !approval()} label={compacting() ? "Compacting context..." : undefined} />
@@ -394,7 +399,7 @@ function ToolCard(props: { node: ConversationNode; syntax: SyntaxStyle }) {
   </box>
 }
 
-function Composer(props: { ref(value: TextareaRenderable): void; value: string; running: boolean; syntax: SyntaxStyle; history: string[]; historyActive: boolean; maxHeight: number; onInput(value: string): void; onSubmit(value: string): void }) {
+function Composer(props: { ref(value: TextareaRenderable): void; value: string; running: boolean; syntax: SyntaxStyle; history: string[]; historyActive: boolean; suppressCompletionSubmit(): boolean; maxHeight: number; onInput(value: string): void; onSubmit(value: string): void }) {
   let textarea: TextareaRenderable | undefined
   let historyIndex = -1
   let draftBeforeHistory = ""
@@ -419,6 +424,10 @@ function Composer(props: { ref(value: TextareaRenderable): void; value: string; 
     props.onInput(text)
   }
   const onHistoryKey = (event: KeyEvent) => {
+    if (props.suppressCompletionSubmit() && (event.name === "return" || event.name === "tab")) {
+      event.preventDefault()
+      return
+    }
     if (!props.historyActive || !textarea || (event.name !== "up" && event.name !== "down")) return
     const text = textarea.plainText
     const offset = textarea.cursorOffset
