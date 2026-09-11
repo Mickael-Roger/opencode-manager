@@ -10,6 +10,13 @@ export interface SessionSummary {
   model?: ModelSelection
 }
 
+export interface SubagentSummary {
+  id: string
+  label?: string
+  activity: "running" | "inactive"
+  mode: "one-shot" | "continuable"
+}
+
 export interface ModelSelection {
   provider: string
   model: string
