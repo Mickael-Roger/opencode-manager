@@ -9,7 +9,7 @@ import type { DshGateway } from "./dsh/gateway"
 import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure, updateCompaction } from "./dsh/projection"
 import type { OcmStatusReporter } from "./ocm-status"
 import { appendPromptHistory, type PromptHistoryStore } from "./prompt-history"
-import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary } from "./dsh/types"
+import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary, SubagentSummary } from "./dsh/types"
 import { findActiveMention, replaceMention } from "./features/composer/mention"
 import { expandTrackedPastes, pasteSummary, type TrackedPaste } from "./features/composer/paste"
 import { rankReferences, type ReferenceCandidate } from "./features/composer/ranking"
@@ -17,6 +17,7 @@ import { commandCandidates, commandLabel, commandName, completeCommand, type Com
 import type { McpStatus } from "./features/mcp/status"
 import { modelOptions, modelSelection, type ModelOption, type ReasoningEffortOption } from "./features/model/options"
 import { newestWorkspaceSession } from "./features/session/continue"
+import { agentStatuses } from "./features/session/agents"
 import { teamPanelLines } from "./features/teams/dag"
 import { clipText } from "./ui/clip"
 import { renderMarkdownNode } from "./ui/markdown"
@@ -43,6 +44,7 @@ export function App(props: AppProps) {
   const dimensions = useTerminalDimensions()
   const commandFlags = { agentTeams: props.initial.agentTeams }
   const [sessions, setSessions] = createSignal(props.initial.sessions)
+  const [subagents, setSubagents] = createSignal<readonly SubagentSummary[]>([])
   const [sessionId, setSessionId] = createSignal(props.initial.sessionId)
   const [activeModel, setActiveModel] = createSignal<ModelSelection>(props.initial.model)
   const [nodes, setNodes] = createSignal<ConversationNode[]>([])
@@ -81,7 +83,22 @@ export function App(props: AppProps) {
       approval() ? 1 : 0,
     )
   })
-  const refreshSessions = async () => setSessions(await props.gateway.listSessions())
+  const refreshSessions = async () => {
+    try { setSessions(await props.gateway.listSessions()) }
+    catch (cause) { setError(`Failed to refresh sessions: ${String(cause)}`) }
+  }
+  const refreshSubagents = async (parentSessionId = sessionId()) => {
+    try {
+      const next = await props.gateway.listSubagents(parentSessionId)
+      if (sessionId() === parentSessionId) setSubagents(next)
+    } catch (cause) { if (sessionId() === parentSessionId) setError(`Failed to refresh subagents: ${String(cause)}`) }
+  }
+  createEffect(() => {
+    void refreshSessions()
+    void refreshSubagents()
+    const timer = setInterval(() => { void refreshSessions(); void refreshSubagents() }, 1_500)
+    onCleanup(() => clearInterval(timer))
+  })
   const refreshCommands = async (id: string) => {
     try {
       const next = await props.gateway.listCommands(id)
@@ -90,7 +107,7 @@ export function App(props: AppProps) {
       setCommandOptions(commandCandidates(next, commandFlags))
     } catch (cause) { if (sessionId() === id) setError(`Failed to load commands: ${String(cause)}`) }
   }
-  const openSession = (id: string) => { setSessionId(id); setTitle(sessionLabel(sessions().find(item => item.sessionId === id) ?? { sessionId: id, updatedAt: 0, running: false, blank: false })); setNodes([]); setRemoteCommands([]); setCommandOptions(commandCandidates([], commandFlags)); setOverlay(undefined); setSelected(0); setStatus("connected"); void refreshCommands(id) }
+  const openSession = (id: string) => { setSessionId(id); setTitle(sessionLabel(sessions().find(item => item.sessionId === id) ?? { sessionId: id, updatedAt: 0, running: false, blank: false })); setNodes([]); setRemoteCommands([]); setCommandOptions(commandCandidates([], commandFlags)); setOverlay(undefined); setSelected(0); setStatus("connected"); void refreshCommands(id); void refreshSubagents(id) }
   const createSession = async () => { openSession((await props.gateway.createSession(props.cwd)).sessionId); await refreshSessions() }
   const openOverlay = (value: Overlay) => { setSelected(0); setOverlay(value) }
   const openTeamDag = async () => {
@@ -302,7 +319,7 @@ export function App(props: AppProps) {
       </Show>
       <WorkingIndicator active={busy() && !approval()} label={compacting() ? "Compacting context..." : undefined} />
     </box>
-    <Show when={dimensions().width >= 120}><Sidebar title={title()} cwd={props.cwd} model={activeModel()} tokens={tokens()} occupancy={occupancy()} mcp={props.initial.mcp} status={compacting() ? "compacting" : running() ? "working" : status()} /></Show>
+    <Show when={dimensions().width >= 120}><Sidebar title={title()} cwd={props.cwd} model={activeModel()} tokens={tokens()} occupancy={occupancy()} agents={agentStatuses(sessions().find(item => item.sessionId === sessionId()), running(), subagents())} mcp={props.initial.mcp} status={compacting() ? "compacting" : running() ? "working" : status()} /></Show>
     <Show when={overlay()}>{value => <Dialog overlay={value()} selected={selected()} sessions={sessions()} models={models()} reasoningEfforts={reasoningEfforts()} references={references()} commands={commandOptions()} teamLines={teamLines()} hasAgentTeams={props.initial.agentTeams} />}</Show>
   </box>
 }
@@ -463,12 +480,13 @@ function mcpColor(server: McpStatus): string {
   return theme.warn
 }
 
-function Sidebar(props: { title: string; cwd: string; model: ModelSelection; tokens: number; occupancy?: { percent: number; usedTokens: number; contextWindow: number }; mcp: readonly McpStatus[]; status: string }) {
+function Sidebar(props: { title: string; cwd: string; model: ModelSelection; tokens: number; occupancy?: { percent: number; usedTokens: number; contextWindow: number }; agents: readonly { label: string; activity: "running" | "inactive"; main?: boolean }[]; mcp: readonly McpStatus[]; status: string }) {
   return <box width={42} backgroundColor={theme.sidebar} padding={2} flexDirection="column">
     <box alignItems="flex-end" flexDirection="column"><text fg="#8b5cf6">{dshLogo.slice(0, 3).join("\n")}</text><text fg={theme.accent}>{dshLogo.slice(3).join("\n")}</text></box>
     <text> </text><text fg={theme.text}>{props.title}</text><text> </text>
     <text fg={theme.text}>Context</text><text fg={theme.muted}>{props.occupancy ? `${props.occupancy.usedTokens.toLocaleString()} / ${props.occupancy.contextWindow.toLocaleString()} tokens (${props.occupancy.percent}%)` : `${props.tokens.toLocaleString()} tokens`}</text><text> </text>
     <text fg={theme.text}>Model</text><text fg={theme.muted}>{modelLabel(props.model)}</text><text> </text>
+    <text fg={theme.text}>Agents</text><For each={props.agents}>{agent => <text fg={agent.activity === "running" ? theme.good : theme.muted}>{agent.main ? "●" : "  ●"} {agent.label}  {agent.activity}</text>}</For><text> </text>
     <text fg={theme.text}>Workspace</text><text fg={theme.muted}>{props.cwd}</text>
     <Show when={props.mcp.length}><text> </text><text fg={theme.text}>MCP</text><For each={props.mcp}>{server => <text fg={mcpColor(server)}>● {server.name}</text>}</For></Show>
     <box flexGrow={1} />

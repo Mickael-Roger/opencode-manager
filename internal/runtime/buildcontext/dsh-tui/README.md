@@ -23,6 +23,10 @@ derived from DSH's `contextPressure` projection and updated live via
 `session/control`, and — when DSH's MCP client plugin is loaded — an MCP
 section listing each configured server with a colored activation dot.
 
+The sidebar also shows the main agent followed by its direct subagents, using
+DSH's live subagent catalog to display labels such as `scout` and each agent's
+running or inactive status.
+
 While attached, `dsh-tui` writes a 10-second manager heartbeat at
 `$HOME/.local/state/opencode-manager/deepseek-status.json`. OCM uses it to
 show `starting`, `working`, `waiting`, `sleeping`, or `error` in the workspace

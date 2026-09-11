@@ -5,7 +5,7 @@ import type { DshGateway } from "../../src/dsh/gateway"
 const catalog = { default: { provider: "p", model: "default" }, routableProviders: ["p"], groups: [{ id: "p", name: "Provider", models: [{ id: "default", name: "Default" }, { id: "other", name: "Other" }] }], failures: [] }
 function gateway(sessions: any[] = []): DshGateway {
   return {
-    listSessions: async () => sessions, createSession: async () => ({ sessionId: "created" }), getModelCatalog: async () => catalog,
+    listSessions: async () => sessions, listSubagents: async () => [], createSession: async () => ({ sessionId: "created" }), getModelCatalog: async () => catalog,
     selectModel: async (_id, model) => model, sendPrompt: async () => {}, cancel: async () => {}, listCommands: async id => [{ name: `command-${id}`, description: "Command" }], executeCommand: async () => undefined, completeFileReferences: async () => [],
     getPluginInventory: async () => ({ entries: [
       { entryId: "include:mcp-context7", moduleName: "@deepseek-ai/dsh-mcp-client", enabled: true, fiberPhase: "active" },

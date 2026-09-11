@@ -1,9 +1,10 @@
-import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary } from "./types"
+import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary, SubagentSummary } from "./types"
 
 // The application only depends on this interface. Transport details, including
 // DSH's launch-token cookie exchange, remain inside remote-gateway.ts.
 export interface DshGateway {
   listSessions(): Promise<readonly SessionSummary[]>
+  listSubagents(parentSessionId: string): Promise<readonly SubagentSummary[]>
   createSession(cwd: string, sessionId?: string): Promise<SessionHandle>
   getModelCatalog(): Promise<ModelCatalog>
   selectModel(sessionId: string, selection: ModelSelection): Promise<ModelSelection>

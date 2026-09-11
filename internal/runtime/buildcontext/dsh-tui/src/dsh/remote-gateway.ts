@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { authenticateLaunchUrl, type AuthenticatedConnection } from "./connection"
 import type { DshGateway } from "./gateway"
-import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressure, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary } from "./types"
+import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressure, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary, SubagentSummary } from "./types"
 
 interface RemoteEnvelope<T> {
   type: "server-response"
@@ -21,6 +21,11 @@ export class RemoteGateway implements DshGateway {
 
   async listSessions(): Promise<readonly SessionSummary[]> {
     return (await this.call<{ items: SessionSummary[] }>("session/list", { _request: {} })).items
+  }
+
+  async listSubagents(parentSessionId: string): Promise<readonly SubagentSummary[]> {
+    const catalog = await this.call<{ entries: ({ kind: "child" } & SubagentSummary)[] }>("subagents/list", { parentSessionId })
+    return catalog.entries.filter(entry => entry.kind === "child")
   }
 
   async createSession(cwd: string, sessionId?: string): Promise<SessionHandle> {
@@ -50,7 +55,9 @@ export class RemoteGateway implements DshGateway {
   }
 
   executeCommand(sessionId: string, line: string): Promise<CommandExecution | undefined> {
-    return this.call("commands/execute", { agentId: sessionId, line, images: [] })
+    // Commands such as /compact perform model-backed work and must remain live
+    // until DSH settles them or the user interrupts the session.
+    return this.call("commands/execute", { agentId: sessionId, line, images: [] }, null)
   }
 
   getPluginInventory(): Promise<PluginInventorySnapshot> {
@@ -158,9 +165,8 @@ export class RemoteGateway implements DshGateway {
     }
   }
 
-  private async call<T>(path: string, args: Record<string, unknown>): Promise<T> {
+  private async call<T>(path: string, args: Record<string, unknown>, timeoutMs: number | null = 15_000): Promise<T> {
     const rpcId = randomUUID()
-    const timeout = AbortSignal.timeout(15_000)
     const response = await fetch(new URL(`/api/${path}`, this.connection.origin), {
       method: "POST",
       headers: { "content-type": "application/json", Cookie: this.connection.cookie },
@@ -170,7 +176,7 @@ export class RemoteGateway implements DshGateway {
         method: path,
         payload: { args },
       }),
-      signal: timeout,
+      signal: timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) throw new Error(`DSH Remote ${path} failed: HTTP ${response.status}`)
     const body = await response.json() as RemoteEnvelope<T>
