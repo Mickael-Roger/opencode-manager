@@ -12,7 +12,7 @@ function gateway(sessions: any[] = []): DshGateway {
       { entryId: "include:agent-teams", moduleName: "@nanmicoder/dsh-agent-teams", enabled: true, fiberPhase: "active" },
     ] }),
     getAgentTeams: async () => [],
-    async *followSession() {}, async *followContextPressure() {}, async *followApprovals() {}, answerApproval: async () => {},
+    async *followSession() {}, async *followContextPressure() {}, async *followApprovals() {}, answerApproval: async () => {}, async *followQuestions() {}, answerQuestions: async () => {}, cancelQuestions: async () => {},
   }
 }
 

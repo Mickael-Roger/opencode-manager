@@ -9,15 +9,17 @@ import type { DshGateway } from "./dsh/gateway"
 import { contextOccupancy, expandFrames, isTurnFinished, projectFrame, snapshotContextPressure, updateCompaction } from "./dsh/projection"
 import type { OcmStatusReporter } from "./ocm-status"
 import { appendPromptHistory, type PromptHistoryStore } from "./prompt-history"
-import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary, SubagentSummary } from "./dsh/types"
-import { findActiveMention, replaceMention } from "./features/composer/mention"
+import type { ApprovalRequest, CommandDescriptor, ContextPressure, ConversationNode, ModelSelection, SessionSummary, SubagentSummary, UserQuestionRequest } from "./dsh/types"
+import { completeMention, findActiveMention } from "./features/composer/mention"
 import { expandTrackedPastes, pasteSummary, type TrackedPaste } from "./features/composer/paste"
+import { runLocalShell } from "./features/composer/local-shell"
 import { rankReferences, type ReferenceCandidate } from "./features/composer/ranking"
 import { commandCandidates, commandLabel, commandName, completeCommand, type CommandCandidate } from "./features/commands/commands"
 import type { McpStatus } from "./features/mcp/status"
 import { modelOptions, modelSelection, type ModelOption, type ReasoningEffortOption } from "./features/model/options"
 import { newestWorkspaceSession } from "./features/session/continue"
 import { agentStatuses } from "./features/session/agents"
+import { encodeQuestionAnswers } from "./features/questions/answers"
 import { teamPanelLines } from "./features/teams/dag"
 import { clipText } from "./ui/clip"
 import { renderMarkdownNode } from "./ui/markdown"
@@ -63,6 +65,12 @@ export function App(props: AppProps) {
   const [approval, setApproval] = createSignal<ApprovalRequest>()
   const [approvalPending, setApprovalPending] = createSignal(false)
   const [approvalChoice, setApprovalChoice] = createSignal(0)
+  const [questionRequest, setQuestionRequest] = createSignal<UserQuestionRequest>()
+  const [questionIndex, setQuestionIndex] = createSignal(0)
+  const [questionOption, setQuestionOption] = createSignal(0)
+  const [questionAnswers, setQuestionAnswers] = createSignal<Record<string, string[]>>({})
+  const [questionCustom, setQuestionCustom] = createSignal<Record<string, string>>({})
+  const [questionPending, setQuestionPending] = createSignal(false)
   const [title, setTitle] = createSignal(sessionLabel(props.initial.sessions.find(item => item.sessionId === props.initial.sessionId) ?? { sessionId: props.initial.sessionId, updatedAt: 0, running: false, blank: false }))
   const [tokens, setTokens] = createSignal(0)
   const [contextPressures, setContextPressures] = createSignal<Record<string, { pressure: ContextPressure; seq: number }>>({})
@@ -70,6 +78,7 @@ export function App(props: AppProps) {
   let editor: TextareaRenderable | undefined
   let transcript: ScrollBoxRenderable | undefined
   let acceptingOverlay = false
+  let localCommandSequence = 0
   const syntax = createSyntaxStyle()
   onCleanup(() => syntax.destroy())
 
@@ -79,8 +88,8 @@ export function App(props: AppProps) {
   const busy = () => running() || compacting() !== undefined
   createEffect(() => {
     props.statusReporter.set(
-      approval() ? "needs-approval" : status() === "reconnecting" ? "starting" : busy() ? "working" : "idle",
-      approval() ? 1 : 0,
+      approval() || questionRequest() ? "needs-approval" : status() === "reconnecting" ? "starting" : busy() ? "working" : "idle",
+      approval() || questionRequest() ? 1 : 0,
     )
   })
   const refreshSessions = async () => {
@@ -137,8 +146,10 @@ export function App(props: AppProps) {
       const item = references()[selected()]
       const mention = findActiveMention(draft(), draft().length)
       if (item && mention) {
-        const next = replaceMention(draft(), mention, item.insertText).text
-        setDraft(next); editor?.setText(next); setOverlay(undefined)
+        const replacement = completeMention(draft(), mention, item.insertText)
+        setDraft(replacement.text)
+        if (editor) { editor.setText(replacement.text); editor.cursorOffset = replacement.cursorOffset }
+        setOverlay(undefined)
       }
     } else if (overlay() === "commands") {
       const command = commandOptions()[selected()]
@@ -176,6 +187,23 @@ export function App(props: AppProps) {
     setPromptHistory(nextHistory)
     props.promptHistoryStore.save(nextHistory)
     if (text.startsWith("/")) { setDraft(""); editor?.clear(); await runCommand(text); return }
+    if (text.startsWith("!")) {
+      setDraft("")
+      editor?.clear()
+      const command = text.slice(1).trim()
+      if (!command) { setError("Shell command cannot be empty"); return }
+      const id = `local-shell:${++localCommandSequence}`
+      setError(undefined)
+      setNodes(current => [...current, { id, kind: "tool", text: "bash", toolName: "bash", toolArgs: { command }, complete: false }])
+      try {
+        const result = await runLocalShell(command, props.cwd)
+        const output = result.output || (result.exitCode === 0 ? "(no output)" : `Command exited with status ${result.exitCode}`)
+        setNodes(current => current.map(node => node.id === id ? { ...node, toolOutput: output, isError: result.exitCode !== 0, complete: true } : node))
+      } catch (cause) {
+        setNodes(current => current.map(node => node.id === id ? { ...node, toolOutput: String(cause), isError: true, complete: true } : node))
+      }
+      return
+    }
     if (busy()) return
     setDraft(""); editor?.clear(); setRunning(true); setError(undefined)
     try { await props.gateway.sendPrompt(sessionId(), text) } catch (cause) { setError(String(cause)); setRunning(false) }
@@ -248,6 +276,51 @@ export function App(props: AppProps) {
     catch (cause) { setApprovalPending(false); setError(`Failed to answer approval: ${String(cause)}`) }
   }
 
+  createEffect(() => {
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        for await (const event of props.gateway.followQuestions(controller.signal)) {
+          if (event.type === "request") {
+            setQuestionRequest(event.request); setQuestionIndex(0); setQuestionOption(0); setQuestionAnswers({}); setQuestionCustom({}); setQuestionPending(false)
+          } else if (questionRequest()?.eventId === event.eventId) { setQuestionRequest(undefined); setQuestionPending(false) }
+        }
+      } catch (cause) { if (!controller.signal.aborted) setError(`Question stream disconnected: ${String(cause)}`) }
+    })()
+    onCleanup(() => controller.abort())
+  })
+
+  const currentQuestion = () => questionRequest()?.questions[questionIndex()]
+  const selectQuestionOption = () => {
+    const question = currentQuestion()
+    const option = question?.options?.[questionOption()]
+    if (!question || !option) return
+    setQuestionAnswers(current => ({ ...current, [question.id]: question.multiSelect
+      ? current[question.id]?.includes(option.label) ? current[question.id]!.filter(value => value !== option.label) : [...(current[question.id] ?? []), option.label]
+      : [option.label] }))
+  }
+  const advanceQuestion = () => {
+    const request = questionRequest()
+    if (!request) return
+    if (questionIndex() < request.questions.length - 1) { setQuestionIndex(index => index + 1); setQuestionOption(0) }
+    else void answerQuestions()
+  }
+  const answerQuestions = async () => {
+    const request = questionRequest()
+    if (!request || questionPending()) return
+    const answers = encodeQuestionAnswers(request, questionAnswers(), questionCustom())
+    setQuestionPending(true)
+    try { await props.gateway.answerQuestions(request.clientId, request.eventId, answers); setQuestionRequest(undefined) }
+    catch (cause) { setQuestionPending(false); setError(`Failed to answer question: ${String(cause)}`) }
+  }
+  const cancelQuestions = async () => {
+    const request = questionRequest()
+    if (!request || questionPending()) return
+    setQuestionPending(true)
+    try { await props.gateway.cancelQuestions(request.clientId, request.eventId); setQuestionRequest(undefined) }
+    catch (cause) { setQuestionPending(false); setError(`Failed to cancel question: ${String(cause)}`) }
+  }
+
   const onInput = (value: string) => {
     setDraft(value)
     if (/^\/\S*$/.test(value)) {
@@ -286,6 +359,23 @@ export function App(props: AppProps) {
     ],
   }))
   useKeyboard(key => {
+    if (questionRequest()) {
+      const question = currentQuestion()
+      if (!question) return
+      key.preventDefault()
+      if (key.name === "escape" || (key.ctrl && key.name === "c")) { void cancelQuestions(); return }
+      if (!question.options?.length) {
+        if (key.name === "backspace") setQuestionCustom(current => ({ ...current, [question.id]: (current[question.id] ?? "").slice(0, -1) }))
+        else if (key.sequence && !key.ctrl && !key.meta) setQuestionCustom(current => ({ ...current, [question.id]: (current[question.id] ?? "") + key.sequence }))
+        else if (key.name === "return") advanceQuestion()
+        return
+      }
+      if (key.name === "up" || (key.ctrl && key.name === "p")) setQuestionOption(index => Math.max(0, index - 1))
+      else if (key.name === "down" || (key.ctrl && key.name === "n")) setQuestionOption(index => Math.min(question.options!.length - 1, index + 1))
+      else if (key.name === "space") selectQuestionOption()
+      else if (key.name === "return") { if (!question.multiSelect) selectQuestionOption(); advanceQuestion() }
+      return
+    }
     if (approval()) {
       if (key.name === "left" || key.name === "h") setApprovalChoice(0)
       if (key.name === "right" || key.name === "l") setApprovalChoice(1)
@@ -314,10 +404,12 @@ export function App(props: AppProps) {
         <For each={nodes()}>{node => <Message node={node} syntax={syntax} />}</For>
       </scrollbox>
       <Show when={error()}>{message => <box paddingLeft={1} paddingRight={1} marginBottom={1} backgroundColor="#351c22"><text fg={theme.error}>{message()}</text></box>}</Show>
-      <Show when={approval()} fallback={<Composer ref={value => { editor = value }} value={draft()} running={busy()} syntax={syntax} history={promptHistory()} historyActive={!overlay()} suppressCompletionSubmit={() => acceptingOverlay} maxHeight={Math.max(6, Math.floor(dimensions().height / 3))} onInput={onInput} onSubmit={value => void submit(value)} />}>
+      <Show when={questionRequest()} fallback={<Show when={approval()} fallback={<Composer ref={value => { editor = value }} value={draft()} running={busy()} syntax={syntax} history={promptHistory()} historyActive={!overlay()} suppressCompletionSubmit={() => acceptingOverlay} maxHeight={Math.max(6, Math.floor(dimensions().height / 3))} onInput={onInput} onSubmit={value => void submit(value)} />}>
         {request => <PermissionPrompt request={request()} selected={approvalChoice()} pending={approvalPending()} tool={nodes().find(node => node.toolArgs && node.id === `tool:${request().callId}`)} />}
+      </Show>}>
+        {request => <QuestionPrompt request={request()} selectedQuestion={questionIndex()} selectedOption={questionOption()} answers={questionAnswers()} custom={questionCustom()} pending={questionPending()} />}
       </Show>
-      <WorkingIndicator active={busy() && !approval()} label={compacting() ? "Compacting context..." : undefined} />
+      <WorkingIndicator active={busy() && !approval() && !questionRequest()} label={compacting() ? "Compacting context..." : undefined} />
     </box>
     <Show when={dimensions().width >= 120}><Sidebar title={title()} cwd={props.cwd} model={activeModel()} tokens={tokens()} occupancy={occupancy()} agents={agentStatuses(sessions().find(item => item.sessionId === sessionId()), running(), subagents())} mcp={props.initial.mcp} status={compacting() ? "compacting" : running() ? "working" : status()} /></Show>
     <Show when={overlay()}>{value => <Dialog overlay={value()} selected={selected()} sessions={sessions()} models={models()} reasoningEfforts={reasoningEfforts()} references={references()} commands={commandOptions()} teamLines={teamLines()} hasAgentTeams={props.initial.agentTeams} />}</Show>
@@ -345,6 +437,24 @@ function PermissionPrompt(props: { request: ApprovalRequest; selected: number; p
       <box backgroundColor={props.selected === 1 ? theme.error : theme.panel} paddingLeft={1} paddingRight={1}><text fg={props.selected === 1 ? theme.bg : theme.muted}>Reject</text></box>
       <text fg={theme.muted}>{props.pending ? "answering..." : "←→ select  enter confirm  esc reject"}</text>
     </box>
+  </box>
+}
+
+function QuestionPrompt(props: { request: UserQuestionRequest; selectedQuestion: number; selectedOption: number; answers: Record<string, string[]>; custom: Record<string, string>; pending: boolean }) {
+  return <box maxHeight={18} flexShrink={0} border={["left"]} borderColor={theme.accent} backgroundColor={theme.panel} flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+    <text fg={theme.accent}>Question for you</text>
+    <For each={props.request.questions}>{(question, questionIndex) => <box flexDirection="column" marginTop={1}>
+      <text fg={theme.text}>{question.header ?? `Question ${questionIndex() + 1}`}</text><text fg={theme.text}>{question.question}</text>
+      <Show when={question.detail}><text fg={theme.muted}>{question.detail}</text></Show>
+      <Show when={question.options?.length} fallback={<text fg={questionIndex() === props.selectedQuestion ? theme.text : theme.muted}>{questionIndex() === props.selectedQuestion ? `> ${props.custom[question.id] ?? ""}█` : props.custom[question.id] ?? ""}</text>}>
+        <For each={question.options}>{(option, optionIndex) => {
+          const selected = () => props.answers[question.id]?.includes(option.label) ?? false
+          const active = () => questionIndex() === props.selectedQuestion && optionIndex() === props.selectedOption
+          return <text fg={active() ? theme.text : theme.muted}>{active() ? ">" : " "} {selected() ? "[x]" : "[ ]"} {option.label}{option.description ? ` - ${option.description}` : ""}</text>
+        }}</For>
+      </Show>
+    </box>}</For>
+    <text fg={theme.muted}>{props.pending ? "Sending answer..." : "Up/Down choose  Space toggle  Enter next/submit  Esc cancel"}</text>
   </box>
 }
 

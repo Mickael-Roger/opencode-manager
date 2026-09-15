@@ -14,3 +14,12 @@ export function replaceMention(text: string, mention: ActiveMention, insertText:
   const next = text.slice(0, mention.start) + insertText + text.slice(mention.end)
   return { text: next, cursorOffset: mention.start + insertText.length }
 }
+
+export function completeMention(text: string, mention: ActiveMention, insertText: string): { text: string; cursorOffset: number } {
+  const replacement = replaceMention(text, mention, insertText)
+  if (/\s/.test(replacement.text[replacement.cursorOffset] ?? "")) return replacement
+  return {
+    text: replacement.text.slice(0, replacement.cursorOffset) + " " + replacement.text.slice(replacement.cursorOffset),
+    cursorOffset: replacement.cursorOffset + 1,
+  }
+}

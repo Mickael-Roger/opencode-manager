@@ -1,4 +1,4 @@
-import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary, SubagentSummary } from "./types"
+import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary, SubagentSummary, UserQuestionAnswer, UserQuestionEvent } from "./types"
 
 // The application only depends on this interface. Transport details, including
 // DSH's launch-token cookie exchange, remain inside remote-gateway.ts.
@@ -19,4 +19,7 @@ export interface DshGateway {
   followContextPressure(signal: AbortSignal): AsyncIterable<ContextPressureUpdate>
   followApprovals(signal: AbortSignal): AsyncIterable<ApprovalEvent>
   answerApproval(clientId: string, eventId: string, decision: "allowed-once" | "rejected"): Promise<void>
+  followQuestions(signal: AbortSignal): AsyncIterable<UserQuestionEvent>
+  answerQuestions(clientId: string, eventId: string, answers: readonly UserQuestionAnswer[]): Promise<void>
+  cancelQuestions(clientId: string, eventId: string): Promise<void>
 }
