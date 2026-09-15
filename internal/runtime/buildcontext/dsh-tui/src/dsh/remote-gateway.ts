@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { authenticateLaunchUrl, type AuthenticatedConnection } from "./connection"
 import type { DshGateway } from "./gateway"
-import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressure, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary, SubagentSummary } from "./types"
+import type { AgentTeamSnapshot, ApprovalEvent, CommandDescriptor, CommandExecution, ContextPressure, ContextPressureUpdate, FileReference, ModelCatalog, ModelSelection, PluginInventorySnapshot, SessionFrame, SessionHandle, SessionSummary, SubagentSummary, UserQuestion, UserQuestionAnswer, UserQuestionEvent } from "./types"
 
 interface RemoteEnvelope<T> {
   type: "server-response"
@@ -114,6 +114,25 @@ export class RemoteGateway implements DshGateway {
 
   async answerApproval(clientId: string, eventId: string, decision: "allowed-once" | "rejected"): Promise<void> {
     await this.call("$events/result", { clientId, eventId, outcome: { kind: "result", value: decision } })
+  }
+
+  async *followQuestions(signal: AbortSignal): AsyncIterable<UserQuestionEvent> {
+    let clientId: string | undefined
+    for await (const value of this.stream<Record<string, unknown>>("$events", {}, signal)) {
+      if (value.type === "ready" && typeof value.clientId === "string") clientId = value.clientId
+      else if (value.type === "waterfall" && value.event === "user-questions/request" && clientId) {
+        const request = value.request as { questions?: UserQuestion[] }
+        if (Array.isArray(request.questions) && typeof value.eventId === "string" && typeof value.agentId === "string") yield { type: "request", request: { clientId, eventId: value.eventId, sessionId: value.agentId, questions: request.questions } }
+      } else if (value.type === "cancel" && typeof value.eventId === "string") yield { type: "cancel", eventId: value.eventId }
+    }
+  }
+
+  async answerQuestions(clientId: string, eventId: string, answers: readonly UserQuestionAnswer[]): Promise<void> {
+    await this.call("$events/result", { clientId, eventId, outcome: { kind: "result", value: { answers } } })
+  }
+
+  async cancelQuestions(clientId: string, eventId: string): Promise<void> {
+    await this.call("$events/result", { clientId, eventId, outcome: { kind: "rejected", error: { name: "UserQuestionError", message: "the user cancelled ask_user_question", code: "ASK_CANCELLED" } } })
   }
 
   private async *stream<T>(endpoint: string, args: Record<string, unknown>, signal: AbortSignal): AsyncIterable<T> {

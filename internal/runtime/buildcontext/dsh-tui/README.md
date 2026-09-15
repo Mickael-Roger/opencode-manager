@@ -10,6 +10,8 @@ cancels prompts, and supports workspace-safe `--continue`/`--session` selection.
 It exposes session and model pickers with `Ctrl+L` and `Ctrl+M`, respectively.
 Use `@` in the composer for DSH-backed file and directory references. Model
 routes always come from DSH's catalog; no provider or model list is local.
+Use `!<command>` in the composer to run a shell command in the workspace; its
+output is shown in the transcript and is not sent to DSH.
 
 Slash commands are dynamic: every host command DSH advertises for the session
 (including plugin commands such as `/agent-teams`) is discovered through
@@ -35,6 +37,10 @@ dashboard; closing the TUI marks the DSH client off after the heartbeat expires.
 Submitted composer prompts are retained across dsh-tui restarts for up-arrow
 recall in `$HOME/.local/state/opencode-manager/dsh-prompt-history.json`. The
 file is owned by the workspace user and written with mode `0600`.
+
+When an agent calls `ask_user_question`, dsh-tui replaces the composer with a
+question panel. Use Up/Down and Space to select choices, Enter to advance or
+submit, and Escape to cancel the question without cancelling the session.
 
 When the `dsh-agent-teams` plugin is installed, `Ctrl+X T` or
 `/agent-teams-dag` opens a task-DAG overlay (tasks layered by dependencies,

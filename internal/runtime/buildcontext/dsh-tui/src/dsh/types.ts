@@ -145,3 +145,34 @@ export interface ApprovalRequest {
 export type ApprovalEvent =
   | { type: "request"; request: ApprovalRequest }
   | { type: "cancel"; eventId: string }
+
+export interface UserQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface UserQuestion {
+  id: string
+  question: string
+  header?: string
+  detail?: string
+  options?: readonly UserQuestionOption[]
+  multiSelect?: boolean
+}
+
+export interface UserQuestionRequest {
+  clientId: string
+  eventId: string
+  sessionId: string
+  questions: readonly UserQuestion[]
+}
+
+export interface UserQuestionAnswer {
+  id: string
+  selected: readonly string[]
+  custom?: string
+}
+
+export type UserQuestionEvent =
+  | { type: "request"; request: UserQuestionRequest }
+  | { type: "cancel"; eventId: string }
