@@ -1,5 +1,5 @@
 name: grafana
-version: 2
+version: 3
 description: Install the Grafana Cloud CLI (gcx), the dashboard-linter, and configure one or more Grafana instances with their own URL and token.
 # Each instance is isolated in gcx's own stack/context configuration. Nothing is
 # written to ~/.env, so the OpenCode server stays up and module edits are safe

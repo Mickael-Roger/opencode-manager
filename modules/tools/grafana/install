@@ -7,6 +7,9 @@ set -e
 
 : "${OCM_URL:?Grafana instance URL is required}"
 : "${OCM_TOKEN:?Grafana token is required}"
+# Workspace containers do not provide an OS keychain. gcx otherwise refuses to
+# persist the configured token instead of using its explicit plaintext fallback.
+export GCX_KEYCHAIN=off
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
