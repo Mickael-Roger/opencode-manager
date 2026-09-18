@@ -62,6 +62,8 @@ func NewRootCommand(cfg config.Config) *cobra.Command {
 	root.PersistentFlags().StringP("output", "o", outputTable, "output format: table|json")
 
 	root.AddCommand(
+		newCDCmd(cfg),
+		newBashAutocompleteCmd(cfg),
 		newWorkspacesCmd(cfg),
 		newTemplatesCmd(cfg),
 		newModulesCmd(cfg),

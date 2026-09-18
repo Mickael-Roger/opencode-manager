@@ -204,3 +204,46 @@ func TestFindWorkspaceMatchesNameOrSlug(t *testing.T) {
 		}
 	}
 }
+
+func TestCDPrintsWorkspaceProjectDirectory(t *testing.T) {
+	cfg := testConfig(t)
+	if _, err := workspace.NewRegistry(cfg).Create("My Project"); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	out, _, err := run(t, cfg, "cd", "my-project")
+	if err != nil {
+		t.Fatalf("cd: %v", err)
+	}
+	want := filepath.Join(cfg.WorkspaceRoot, "workspaces", "my-project", "home", "workspace")
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("cd output = %q, want %q", out, want)
+	}
+}
+
+func TestCDCompletesWorkspaceNames(t *testing.T) {
+	cfg := testConfig(t)
+	if _, err := workspace.NewRegistry(cfg).Create("My Project"); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	out, _, err := run(t, cfg, "__complete", "cd", "my")
+	if err != nil {
+		t.Fatalf("complete cd: %v", err)
+	}
+	if !strings.Contains(out, "My Project") {
+		t.Fatalf("completion output = %q, want workspace name", out)
+	}
+}
+
+func TestBashAutocompleteEmitsCDWrapperAndCompletion(t *testing.T) {
+	out, _, err := run(t, testConfig(t), "bash-autocomplete")
+	if err != nil {
+		t.Fatalf("bash-autocomplete: %v", err)
+	}
+	for _, want := range []string{"source <(ocm bash-autocomplete)", "builtin cd \"$target\"", "__start_ocm"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("autocomplete output missing %q", want)
+		}
+	}
+}

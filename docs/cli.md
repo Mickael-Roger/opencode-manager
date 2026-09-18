@@ -13,6 +13,8 @@ ocm workspaces list              # manage workspaces
 ocm templates list               # inspect templates
 ocm modules list                 # inspect the module catalog
 ocm config view                  # global configuration
+source <(ocm bash-autocomplete)  # enable Bash completion and `ocm cd`
+ocm cd api                       # enter the local project directory for api
 ocm doctor                       # environment preflight
 ocm version                      # print the ocm version
 ```
@@ -115,7 +117,20 @@ has installed, and removes instances by id (the value shown in `modules list -w`
 | --- | --- |
 | `ocm doctor` | Check the container runtime is available, the config and base image, and how many workspaces exist. |
 | `ocm version` | Print the `opencode-manager` version. |
-| `ocm completion <shell>` | Generate a shell completion script (bash, zsh, fish, powershell). |
+| `ocm bash-autocomplete` | Generate the sourceable Bash completion script and the `ocm cd` shell integration. |
+
+## Bash integration
+
+Load the integration in each Bash session, or add it to `~/.bashrc`:
+
+```sh
+source <(ocm bash-autocomplete)
+```
+
+It completes `ocm` commands and workspace names for `ocm cd`. Once loaded,
+`ocm cd <workspace>` changes the current shell to that workspace's local project
+directory. Without it, `ocm cd <workspace>` prints that directory so scripts can
+use it.
 
 ## Exit status
 
