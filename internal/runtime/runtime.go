@@ -176,6 +176,9 @@ type BaseBuildSpec struct {
 	FromImage string
 	Packages  []string
 	Commands  []string
+	// Refresh rebuilds even when ImageName is already present. It is used by a
+	// workspace base-image update after the upstream base reference was refreshed.
+	Refresh bool
 	// Prebuilt selects the build recipe. When false (the default), FromImage is a
 	// plain distro (e.g. debian:stable-slim) and the full base recipe is rendered:
 	// system packages, uv, OpenCode, tokscale, and the manager scripts.
@@ -263,7 +266,7 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 	if err != nil {
 		return err
 	}
-	if exists {
+	if exists && !spec.Refresh {
 		slog.Debug("base image already exists, skipping build", "image", spec.ImageName)
 		return nil
 	}
@@ -282,6 +285,9 @@ func (d CLIDriver) BuildBaseImage(ctx context.Context, spec BaseBuildSpec) error
 
 	dockerfile, buildArgs := baseBuildArgs(spec)
 	args := []string{"build", "-t", spec.ImageName, "-f", filepath.Join(dir, dockerfile)}
+	if spec.Refresh {
+		args = append(args, "--pull")
+	}
 	args = append(args, buildArgs...)
 	args = append(args, dir)
 	if err := d.run(ctx, args...); err != nil {

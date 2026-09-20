@@ -39,7 +39,7 @@ general command line. The available views (*kinds*) are:
 | `d` | **Describe** the workspace (details + token breakdown) |
 | `l` | View the latest OpenCode session's input/output transcript |
 | `e` | **Edit** the workspace's modules |
-| `u` | **Update** OpenCode in the workspace |
+| `u` | **Update** the workspace base image and replace its container |
 | `c` | **Create** a workspace |
 | `^d` | **Delete** the workspace |
 | `q` / `^c` | Quit |

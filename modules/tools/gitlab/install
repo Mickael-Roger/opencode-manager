@@ -3,8 +3,8 @@
 # latest official release (no apt repo exists; the release binary is fetched for
 # this arch) and, when the user opted in, drops this host's glab configuration
 # (shipped base64-encoded by the resolve hook) into place so glab is signed in to
-# the same GitLab instance(s). Idempotent: the glab install is guarded and the
-# config is overwritten, so reconcile can re-run this safely.
+# the same GitLab instance(s). The config lives in the persistent workspace home,
+# so a replacement container installs glab again without overwriting it.
 set -e
 
 if ! command -v glab >/dev/null 2>&1; then
@@ -50,11 +50,11 @@ echo "glab installed: $(glab --version | head -n1)"
 # host's ~/.config/glab-cli/config.yml, base64-encoded by the resolve hook; it
 # carries the hosts and tokens that sign glab in, and is never persisted to the
 # manifest.
-if [ -n "$OCM_CONFIG_B64" ]; then
+if [ -n "$OCM_CONFIG_B64" ] && [ ! -f "$HOME/.config/glab-cli/config.yml" ]; then
   mkdir -p "$HOME/.config/glab-cli"
   printf '%s' "$OCM_CONFIG_B64" | base64 -d > "$HOME/.config/glab-cli/config.yml"
   chmod 600 "$HOME/.config/glab-cli/config.yml"
   echo "glab configured from this host's glab configuration"
 else
-  echo "glab installed without imported configuration"
+	  echo "glab configuration already present or not imported"
 fi

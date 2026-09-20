@@ -430,6 +430,22 @@ func TestWorkspaceStatusUpdatingWhileUpdateInProgress(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBaseVersionUsesConfiguredImageTag(t *testing.T) {
+	for _, test := range []struct {
+		ref  string
+		want string
+	}{
+		{"docker.io/mroger78/ocm-base:2.3.0", "2.3.0"},
+		{"debian:stable-slim", "stable-slim"},
+		{"docker.io/mroger78/ocm-base", "latest"},
+		{"docker.io/mroger78/ocm-base@sha256:abc", "digest"},
+	} {
+		if got := workspaceBaseVersion(test.ref); got != test.want {
+			t.Errorf("workspaceBaseVersion(%q) = %q, want %q", test.ref, got, test.want)
+		}
+	}
+}
+
 // Update must be refused while OpenCode is mid-task so the post-update restart
 // cannot interrupt active work.
 func TestUpdateRefusedWhileTaskRunning(t *testing.T) {
@@ -453,7 +469,7 @@ func TestUpdateDispatchedWhenIdle(t *testing.T) {
 		if cmd == nil {
 			t.Fatalf("activity %q: expected an update command", activity)
 		}
-		if msg := next.(model).message; !strings.Contains(msg, "Updating agent runtimes") {
+		if msg := next.(model).message; !strings.Contains(msg, "Updating the base image") {
 			t.Fatalf("activity %q: message = %q, want progress message", activity, msg)
 		}
 		if label, _ := next.(model).workspaceStatus(m.workspaces[0]); label != "updating" {

@@ -43,12 +43,16 @@ Diagnostic logs go to a file, not the terminal, so CLI output stays clean — se
 | `ws start [ws]` | Start a container (building the image if needed). `--all` starts every workspace. |
 | `ws stop [ws]` | Stop a running container. `--all` stops every workspace. |
 | `ws restart [ws]` | Stop then start. `--all` for every workspace. |
-| `ws update [ws]` | Update OpenCode, DeepSeek Harness, its ACP adapter, and pnpm inside the container. `--all` for every workspace. |
+| `ws update [ws]` | Pull the workspace's configured base image, rebuild its workspace image, and replace the container while preserving the workspace home. `--all` for every workspace. |
 | `ws version <ws>` | Print the OpenCode version running in the workspace. |
 | `ws attach <ws>` | Attach to the default agent runtime. `--runtime opencode\|deepseek` overrides it. |
 | `ws shell <ws>` (`sh`) | Open an interactive shell inside the container. |
 | `ws exec <ws> -- <cmd>` | Run a one-off command inside the container. |
 | `ws run <ws> --prompt …` | Run a **non-interactive** OpenCode turn and print the result (headless). |
+
+`ws update` restores modules in the replacement container while retaining files in
+the workspace home. For example, the GitLab module reinstalls `glab` but preserves
+its `~/.config/glab-cli` configuration; repositories remain under `~/workspace`.
 
 ### Examples
 

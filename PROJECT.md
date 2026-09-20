@@ -55,7 +55,7 @@ Available actions:
 - Edit a workspace configuration.
 - Delete a workspace.
 - Stop a workspace container.
-- Update OpenCode inside a workspace image/container.
+- Update a workspace by refreshing its base image and replacing its container.
 
 ### Attaching To A Workspace
 
@@ -473,7 +473,7 @@ executables.
 
 - [x] Edit workspace module values (the `e` module editor: add/remove modules).
 - [x] Re-run module application (reconcile + live add/remove).
-- [x] Update OpenCode inside an existing workspace.
+- [x] Update an existing workspace base image and replace its container.
 - [x] Show workspace status and runtime health in the main TUI.
 
 ## Open Questions

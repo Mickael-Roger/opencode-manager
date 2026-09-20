@@ -120,6 +120,22 @@ func TestResolveBaseImageDefaultWithExtrasBuildsOverlay(t *testing.T) {
 	}
 }
 
+func TestRefreshBaseImageRebuildsOverlay(t *testing.T) {
+	rec := &recordingDriver{fakeDriver: &fakeDriver{}, present: true}
+	l := newTestLifecycle(rec)
+	image := ImageConfig{BaseImage: config.DefaultBaseImage, Packages: []string{"htop"}}
+
+	if _, err := l.resolveBaseImageWithRefresh(context.Background(), image, true); err != nil {
+		t.Fatalf("refresh base image: %v", err)
+	}
+	if len(rec.pulled) != 1 || rec.pulled[0] != config.DefaultBaseImage {
+		t.Fatalf("pulls = %v, want forced pull of %s", rec.pulled, config.DefaultBaseImage)
+	}
+	if len(rec.builds) != 1 || !rec.builds[0].Refresh {
+		t.Fatalf("builds = %#v, want one forced overlay rebuild", rec.builds)
+	}
+}
+
 func TestResolveBaseImageCustomBaseBuildsFullRecipe(t *testing.T) {
 	rec := &recordingDriver{fakeDriver: &fakeDriver{}}
 	l := newTestLifecycle(rec)

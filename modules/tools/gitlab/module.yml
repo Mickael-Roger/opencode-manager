@@ -1,5 +1,5 @@
 name: gitlab
-version: 2
+version: 3
 description: Install the GitLab CLI (glab) and optionally import this host's glab configuration so the workspace is signed in to the same GitLab instance(s).
 # Writes only glab's own config (~/.config/glab-cli), which tools read live;
 # nothing in ~/.env, so it never bounces the OpenCode server and can be edited mid-task.

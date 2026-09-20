@@ -2,48 +2,69 @@ package workspace
 
 import (
 	"context"
-	"strings"
 	"testing"
+
+	"github.com/mickael-menu/opencode-manager/internal/agent"
+	"github.com/mickael-menu/opencode-manager/internal/config"
+	"github.com/mickael-menu/opencode-manager/internal/runtime"
 )
 
-func TestUpdateRuntimesRunsNpmAndRestarts(t *testing.T) {
-	fake := &fakeDriver{output: func(args []string) []byte {
-		switch args[0] {
-		case "opencode":
-			return []byte("0.5.7\n")
-		case "dsh":
-			return []byte("0.1.2\n")
-		case "dsh-acp":
-			return []byte("0.4.29\n")
-		case "pnpm":
-			return []byte("11.25.0\n")
-		}
-		return nil
+func TestUpdateWorkspaceImageRefreshesBaseAndRecreatesContainer(t *testing.T) {
+	driver := &updateDriver{fakeDriver: &fakeDriver{}}
+	home := t.TempDir()
+	summary := Summary{Manifest: Manifest{
+		Name:          "demo",
+		ImageName:     "ocm/demo:latest",
+		Image:         ImageConfig{BaseImage: config.DefaultBaseImage},
+		ContainerName: "demo",
+		HomeDir:       home,
+		OpenCodePort:  4096,
 	}}
+	l := Lifecycle{cfg: config.Config{Runtime: config.RuntimeDocker}, driver: driver, agents: agent.NewRegistry()}
 
-	l := Lifecycle{driver: fake}
-	versions, err := l.UpdateRuntimes(context.Background(), Summary{Manifest: Manifest{ContainerName: "c", HomeDir: t.TempDir(), OpenCodePort: 4096}})
-	if err != nil {
-		t.Fatalf("UpdateRuntimes error: %v", err)
+	if err := l.UpdateWorkspaceImage(context.Background(), summary); err != nil {
+		t.Fatalf("UpdateWorkspaceImage error: %v", err)
 	}
+	if len(driver.pulled) != 1 || driver.pulled[0] != config.DefaultBaseImage {
+		t.Fatalf("pulls = %v, want forced pull of %s", driver.pulled, config.DefaultBaseImage)
+	}
+	if len(driver.builds) != 1 || driver.builds[0].BaseImage != config.DefaultBaseImage {
+		t.Fatalf("workspace builds = %#v", driver.builds)
+	}
+	if driver.removed != 1 || driver.created != 1 || driver.started != 1 {
+		t.Fatalf("replacement = remove:%d create:%d start:%d, want 1 each", driver.removed, driver.created, driver.started)
+	}
+}
 
-	if versions.OpenCode != "0.5.7" || versions.DeepSeek != "0.1.2" || versions.ACP != "0.4.29" || versions.PNPM != "11.25.0" {
-		t.Errorf("versions=%#v", versions)
-	}
+type updateDriver struct {
+	*fakeDriver
+	pulled  []string
+	builds  []runtime.BuildSpec
+	removed int
+	created int
+}
 
-	var sawInstall bool
-	for _, args := range fake.gotArgs {
-		if strings.Join(args, " ") == "npm install -g opencode-ai@latest @deepseek-ai/dsh@latest @openma/deepseek-harness-acp@latest pnpm@latest" {
-			sawInstall = true
-		}
-	}
-	if !sawInstall {
-		t.Errorf("expected npm install for all agent runtimes, got calls: %v", fake.gotArgs)
-	}
+func (d *updateDriver) PullImage(_ context.Context, ref string) error {
+	d.pulled = append(d.pulled, ref)
+	return nil
+}
 
-	// The container must be restarted once so the persistent `opencode serve`
-	// process reloads the upgraded binary.
-	if fake.stopped != 1 || fake.started != 1 {
-		t.Errorf("restart = stop:%d start:%d, want 1 and 1", fake.stopped, fake.started)
-	}
+func (d *updateDriver) BuildImage(_ context.Context, spec runtime.BuildSpec) error {
+	d.builds = append(d.builds, spec)
+	return nil
+}
+
+func (d *updateDriver) ContainerStatus(context.Context, string) (string, error) {
+	return runtime.StatusRunning, nil
+}
+
+func (d *updateDriver) ContainerImageID(context.Context, string) (string, error) { return "old", nil }
+func (d *updateDriver) ImageID(context.Context, string) (string, error)          { return "new", nil }
+func (d *updateDriver) RemoveContainer(context.Context, string) error {
+	d.removed++
+	return nil
+}
+func (d *updateDriver) CreateContainer(context.Context, runtime.ContainerSpec) error {
+	d.created++
+	return nil
 }

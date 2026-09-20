@@ -338,20 +338,15 @@ func newWorkspacesUpdateCmd(cfg config.Config) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "update [workspace]",
-		Short: "Update OpenCode and DeepSeek Harness runtimes inside the workspace",
+		Short: "Refresh a workspace base image and replace its container",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return forEachTarget(cfg, cmd, args, all, 15*time.Minute, "Updated",
+			return forEachTarget(cfg, cmd, args, all, 15*time.Minute, "Updated base image for",
 				func(lc workspace.Lifecycle, ctx context.Context, s workspace.Summary) error {
-					versions, err := lc.UpdateRuntimes(ctx, s)
-					if err != nil {
-						return err
-					}
-					fmt.Fprintf(cmd.OutOrStdout(), "  %s: OpenCode %s, DSH %s, ACP %s, pnpm %s\n", s.Manifest.Name, versions.OpenCode, versions.DeepSeek, versions.ACP, versions.PNPM)
-					return nil
+					return lc.UpdateWorkspaceImage(ctx, s)
 				})
 		},
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "update OpenCode in every workspace")
+	cmd.Flags().BoolVar(&all, "all", false, "update every workspace base image")
 	return cmd
 }
 

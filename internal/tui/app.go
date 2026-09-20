@@ -91,7 +91,6 @@ type model struct {
 	logCancel     context.CancelFunc
 	logEvents     <-chan tea.Msg
 	tokens        map[string]tokenState
-	versions      map[string]versionState
 
 	// templates page (the ":templates" view; see templates.go). templatesMode
 	// swaps the workspace table for the template list and reroutes key handling.
@@ -189,13 +188,6 @@ type model struct {
 	editFormRow    int // editEntries index of the triggering add row
 	editFormVals   []string
 	editFormCursor int
-}
-
-// versionState caches the OpenCode version reported by a running workspace
-// container so the dashboard column does not re-exec on every refresh.
-type versionState struct {
-	loading bool
-	value   string
 }
 
 // tokenState caches the tokscale token-usage synthesis for one workspace.
@@ -355,9 +347,8 @@ type provisionWorkspaceMsg struct {
 }
 
 type updateActionMsg struct {
-	name     string
-	versions workspace.RuntimeVersions
-	err      error
+	name string
+	err  error
 }
 
 type baseImageReadyMsg struct {
@@ -375,12 +366,6 @@ type tokenUsageMsg struct {
 	name  string
 	usage workspace.TokenUsage
 	err   error
-}
-
-type versionMsg struct {
-	name    string
-	version string
-	err     error
 }
 
 type sessionLogMsg struct {
@@ -512,7 +497,6 @@ func newModel(cfg config.Config) model {
 		statuses:             map[string]workspace.Status{},
 		statusRecency:        map[string]uint64{},
 		tokens:               map[string]tokenState{},
-		versions:             map[string]versionState{},
 		installing:           map[string]bool{},
 		provisioning:         map[string]bool{},
 		updating:             map[string]bool{},
@@ -592,17 +576,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			next[name] = status
 
-			// Fetch the running container's OpenCode version once and cache it;
-			// drop the cache when it stops so a fresh value is read on restart.
-			if status.Container == runtime.StatusRunning {
-				if st, ok := m.versions[name]; !ok || (!st.loading && st.value == "") {
-					m.versions[name] = versionState{loading: true}
-					cmds = append(cmds, m.fetchVersion(status.Workspace))
-				}
-			} else {
-				delete(m.versions, name)
-			}
-
 			// Refresh token usage via tokscale at launch (the first time we see the
 			// container running) and whenever a workspace finishes a working turn
 			// (working -> anything else), so the TOKENS column stays current without
@@ -659,13 +632,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateActionMsg:
 		delete(m.updating, msg.name)
 		if msg.err != nil {
-			slog.Error("runtime update failed", "workspace", msg.name, "error", msg.err)
-			m.showError("Update Agent Runtimes", fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err))
+			slog.Error("base image update failed", "workspace", msg.name, "error", msg.err)
+			m.showError("Update Base Image", fmt.Sprintf("Update failed for %s: %v", msg.name, msg.err))
 			return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 		}
-		slog.Info("agent runtimes updated", "workspace", msg.name, "opencode", msg.versions.OpenCode, "dsh", msg.versions.DeepSeek)
-		m.message = fmt.Sprintf("Updated agent runtimes in %s: OpenCode %s, DSH %s.", msg.name, msg.versions.OpenCode, msg.versions.DeepSeek)
-		delete(m.versions, msg.name)
+		slog.Info("workspace base image updated", "workspace", msg.name)
+		m.message = fmt.Sprintf("Updated the base image for %s.", msg.name)
 		return m, tea.Batch(m.loadWorkspaces, m.loadStatuses)
 	case editApplyMsg:
 		delete(m.installing, msg.name)
@@ -738,13 +710,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state.usage = msg.usage
 		}
 		m.tokens[msg.name] = state
-		return m, nil
-	case versionMsg:
-		value := msg.version
-		if msg.err != nil || value == "" {
-			value = "unknown"
-		}
-		m.versions[msg.name] = versionState{value: value}
 		return m, nil
 	case sessionLogMsg:
 		if msg.name != m.logWorkspace {
@@ -1482,10 +1447,8 @@ func (m model) startSelected() (tea.Model, tea.Cmd) {
 	}
 }
 
-// updateSelected upgrades the agent runtimes inside the selected workspace container. It
-// is gated on OpenCode being idle: while a task is running (the agent is
-// generating) or blocked on an approval prompt, the update is refused so the
-// post-update container restart cannot interrupt active work.
+// updateSelected refreshes the selected workspace base image. It is gated on
+// agent activity because replacing the container would interrupt active work.
 func (m model) updateSelected() (tea.Model, tea.Cmd) {
 	selected, ok := m.selectedWorkspace()
 	if !ok {
@@ -1493,14 +1456,14 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.lifecycleErr != "" {
-		m.showError("Update Agent Runtimes", "Update failed: "+m.lifecycleErr)
+		m.showError("Update Base Image", "Update failed: "+m.lifecycleErr)
 		return m, nil
 	}
 
 	name := selected.Manifest.Name
 	switch m.statuses[name].Activity {
 	case workspace.ActivityWorking, workspace.ActivityWaiting:
-		m.message = fmt.Sprintf("Cannot update %s while a task is running in opencode. Wait until it is idle.", name)
+		m.message = fmt.Sprintf("Cannot update %s while a task is running. Wait until it is idle.", name)
 		return m, nil
 	}
 
@@ -1508,12 +1471,12 @@ func (m model) updateSelected() (tea.Model, tea.Cmd) {
 		m.updating = map[string]bool{}
 	}
 	m.updating[name] = true
-	m.message = "Updating agent runtimes in " + name + " (this restarts the container)..."
+	m.message = "Updating the base image for " + name + " (this replaces the container)..."
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		versions, err := m.lifecycle.UpdateRuntimes(ctx, selected)
-		return updateActionMsg{name: name, versions: versions, err: err}
+		err := m.lifecycle.UpdateWorkspaceImage(ctx, selected)
+		return updateActionMsg{name: name, err: err}
 	}
 }
 
@@ -1871,7 +1834,7 @@ func (m model) renderTable(width, height int) string {
 	visible := m.visibleWorkspaces()
 
 	widths := columnWidths(contentWidth)
-	headers := []string{"NAME", "STATUS", "ACTIVITY", "RUNTIME", "OPENCODE", "TOKENS I/O/C", "CONTAINER", "AGE"}
+	headers := []string{"NAME", "STATUS", "ACTIVITY", "RUNTIME", "BASE VER", "TOKENS I/O/C", "CONTAINER", "AGE"}
 	headerCells := make([]string, len(headers))
 	for i, h := range headers {
 		headerCells[i] = headerStyle.Render(fit(h, widths[i]))
@@ -1913,7 +1876,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 	statusText, statusColor := m.workspaceStatus(ws)
 	activityText, activityColor := m.workspaceActivity(ws)
 	rt := ws.Manifest.Runtime
-	version := m.workspaceVersion(ws)
+	baseVersion := workspaceBaseVersion(ws.Manifest.Image.BaseImage)
 	tokens := m.workspaceTokens(ws)
 	container := ws.Manifest.ContainerName
 	age := m.workspaceAge(ws)
@@ -1924,7 +1887,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 			fit(statusText, widths[1]),
 			fit(activityText, widths[2]),
 			fit(rt, widths[3]),
-			fit(version, widths[4]),
+			fit(baseVersion, widths[4]),
 			fit(tokens, widths[5]),
 			fit(container, widths[6]),
 			fit(age, widths[7]),
@@ -1937,7 +1900,7 @@ func (m model) renderRow(ws workspace.Summary, widths []int, contentWidth int, s
 		lipgloss.NewStyle().Foreground(statusColor).Render(fit(statusText, widths[1])),
 		lipgloss.NewStyle().Foreground(activityColor).Render(fit(activityText, widths[2])),
 		mutedStyle.Render(fit(rt, widths[3])),
-		mutedStyle.Render(fit(version, widths[4])),
+		mutedStyle.Render(fit(baseVersion, widths[4])),
 		mutedStyle.Render(fit(tokens, widths[5])),
 		mutedStyle.Render(fit(container, widths[6])),
 		mutedStyle.Render(fit(age, widths[7])),
@@ -2074,7 +2037,7 @@ func (m model) renderHelp() string {
 		{"d", "describe"},
 		{"l", "view session logs"},
 		{"e", "edit"},
-		{"u", "update agent runtimes"},
+		{"u", "update workspace base image"},
 		{"c", "create"},
 		{"^d", "delete"},
 		{"q / ^c", "quit"},
@@ -3298,15 +3261,6 @@ func (m model) fetchTokenUsage(summary workspace.Summary) tea.Cmd {
 	}
 }
 
-func (m model) fetchVersion(summary workspace.Summary) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		version, err := m.lifecycle.OpenCodeVersion(ctx, summary)
-		return versionMsg{name: summary.Manifest.Name, version: version, err: err}
-	}
-}
-
 // checkForUpdate queries the npm registry for the latest published release and,
 // when it is newer than the running build, returns an updateAvailableMsg so the
 // header can advertise it. It is best-effort: development builds and any network
@@ -3378,18 +3332,21 @@ func parseVersion(s string) [3]int {
 	return out
 }
 
-// workspaceVersion returns the OpenCode version display text for a workspace:
-// a dash when the container is stopped, an ellipsis while it is being read, and
-// the cached version once known.
-func (m model) workspaceVersion(ws workspace.Summary) string {
-	if !m.isRunning(ws.Manifest.Name) {
-		return "—"
+// workspaceBaseVersion renders the configured base image tag. The reference is
+// persisted with each workspace, so it remains meaningful while stopped and does
+// not require an exec into the workspace container.
+func workspaceBaseVersion(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "unknown"
 	}
-	st, ok := m.versions[ws.Manifest.Name]
-	if !ok || st.loading || st.value == "" {
-		return "…"
+	if at := strings.LastIndexByte(ref, '@'); at >= 0 {
+		return "digest"
 	}
-	return st.value
+	if colon := strings.LastIndexByte(ref, ':'); colon > strings.LastIndexByte(ref, '/') {
+		return ref[colon+1:]
+	}
+	return "latest"
 }
 
 // workspaceTokens returns the input/output token display for a workspace's
@@ -3609,7 +3566,7 @@ func (m *model) clampSelection() {
 }
 
 // columnWidths splits the available content width across the eight columns,
-// keeping STATUS, ACTIVITY, RUNTIME, OPENCODE, TOKENS, and AGE fixed and sharing
+// keeping STATUS, ACTIVITY, RUNTIME, BASE VER, TOKENS, and AGE fixed and sharing
 // the rest between NAME and CONTAINER.
 func columnWidths(contentWidth int) []int {
 	const gaps = 14 // seven 2-space separators

@@ -87,10 +87,21 @@ func (l Lifecycle) EnsureBaseImage(ctx context.Context) error {
 // base it falls back to building the full base recipe locally, preserving the
 // prior behavior for users who point baseImage.name at a different distro.
 func (l Lifecycle) resolveBaseImage(ctx context.Context, image ImageConfig) (string, error) {
+	return l.resolveBaseImageWithRefresh(ctx, image, false)
+}
+
+// resolveBaseImageWithRefresh optionally refreshes the configured base reference
+// and rebuilds a managed overlay so a workspace update cannot reuse its old base
+// through the local build cache.
+func (l Lifecycle) resolveBaseImageWithRefresh(ctx context.Context, image ImageConfig, refresh bool) (string, error) {
 	prebuilt := config.IsManagedBaseImage(image.BaseImage)
 
 	if prebuilt {
-		if err := l.ensurePulled(ctx, image.BaseImage); err != nil {
+		if refresh {
+			if err := l.driver.PullImage(ctx, image.BaseImage); err != nil {
+				return "", err
+			}
+		} else if err := l.ensurePulled(ctx, image.BaseImage); err != nil {
 			return "", err
 		}
 		if len(image.Packages) == 0 && len(image.Commands) == 0 {
@@ -108,6 +119,7 @@ func (l Lifecycle) resolveBaseImage(ctx context.Context, image ImageConfig) (str
 		Packages:  image.Packages,
 		Commands:  image.Commands,
 		Prebuilt:  prebuilt,
+		Refresh:   refresh,
 	}); err != nil {
 		return "", err
 	}
@@ -150,10 +162,14 @@ func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status 
 }
 
 func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
+	return l.ensureStarted(ctx, summary, false)
+}
+
+func (l Lifecycle) ensureStarted(ctx context.Context, summary Summary, refreshBase bool) error {
 	name := summary.Manifest.ContainerName
 	slog.Info("ensuring workspace is started", "workspace", summary.Manifest.Name, "container", name)
 
-	status, spec, err := l.provision(ctx, summary)
+	status, spec, err := l.provisionWithBaseRefresh(ctx, summary, refreshBase)
 	if err != nil {
 		return err
 	}
@@ -224,6 +240,10 @@ func (l Lifecycle) verifyStarted(ctx context.Context, name string) error {
 }
 
 func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runtime.ContainerSpec, error) {
+	return l.provisionWithBaseRefresh(ctx, summary, false)
+}
+
+func (l Lifecycle) provisionWithBaseRefresh(ctx context.Context, summary Summary, refreshBase bool) (string, runtime.ContainerSpec, error) {
 	if err := l.driver.Available(ctx); err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
@@ -256,7 +276,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 		manifest.DeepSeekPort = port
 	}
 
-	baseImageName, err := l.resolveBaseImage(ctx, manifest.Image)
+	baseImageName, err := l.resolveBaseImageWithRefresh(ctx, manifest.Image, refreshBase)
 	if err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
@@ -347,7 +367,7 @@ func (l Lifecycle) provision(ctx context.Context, summary Summary) (string, runt
 
 	// Recreate a container when it no longer matches the desired spec, so the new
 	// settings actually take effect:
-	//   - a now-outdated image (after a base-image bump or an OpenCode update), or
+	//   - a now-outdated image after a base-image refresh, or
 	//   - drift in network mode / assigned OpenCode port (e.g. hostNetwork was
 	//     toggled, or the workspace was backfilled a unique port). Without this the
 	//     container keeps its old namespace and stale/missing OCM_OPENCODE_PORT,
@@ -585,87 +605,17 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 	return l.driver.StopContainer(ctx, name)
 }
 
-type RuntimeVersions struct {
-	OpenCode string
-	DeepSeek string
-	ACP      string
-	PNPM     string
-}
-
-// UpdateRuntimes upgrades OpenCode and the DeepSeek Harness runtime stack to
-// their latest npm releases inside the workspace container, then restarts it so
-// the OpenCode server reloads. The DSH stack is updated even when disabled for a
-// specific workspace, keeping the shared workspace image ready for later enable.
-//
-// OpenCode must be idle: the TUI only invokes this when no task is running, so a
-// restart cannot interrupt active work. OpenCode is installed globally under
-// /usr/local (owned by root), so the upgrade runs as root even though the
-// container's main process is the unprivileged workspace user. A stop/start
-// restart preserves the container's writable layer, so the freshly installed
-// package survives and the persistent `opencode serve` process reloads it.
-func (l Lifecycle) UpdateRuntimes(ctx context.Context, summary Summary) (RuntimeVersions, error) {
-	name := summary.Manifest.ContainerName
-	slog.Info("updating agent runtimes in workspace", "workspace", summary.Manifest.Name, "container", name)
-
-	// The container must be running to exec the upgrade into it.
-	if err := l.EnsureStarted(ctx, summary); err != nil {
-		return RuntimeVersions{}, err
+// UpdateWorkspaceImage refreshes a workspace's configured base image, rebuilds
+// its workspace image, and replaces the container when that image changed. The
+// host-mounted home remains intact, and module reconciliation restores tools that
+// modules install into the disposable container layer.
+func (l Lifecycle) UpdateWorkspaceImage(ctx context.Context, summary Summary) error {
+	slog.Info("updating workspace base image", "workspace", summary.Manifest.Name, "baseImage", summary.Manifest.Image.BaseImage)
+	if err := l.ensureStarted(ctx, summary, true); err != nil {
+		return fmt.Errorf("update workspace base image: %w", err)
 	}
-
-	packages := []string{
-		"opencode-ai@latest",
-		"@deepseek-ai/dsh@latest",
-		"@openma/deepseek-harness-acp@latest",
-		"pnpm@latest",
-	}
-	args := append([]string{"npm", "install", "-g"}, packages...)
-	if _, err := l.driver.ExecOutputAs(ctx, name, "0", args); err != nil {
-		return RuntimeVersions{}, fmt.Errorf("update agent runtimes: %w", err)
-	}
-
-	versions, err := l.runtimeVersions(ctx, name)
-	if err != nil {
-		return RuntimeVersions{}, err
-	}
-
-	slog.Debug("restarting container after runtime update", "workspace", summary.Manifest.Name, "container", name, "opencode", versions.OpenCode, "dsh", versions.DeepSeek)
-	if err := l.driver.StopContainer(ctx, name); err != nil {
-		return RuntimeVersions{}, fmt.Errorf("restart after update: stop container: %w", err)
-	}
-	if err := l.driver.StartContainer(ctx, name); err != nil {
-		return RuntimeVersions{}, fmt.Errorf("restart after update: start container: %w", err)
-	}
-
-	slog.Info("agent runtimes updated in workspace", "workspace", summary.Manifest.Name, "container", name, "opencode", versions.OpenCode, "dsh", versions.DeepSeek, "acp", versions.ACP, "pnpm", versions.PNPM)
-	return versions, nil
-}
-
-func (l Lifecycle) runtimeVersions(ctx context.Context, containerName string) (RuntimeVersions, error) {
-	commands := []struct {
-		name string
-		args []string
-	}{
-		{"OpenCode", []string{"opencode", "--version"}},
-		{"DeepSeek Harness", []string{"dsh", "--version"}},
-		{"DeepSeek ACP adapter", []string{"dsh-acp", "--version"}},
-		{"pnpm", []string{"pnpm", "--version"}},
-	}
-	versions := make([]string, 0, len(commands))
-	for _, command := range commands {
-		output, err := l.driver.ExecOutput(ctx, containerName, command.args)
-		if err != nil {
-			return RuntimeVersions{}, fmt.Errorf("read %s version: %w", command.name, err)
-		}
-		value := strings.TrimSpace(string(output))
-		if i := strings.IndexByte(value, '\n'); i >= 0 {
-			value = strings.TrimSpace(value[:i])
-		}
-		if value == "" {
-			value = "unknown"
-		}
-		versions = append(versions, value)
-	}
-	return RuntimeVersions{OpenCode: versions[0], DeepSeek: versions[1], ACP: versions[2], PNPM: versions[3]}, nil
+	slog.Info("workspace base image updated", "workspace", summary.Manifest.Name, "baseImage", summary.Manifest.Image.BaseImage)
+	return nil
 }
 
 // OpenCodeVersion returns the OpenCode version installed in the workspace's
