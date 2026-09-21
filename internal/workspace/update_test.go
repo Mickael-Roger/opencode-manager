@@ -28,7 +28,7 @@ func TestUpdateWorkspaceImageRefreshesBaseAndRecreatesContainer(t *testing.T) {
 	if len(driver.pulled) != 1 || driver.pulled[0] != config.DefaultBaseImage {
 		t.Fatalf("pulls = %v, want forced pull of %s", driver.pulled, config.DefaultBaseImage)
 	}
-	if len(driver.builds) != 1 || driver.builds[0].BaseImage != config.DefaultBaseImage {
+	if len(driver.builds) != 1 || driver.builds[0].BaseImage != config.DefaultBaseImage || !driver.builds[0].Refresh {
 		t.Fatalf("workspace builds = %#v", driver.builds)
 	}
 	if driver.removed != 1 || driver.created != 1 || driver.started != 1 {
@@ -58,8 +58,10 @@ func (d *updateDriver) ContainerStatus(context.Context, string) (string, error) 
 	return runtime.StatusRunning, nil
 }
 
-func (d *updateDriver) ContainerImageID(context.Context, string) (string, error) { return "old", nil }
-func (d *updateDriver) ImageID(context.Context, string) (string, error)          { return "new", nil }
+// Podman can preserve the image ID when the rebuilt tag has the same config. An
+// explicit update must still replace the container to pick up the refreshed base.
+func (d *updateDriver) ContainerImageID(context.Context, string) (string, error) { return "same", nil }
+func (d *updateDriver) ImageID(context.Context, string) (string, error)          { return "same", nil }
 func (d *updateDriver) RemoveContainer(context.Context, string) error {
 	d.removed++
 	return nil

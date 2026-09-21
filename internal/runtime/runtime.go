@@ -193,6 +193,9 @@ type BuildSpec struct {
 	BaseImage string
 	UID       int
 	GID       int
+	// Refresh rebuilds the workspace image without reusing cached layers. It is
+	// used after a base-image pull so the new base is guaranteed to be inherited.
+	Refresh bool
 }
 
 type ContainerSpec struct {
@@ -332,6 +335,9 @@ func (d CLIDriver) BuildImage(ctx context.Context, spec BuildSpec) error {
 	}
 
 	args := []string{"build", "-t", spec.ImageName, "-f", filepath.Join(dir, workspaceDockerfile)}
+	if spec.Refresh {
+		args = append(args, "--no-cache")
+	}
 	args = append(args, workspaceBuildArgs(spec)...)
 	args = append(args, dir)
 	if err := d.run(ctx, args...); err != nil {

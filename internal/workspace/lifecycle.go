@@ -286,6 +286,7 @@ func (l Lifecycle) provisionWithBaseRefresh(ctx context.Context, summary Summary
 		BaseImage: baseImageName,
 		UID:       uid,
 		GID:       gid,
+		Refresh:   refreshBase,
 	}); err != nil {
 		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
 	}
@@ -378,9 +379,11 @@ func (l Lifecycle) provisionWithBaseRefresh(ctx context.Context, summary Summary
 		if serr != nil {
 			stale = false
 		}
-		if stale || l.containerSpecDrift(ctx, manifest, spec) {
+		if refreshBase || stale || l.containerSpecDrift(ctx, manifest, spec) {
 			reason := "config drift"
-			if stale {
+			if refreshBase {
+				reason = "base image update"
+			} else if stale {
 				reason = "stale image"
 			}
 			slog.Warn("recreating workspace container", "workspace", manifest.Name, "container", manifest.ContainerName, "reason", reason)
@@ -606,9 +609,9 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 }
 
 // UpdateWorkspaceImage refreshes a workspace's configured base image, rebuilds
-// its workspace image, and replaces the container when that image changed. The
-// host-mounted home remains intact, and module reconciliation restores tools that
-// modules install into the disposable container layer.
+// its workspace image without cache, and replaces its container. The host-mounted
+// home remains intact, and module reconciliation restores tools that modules
+// install into the disposable container layer.
 func (l Lifecycle) UpdateWorkspaceImage(ctx context.Context, summary Summary) error {
 	slog.Info("updating workspace base image", "workspace", summary.Manifest.Name, "baseImage", summary.Manifest.Image.BaseImage)
 	if err := l.ensureStarted(ctx, summary, true); err != nil {
