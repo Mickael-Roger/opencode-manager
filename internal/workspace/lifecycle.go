@@ -613,6 +613,18 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 // home remains intact, and module reconciliation restores tools that modules
 // install into the disposable container layer.
 func (l Lifecycle) UpdateWorkspaceImage(ctx context.Context, summary Summary) error {
+	// A workspace records the image definition it was created with so normal
+	// starts remain stable. An explicit update intentionally opts into the current
+	// global definition, allowing config.yaml to move an old workspace to a newer
+	// published base tag.
+	manifest := summary.Manifest
+	manifest.Image = imageConfigFromConfig(l.cfg)
+	manifest.UpdatedAt = time.Now().UTC()
+	if err := SaveManifest(filepath.Join(summary.Path, ManifestFile), manifest); err != nil {
+		return fmt.Errorf("save updated workspace image configuration: %w", err)
+	}
+	summary.Manifest = manifest
+
 	slog.Info("updating workspace base image", "workspace", summary.Manifest.Name, "baseImage", summary.Manifest.Image.BaseImage)
 	if err := l.ensureStarted(ctx, summary, true); err != nil {
 		return fmt.Errorf("update workspace base image: %w", err)
@@ -1131,7 +1143,8 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 // Revision 13: export the persistent DeepSeek Harness home from the image.
 // Revision 14: install pinned pnpm for synchronized DSH profile dependencies.
 // Revision 15: remove the terminal ACP client and use DSH Web profiles.
-const baseImageRevision = 15
+// Revision 16: install Claude Code in the base image.
+const baseImageRevision = 16
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {

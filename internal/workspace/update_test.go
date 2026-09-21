@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/mickael-menu/opencode-manager/internal/agent"
@@ -11,16 +12,20 @@ import (
 
 func TestUpdateWorkspaceImageRefreshesBaseAndRecreatesContainer(t *testing.T) {
 	driver := &updateDriver{fakeDriver: &fakeDriver{}}
-	home := t.TempDir()
+	path := t.TempDir()
+	home := filepath.Join(path, "home")
 	summary := Summary{Manifest: Manifest{
 		Name:          "demo",
 		ImageName:     "ocm/demo:latest",
-		Image:         ImageConfig{BaseImage: config.DefaultBaseImage},
+		Image:         ImageConfig{BaseImage: "docker.io/mroger78/ocm-base:0.7.0"},
 		ContainerName: "demo",
 		HomeDir:       home,
 		OpenCodePort:  4096,
-	}}
-	l := Lifecycle{cfg: config.Config{Runtime: config.RuntimeDocker}, driver: driver, agents: agent.NewRegistry()}
+	}, Path: path}
+	if err := SaveManifest(filepath.Join(path, ManifestFile), summary.Manifest); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+	l := Lifecycle{cfg: config.Config{Runtime: config.RuntimeDocker, BaseImage: config.BaseImageConfig{Name: config.DefaultBaseImage}}, driver: driver, agents: agent.NewRegistry()}
 
 	if err := l.UpdateWorkspaceImage(context.Background(), summary); err != nil {
 		t.Fatalf("UpdateWorkspaceImage error: %v", err)
@@ -33,6 +38,13 @@ func TestUpdateWorkspaceImageRefreshesBaseAndRecreatesContainer(t *testing.T) {
 	}
 	if driver.removed != 1 || driver.created != 1 || driver.started != 1 {
 		t.Fatalf("replacement = remove:%d create:%d start:%d, want 1 each", driver.removed, driver.created, driver.started)
+	}
+	updated, err := LoadManifest(filepath.Join(path, ManifestFile))
+	if err != nil {
+		t.Fatalf("load updated manifest: %v", err)
+	}
+	if updated.Image.BaseImage != config.DefaultBaseImage {
+		t.Fatalf("updated base image = %q, want %q", updated.Image.BaseImage, config.DefaultBaseImage)
 	}
 }
 
