@@ -242,7 +242,7 @@ func newWorkspacesCreateCmd(cfg config.Config) *cobra.Command {
 	cmd.Flags().StringVarP(&template, "template", "t", "", "apply a template's modules to the new workspace")
 	cmd.Flags().BoolVar(&start, "start", false, "build the image and start the container after creating")
 	cmd.Flags().BoolVar(&enableDeepSeek, "deepseek", false, "enable DeepSeek Harness for the workspace")
-	cmd.Flags().StringVar(&defaultRuntime, "default-runtime", "", "default agent runtime (opencode or deepseek)")
+	cmd.Flags().StringVar(&defaultRuntime, "default-runtime", "", "default agent runtime (opencode, deepseek, or claude)")
 	return cmd
 }
 
@@ -406,7 +406,7 @@ func newWorkspacesAttachCmd(cfg config.Config) *cobra.Command {
 			return runInteractive(c)
 		},
 	}
-	cmd.Flags().StringVarP(&runtimeName, "runtime", "r", "", "agent runtime to attach (opencode or deepseek)")
+	cmd.Flags().StringVarP(&runtimeName, "runtime", "r", "", "agent runtime to attach (opencode, deepseek, or claude)")
 	return cmd
 }
 

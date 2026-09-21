@@ -33,7 +33,7 @@ general command line. The available views (*kinds*) are:
 | `g` / `G` | Jump to top / bottom |
 | `^f` / `^b` | Page down / page up |
 | `↵` (Enter) | **Attach** to the selected workspace's default agent runtime |
-| `^o` (Ctrl+O) | Open the **runtime picker**, then attach with the chosen harness |
+| `^a` (Ctrl+A) | Open the **agent picker**, then attach with the selected agent |
 | `s` | Open a **shell** in the workspace container |
 | `t` | **Start / stop** the container (toggle) |
 | `d` | **Describe** the workspace (details + token breakdown) |
@@ -52,9 +52,10 @@ Drops you into the selected workspace's default runtime. OpenCode is the default
 for existing and newly created workspaces. A DeepSeek Harness workspace opens its
 dedicated `dsh-tui` client and resumes its most recent session for the workspace.
 
-`Ctrl+O` opens a runtime picker listing the workspace's enabled runtimes (the
-default preselected); pick one with `↑`/`↓` and attach with `Enter`. New harnesses
-added to the manager appear there automatically.
+`Ctrl+A` opens an agent picker listing the workspace's enabled runtimes (the
+default preselected); pick one with `↑`/`↓` and attach with `Enter`. Claude Code
+is available in every workspace; new harnesses added to the manager appear there
+automatically.
 
 #### Inside `dsh-tui`
 

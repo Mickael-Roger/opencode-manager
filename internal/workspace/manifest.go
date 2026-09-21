@@ -51,6 +51,13 @@ func (m Manifest) EffectiveDefaultRuntime() string {
 }
 
 func (m Manifest) RuntimeEnabled(name string) bool {
+	// Claude Code is a stateless CLI from the manager's perspective: it does not
+	// need a managed server or port, and its state stays in the persistent home.
+	// Treat it as available for legacy manifests that predate this runtime.
+	if name == agent.Claude {
+		configured, present := m.Runtimes[name]
+		return !present || configured.Enabled
+	}
 	if len(m.Runtimes) == 0 {
 		return name == agent.OpenCode
 	}

@@ -237,6 +237,7 @@ func TestBaseDockerfileInstallsRequiredTools(t *testing.T) {
 		"RUN ${EXTRA_COMMANDS}",
 		"git --version && rg --version && jq --version && npx --version && uvx --version",
 		"command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai",
+		"command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code",
 		"COPY opencode-manager-attach /usr/local/bin/opencode-manager-attach",
 		"RUN chmod 0755 /usr/local/bin/opencode-manager-attach",
 		"ENV PATH=/home/debian/.local/bin:/usr/local/bin",

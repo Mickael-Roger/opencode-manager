@@ -12,7 +12,8 @@
 
 > **`ocm` is k9s for [OpenCode](https://opencode.ai).**
 > One terminal dashboard to create, attach, edit, and tear down coding-agent
-> workspaces, with OpenCode by default and optional DeepSeek Harness support.
+> workspaces, with OpenCode by default plus Claude Code and optional DeepSeek
+> Harness support.
 
 📖 **[Read the documentation](https://mickael-roger.github.io/opencode-manager/)** — installation, getting started, concepts, TUI/CLI guides, and modules.
 

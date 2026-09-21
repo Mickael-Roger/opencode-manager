@@ -29,7 +29,8 @@ container. Each workspace has:
   commands, skills, agents, and plugins;
 - its selected **module** configuration;
 - a generated **image** and a long-lived, attachable **container**;
-- OpenCode by default and, when enabled, DeepSeek Harness with its `web` profile.
+- OpenCode and Claude Code by default and, when enabled, DeepSeek Harness with
+  its `web` profile.
 
 At the workspace root only `workspace.yaml` and `home/` are created. Environment
 values, image/package requirements, module state, and generated OpenCode paths
@@ -54,15 +55,18 @@ runtimes:
     enabled: true
   deepseek:
     enabled: true
+  claude:
+    enabled: true
 ```
 
 The runtimes have independent configuration and session state but see the same
-project filesystem and module-provisioned capabilities. Each DeepSeek-enabled
-workspace starts `dsh web --port <port> --no-open`. DSH emits a new startup URL
-with a token on every restart; OCM stores just that token, with owner-only
-permissions, at `home/.config/deepseek/web-token`. Attaching a DeepSeek
-workspace opens the embedded `dsh-tui` terminal client against that server
-(see the [TUI guide](tui.md#attach-enter)).
+project filesystem and module-provisioned capabilities. Claude Code runs directly
+as `claude`, preserving its login and settings in `home/.claude/`; headless CLI
+runs use `claude -p`. Each DeepSeek-enabled workspace starts `dsh web --port
+<port> --no-open`. DSH emits a new startup URL with a token on every restart; OCM
+stores just that token, with owner-only permissions, at
+`home/.config/deepseek/web-token`. Attaching a DeepSeek workspace opens the
+embedded `dsh-tui` terminal client against that server (see the [TUI guide](tui.md#attach-enter)).
 
 ## Shared DeepSeek Harness config
 

@@ -5,6 +5,7 @@ import "fmt"
 const (
 	OpenCode = "opencode"
 	DeepSeek = "deepseek"
+	Claude   = "claude"
 )
 
 type Runtime interface {
@@ -20,7 +21,7 @@ type Registry struct {
 
 // All returns every known runtime in menu order.
 func All() []Runtime {
-	return []Runtime{openCodeRuntime{}, deepSeekRuntime{}}
+	return []Runtime{openCodeRuntime{}, deepSeekRuntime{}, claudeRuntime{}}
 }
 
 func NewRegistry() Registry {
@@ -62,4 +63,15 @@ func (deepSeekRuntime) AttachCommand() ([]string, error) {
 }
 func (deepSeekRuntime) RunCommand(string) ([]string, error) {
 	return nil, fmt.Errorf("DeepSeek Harness does not provide a non-interactive ACP command")
+}
+
+type claudeRuntime struct{}
+
+func (claudeRuntime) Name() string        { return Claude }
+func (claudeRuntime) DisplayName() string { return "Claude Code" }
+func (claudeRuntime) AttachCommand() ([]string, error) {
+	return []string{"claude"}, nil
+}
+func (claudeRuntime) RunCommand(prompt string) ([]string, error) {
+	return []string{"claude", "-p", prompt}, nil
 }

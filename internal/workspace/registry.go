@@ -120,6 +120,7 @@ func (r Registry) NewManifest(name string) (Manifest, error) {
 		DefaultRuntime: agent.OpenCode,
 		Runtimes: RuntimeConfigMap{
 			agent.OpenCode: {Enabled: true},
+			agent.Claude:   {Enabled: true},
 		},
 		Env:       map[string]string{},
 		Modules:   nil,

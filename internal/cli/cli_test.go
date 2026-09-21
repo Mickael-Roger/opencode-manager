@@ -53,6 +53,20 @@ func TestWorkspacesCreateEnablesSelectedDefaultRuntime(t *testing.T) {
 	}
 }
 
+func TestWorkspacesCreateSupportsClaudeDefaultRuntime(t *testing.T) {
+	cfg := testConfig(t)
+	if _, _, err := run(t, cfg, "workspaces", "create", "Claude", "--default-runtime", "claude"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	manifest, err := workspace.LoadManifest(filepath.Join(cfg.WorkspaceRoot, "workspaces", "claude", workspace.ManifestFile))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if manifest.EffectiveDefaultRuntime() != agent.Claude || !manifest.RuntimeEnabled(agent.Claude) {
+		t.Fatalf("runtime config = default %q, %#v", manifest.EffectiveDefaultRuntime(), manifest.Runtimes)
+	}
+}
+
 // run executes the command tree with args and returns captured stdout, stderr,
 // and the execution error.
 func run(t *testing.T, cfg config.Config, args ...string) (string, string, error) {

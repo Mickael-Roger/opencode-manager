@@ -254,7 +254,7 @@ Generated workspace images always include `npx`, `uvx`, `git`,
 
 `baseImage.name` defaults to the published, prebuilt base image
 `docker.io/mroger78/ocm-base:latest`, which already contains the full tooling
-(`npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `tokscale`, and the
+(`npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `claude`, `tokscale`, and the
 manager scripts). With this default and no extras, `opencode-manager` simply
 pulls that image instead of building a base locally, so the first start is fast.
 

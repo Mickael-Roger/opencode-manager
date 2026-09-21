@@ -39,7 +39,7 @@ func TestLegacyManifestDefaultsToOpenCode(t *testing.T) {
 	if got := manifest.EffectiveDefaultRuntime(); got != agent.OpenCode {
 		t.Fatalf("default runtime = %q, want %q", got, agent.OpenCode)
 	}
-	if !manifest.RuntimeEnabled(agent.OpenCode) || manifest.RuntimeEnabled(agent.DeepSeek) {
+	if !manifest.RuntimeEnabled(agent.OpenCode) || manifest.RuntimeEnabled(agent.DeepSeek) || !manifest.RuntimeEnabled(agent.Claude) {
 		t.Fatalf("legacy runtime enablement is incorrect: %#v", manifest.EnabledRuntimeNames())
 	}
 	if err := manifest.Validate(); err != nil {

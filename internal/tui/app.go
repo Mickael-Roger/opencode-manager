@@ -116,7 +116,7 @@ type model struct {
 	createDefaultRuntime string
 	createFocus          int
 
-	// attach picker dialog (Ctrl+O): choose which agent runtime to attach with.
+	// attach picker dialog (Ctrl+A): choose which agent runtime to attach with.
 	// attachPickChoices holds the selected workspace's enabled runtimes and
 	// attachPickCursor the highlighted row, preseeded with the default runtime.
 	attachPickMode    bool
@@ -208,7 +208,7 @@ type action struct {
 
 var actions = []action{
 	{Key: "", Cmd: "attach", Desc: "Attach"},
-	{Key: "ctrl+o", Cmd: "attach-pick", Desc: "Attach with…"},
+	{Key: "ctrl+a", Cmd: "attach-pick", Desc: "Attach with…"},
 	{Key: "s", Cmd: "shell", Desc: "Shell"},
 	{Key: "t", Cmd: "toggle", Desc: "Start/Stop"},
 	{Key: "d", Cmd: "describe", Desc: "Describe"},
@@ -1010,11 +1010,14 @@ func (m *model) cycleCreateTemplate(delta int) {
 }
 
 func (m *model) cycleCreateDefaultRuntime() {
-	if m.createDefaultRuntime == agent.DeepSeek {
-		m.createDefaultRuntime = agent.OpenCode
-		return
+	runtimes := agent.All()
+	for i, runtime := range runtimes {
+		if runtime.Name() == m.createDefaultRuntime {
+			m.createDefaultRuntime = runtimes[(i+1)%len(runtimes)].Name()
+			return
+		}
 	}
-	m.createDefaultRuntime = agent.DeepSeek
+	m.createDefaultRuntime = agent.OpenCode
 }
 
 func (m model) updateCreate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1271,7 +1274,7 @@ func (m model) attachSelected() (tea.Model, tea.Cmd) {
 	return m.attachRuntimeSelected(selected.Manifest.EffectiveDefaultRuntime())
 }
 
-// openAttachPicker opens the Ctrl+O runtime chooser for the selected workspace,
+// openAttachPicker opens the Ctrl+A runtime chooser for the selected workspace,
 // listing its enabled runtimes with the default preselected.
 func (m model) openAttachPicker() (tea.Model, tea.Cmd) {
 	selected, ok := m.selectedWorkspace()
@@ -1779,13 +1782,13 @@ func (m model) renderMenu() string {
 		{"/", "Filter"},
 		{"?", "Help"},
 		{"↵", "Attach"},
-		{"^o", "Attach with…"},
+		{"^a", "Attach with…"},
 		{"s", "Shell"},
 		{"t", "Start/Stop"},
 		{"d", "Describe"},
 		{"l", "Logs"},
 		{"e", "Edit"},
-		{"u", "Update runtimes"},
+		{"u", "Update base image"},
 		{"c", "Create"},
 		{"^d", "Delete"},
 		{"q", "Quit"},
@@ -2031,7 +2034,7 @@ func (m model) renderHelp() string {
 		{"g / G", "top / bottom"},
 		{"^f / ^b", "page down / up"},
 		{"↵", "attach to workspace (default runtime)"},
-		{"^o", "pick the runtime, then attach"},
+		{"^a", "pick the agent, then attach"},
 		{"s", "shell into container"},
 		{"t", "start / stop container"},
 		{"d", "describe"},
@@ -2432,10 +2435,7 @@ func createSelectorLabel(label string) string {
 }
 
 func (m model) renderCreateRuntimeSelector() string {
-	label := "OpenCode"
-	if m.createDefaultRuntime == agent.DeepSeek {
-		label = "DeepSeek Harness"
-	}
+	label := runtimeDisplayName(m.createDefaultRuntime)
 	return createSelectorLabel("Default runtime") + renderCreateChoice(label, m.createFocus == createFocusRuntime)
 }
 

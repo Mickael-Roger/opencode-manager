@@ -322,8 +322,12 @@ func TestCycleCreateDefaultRuntime(t *testing.T) {
 		t.Fatalf("runtime after one step = %q, want %q", m.createDefaultRuntime, agent.DeepSeek)
 	}
 	m.cycleCreateDefaultRuntime()
+	if m.createDefaultRuntime != agent.Claude {
+		t.Fatalf("runtime after two steps = %q, want %q", m.createDefaultRuntime, agent.Claude)
+	}
+	m.cycleCreateDefaultRuntime()
 	if m.createDefaultRuntime != agent.OpenCode {
-		t.Fatalf("runtime after two steps = %q, want %q", m.createDefaultRuntime, agent.OpenCode)
+		t.Fatalf("runtime after three steps = %q, want %q", m.createDefaultRuntime, agent.OpenCode)
 	}
 }
 
@@ -575,8 +579,8 @@ func TestActionsUseK9sBindings(t *testing.T) {
 		t.Fatalf("attach key = %q (present=%v), want empty", key, ok)
 	}
 	// Per-runtime attach goes through one picker instead of one key per harness.
-	if keys["attach-pick"] != "ctrl+o" {
-		t.Fatalf("runtime picker key = %q, want ctrl+o", keys["attach-pick"])
+	if keys["attach-pick"] != "ctrl+a" {
+		t.Fatalf("runtime picker key = %q, want ctrl+a", keys["attach-pick"])
 	}
 	for _, cmd := range []string{"attach-opencode", "attach-deepseek"} {
 		if _, ok := keys[cmd]; ok {

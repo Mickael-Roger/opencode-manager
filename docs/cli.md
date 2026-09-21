@@ -38,14 +38,14 @@ Diagnostic logs go to a file, not the terminal, so CLI output stays clean — se
 | --- | --- |
 | `ws list` (`ls`) | List workspaces with status, activity, module count, and age. |
 | `ws get <ws>` | Show one workspace's details, status, OpenCode version, installed modules, and token usage. |
-| `ws create <name>` | Create a workspace. `--template <t>` applies modules, `--deepseek` enables DSH, `--default-runtime opencode\|deepseek` chooses Enter's target, and `--start` starts it. |
+| `ws create <name>` | Create a workspace. `--template <t>` applies modules, `--deepseek` enables DSH, `--default-runtime opencode\|deepseek\|claude` chooses Enter's target, and `--start` starts it. |
 | `ws delete <ws>` (`rm`) | Delete the workspace, its container, and its image. `--force`/`-f` skips the confirmation prompt. |
 | `ws start [ws]` | Start a container (building the image if needed). `--all` starts every workspace. |
 | `ws stop [ws]` | Stop a running container. `--all` stops every workspace. |
 | `ws restart [ws]` | Stop then start. `--all` for every workspace. |
 | `ws update [ws]` | Pull the workspace's configured base image, rebuild its workspace image without cache, and replace the container while preserving the workspace home. `--all` for every workspace. |
 | `ws version <ws>` | Print the OpenCode version running in the workspace. |
-| `ws attach <ws>` | Attach to the default agent runtime. `--runtime opencode\|deepseek` overrides it. |
+| `ws attach <ws>` | Attach to the default agent runtime. `--runtime opencode\|deepseek\|claude` overrides it. |
 | `ws shell <ws>` (`sh`) | Open an interactive shell inside the container. |
 | `ws exec <ws> -- <cmd>` | Run a one-off command inside the container. |
 | `ws run <ws> --prompt …` | Run a **non-interactive** OpenCode turn and print the result (headless). |

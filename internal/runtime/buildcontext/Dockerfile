@@ -51,9 +51,9 @@ RUN ${EXTRA_COMMANDS}
 
 RUN git --version && rg --version && jq --version && npx --version && uvx --version
 
-# Install OpenCode and tokscale from npm (reliable, unlike the GitHub-API
-# installer), only when absent so the step is a no-op on a base that already ships
-# them.
+# Install OpenCode, Claude Code, and tokscale from npm (reliable, unlike the
+# GitHub-API installer), only when absent so the step is a no-op on a base that
+# already ships them.
 # opencode-ai ships a ~160MB self-contained binary, but its package declares
 # every platform variant as an optionalDependency and npm installs all of the
 # ones matching this OS/arch (e.g. four linux-x64 builds: glibc/musl x avx2/
@@ -70,6 +70,7 @@ RUN git --version && rg --version && jq --version && npx --version && uvx --vers
 # The libc suffix matches the build base (musl on Alpine, glibc otherwise).
 RUN set -eux; \
     command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai; \
+	command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code; \
     command -v tokscale >/dev/null 2>&1 || npm install -g tokscale@latest; \
     OCM="$(npm root -g)/opencode-ai"; \
     libc=""; if [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; then libc="-musl"; fi; \
@@ -84,7 +85,7 @@ RUN set -eux; \
     fi; \
     rm -rf "$OCM"/node_modules/opencode-linux-* "$OCM"/node_modules/opencode-darwin-* "$OCM"/node_modules/opencode-windows-*; \
     npm cache clean --force; rm -rf "$HOME/.npm" /root/.npm /tmp/* /var/tmp/*; \
-    opencode --version; command -v tokscale
+    opencode --version; claude --version; command -v tokscale
 
 # DeepSeek Harness runs its Web profile inside the workspace. DSH_HOME below is
 # bind-backed by the workspace home, so credentials, settings, and sessions

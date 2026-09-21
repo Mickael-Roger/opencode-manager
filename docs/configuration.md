@@ -268,7 +268,7 @@ baseImage:
 
 The base image to use. Defaults to the published, prebuilt
 `docker.io/mroger78/ocm-base:latest`, which already contains the full tooling
-(`npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `tokscale`, and the manager
+(`npx`, `uvx`, `git`, `ripgrep`, `jq`, `opencode`, `claude`, `tokscale`, and the manager
 scripts). With this default and no extras, `ocm` simply **pulls** that image
 instead of building one, so the first start is fast.
 
