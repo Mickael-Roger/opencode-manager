@@ -3,6 +3,11 @@
 # dev tools), and the ~/.env block that put them on PATH.
 set -e
 
+# Share the install lock, including with a script orphaned by a host CLI exit.
+mkdir -p "$HOME/.cache/opencode-manager"
+exec 9>"$HOME/.cache/opencode-manager/golang.lock"
+flock -x 9
+
 sudo rm -rf /usr/local/go
 
 # The Go module cache (~/go/pkg/mod) is written read-only by `go install`, so a

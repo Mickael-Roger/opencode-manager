@@ -48,6 +48,12 @@ Language modules that put a toolchain on `PATH` write to `~/.env`, so installing
 or removing them restarts the OpenCode server (and is blocked while a task is
 running). The `c` module only installs system packages, so it does not.
 
+The Go installer retries network transfers and checksum failures, verifies the
+archive against Go's published SHA-256, and extracts it into a private staging
+directory before replacing `/usr/local/go`. Download or extraction failures keep
+the existing toolchain intact. A container-side lock also prevents overlapping
+Go installs/uninstalls if a host CLI exits while its install script is running.
+
 ### source code
 
 | Module | What it does | Multi-instance |

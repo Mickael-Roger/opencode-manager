@@ -21,6 +21,15 @@ const deepSeekPNPMVersion = "11.25.0"
 // pnpm otherwise enables frozen-lockfile mode when a workspace inherits CI=true,
 // while OCM deliberately does not synchronize that workspace-local file.
 func (l Lifecycle) reconcileDeepSeekProfiles(ctx context.Context, summary Summary) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return l.reconcileDeepSeekProfilesLocked(ctx, summary)
+}
+
+func (l Lifecycle) reconcileDeepSeekProfilesLocked(ctx context.Context, summary Summary) error {
 	if !summary.Manifest.RuntimeEnabled(agent.DeepSeek) {
 		return nil
 	}

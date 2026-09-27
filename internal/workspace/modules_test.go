@@ -33,6 +33,9 @@ func TestAddModuleAccumulatesAcrossCalls(t *testing.T) {
 		HomeDir:       home,
 	}
 	summary := Summary{Manifest: manifest, Path: workspacePath}
+	if err := SaveManifest(filepath.Join(workspacePath, ManifestFile), manifest); err != nil {
+		t.Fatal(err)
+	}
 
 	l := Lifecycle{driver: fake}
 	git := module.Module{Name: "git", Category: "source-code", Version: 3, Key: "repo"}
@@ -212,6 +215,9 @@ func TestAddModuleRunsInstallAndRecordsManifest(t *testing.T) {
 		HomeDir:       home,
 	}
 	summary := Summary{Manifest: manifest, Path: workspacePath}
+	if err := SaveManifest(filepath.Join(workspacePath, ManifestFile), manifest); err != nil {
+		t.Fatal(err)
+	}
 
 	l := Lifecycle{driver: fake}
 	mod := module.Module{Name: "hello", Category: "tools", Version: 1}

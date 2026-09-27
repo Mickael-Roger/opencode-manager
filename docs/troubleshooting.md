@@ -40,6 +40,19 @@ so the editor blocks the edit until the workspace is idle. Wait for the running
 task to finish, or use a module that only writes its own config files. See
 [Modules → Server restart behaviour](modules.md#server-restart-behaviour).
 
+## Start or attach waits while a workspace is being updated
+
+Container preparation, image updates, recreation, stop/delete, and module
+changes are serialized per workspace, including across separate manager/CLI
+processes. An attach or shell request waits for an in-progress installation to
+finish instead of launching a second installation. Other workspaces remain
+independent. Waiting respects the command's timeout.
+
+The host lock files live in the system user-cache directory under
+`opencode-manager/locks/`. They are automatically unlocked when the owning
+process exits; the files themselves remain and should not be removed to bypass
+a running operation.
+
 ## An imported account's credentials are missing in the workspace
 
 Multi-instance modules (`aws`, `outscale`, `ssh`) store only the account name in

@@ -9,42 +9,93 @@ set -e
 
 : "${OCM_VERSION:=latest}"
 
-# Need curl (download) and jq (resolve a pinned minor to its latest patch). Both
-# ship in the base image, but guard in case of a custom base.
-for bin in curl jq; do
+# Guard the tools needed for downloads and the container-side install lock.
+for bin in curl jq flock; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     sudo apt-get update
-    sudo apt-get install -y --no-install-recommends curl jq ca-certificates
+    sudo apt-get install -y --no-install-recommends curl jq ca-certificates util-linux
     break
   fi
 done
 
-# Resolve the version string the way go.dev names its tarballs (e.g. go1.25.0).
-# "latest" asks go.dev for the current stable release; a pinned minor (e.g. 1.24)
-# is resolved to its newest stable patch via the download index (newest first).
-if [ "$OCM_VERSION" = latest ]; then
-  goversion="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"
-else
-  goversion="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
-    | jq -r --arg v "go$OCM_VERSION" \
-      '[.[] | select(.stable) | .version | select(. == $v or startswith($v + "."))] | first // empty')"
-fi
+# A timed-out/killed host CLI can leave its docker exec script running. Keep a
+# container-side lock as well, including the dev-tool installs and ~/.env write.
+mkdir -p "$HOME/.cache/opencode-manager"
+exec 9>"$HOME/.cache/opencode-manager/golang.lock"
+flock -x 9
 
-if [ -z "$goversion" ]; then
-  echo "golang: could not resolve a version for '$OCM_VERSION'" >&2
-  exit 1
-fi
+# Private downloads prevent another install from truncating our archive. Stage
+# extraction on the destination filesystem, leaving the working toolchain alone
+# until the download, checksum, extraction, and binary have all been validated.
+download_dir="$(mktemp -d)"
+stage_dir=
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ -n "$stage_dir" ]; then
+    if [ -d "$stage_dir/previous" ] && [ ! -e /usr/local/go ]; then
+      if ! sudo mv "$stage_dir/previous" /usr/local/go; then
+        echo "golang: previous toolchain preserved in $stage_dir/previous" >&2
+        rm -rf "$download_dir"
+        exit 1
+      fi
+    fi
+    sudo rm -rf "$stage_dir"
+  fi
+  rm -rf "$download_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+download() {
+  curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 "$1" -o "$2"
+}
 
 case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
   arm64 | aarch64) garch=arm64 ;;
-  *) garch=amd64 ;;
+  amd64 | x86_64) garch=amd64 ;;
+  *) echo "golang: unsupported architecture" >&2; exit 1 ;;
 esac
 
-tarball="${goversion}.linux-${garch}.tar.gz"
-curl -fsSL "https://go.dev/dl/${tarball}" -o /tmp/go.tar.gz
-sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf /tmp/go.tar.gz
-rm -f /tmp/go.tar.gz
+# Resolve both the version and its official SHA-256 from the same index.
+download 'https://go.dev/dl/?mode=json&include=all' "$download_dir/releases.json"
+jq -er --arg v "$OCM_VERSION" --arg arch "$garch" '
+  [.[] | select(.stable)
+   | select($v == "latest" or .version == ("go" + $v) or (.version | startswith("go" + $v + ".")))
+   | .files[] | select(.os == "linux" and .arch == $arch and .kind == "archive")]
+  | first | select(. != null)
+' "$download_dir/releases.json" > "$download_dir/release.json"
+tarball="$(jq -er '.filename' "$download_dir/release.json")"
+checksum="$(jq -er '.sha256 | select(test("^[0-9a-f]{64}$"))' "$download_dir/release.json")"
+goversion="$(jq -er '.version' "$download_dir/release.json")"
+
+# A successful HTTP transfer can still deliver a bad archive. Retry integrity
+# failures too, always overwriting only this invocation's private download.
+attempt=1
+while :; do
+  download "https://go.dev/dl/${tarball}" "$download_dir/go.tar.gz"
+  printf '%s  %s\n' "$checksum" "$download_dir/go.tar.gz" > "$download_dir/checksum"
+  if sha256sum -c "$download_dir/checksum"; then
+    break
+  fi
+  if [ "$attempt" -ge 3 ]; then
+    echo "golang: archive checksum failed after $attempt attempts" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+stage_dir="$(sudo mktemp -d /usr/local/.ocm-go.XXXXXX)"
+sudo tar -C "$stage_dir" -xzf "$download_dir/go.tar.gz"
+sudo "$stage_dir/go/bin/go" version
+if [ -e /usr/local/go ]; then
+  sudo mv /usr/local/go "$stage_dir/previous"
+fi
+sudo mv "$stage_dir/go" /usr/local/go
 
 echo "go ${goversion} installed to /usr/local/go"
 

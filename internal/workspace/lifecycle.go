@@ -163,9 +163,15 @@ func (l Lifecycle) Statuses(ctx context.Context, workspaces []Summary) []Status 
 }
 
 func (l Lifecycle) EnsureStarted(ctx context.Context, summary Summary) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return l.ensureStarted(ctx, summary, false)
 }
 
+// ensureStarted and its helpers require the caller to hold the workspace lock.
 func (l Lifecycle) ensureStarted(ctx context.Context, summary Summary, refreshBase bool) error {
 	return l.ensureStartedWithOptions(ctx, summary, refreshBase, false)
 }
@@ -201,7 +207,7 @@ func (l Lifecycle) ensureStartedWithOptions(ctx context.Context, summary Summary
 	if err := l.reconcile(ctx, summary); err != nil {
 		slog.Warn("module reconcile failed", "workspace", summary.Manifest.Name, "container", name, "error", err)
 	}
-	if err := l.reconcileDeepSeekProfiles(ctx, summary); err != nil {
+	if err := l.reconcileDeepSeekProfilesLocked(ctx, summary); err != nil {
 		return err
 	}
 
@@ -638,6 +644,11 @@ func (l Lifecycle) recreateAndStart(ctx context.Context, summary Summary, spec r
 }
 
 func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	name := summary.Manifest.ContainerName
 	slog.Info("stopping workspace", "workspace", summary.Manifest.Name, "container", name)
 
@@ -662,6 +673,11 @@ func (l Lifecycle) Stop(ctx context.Context, summary Summary) error {
 // disposable container layer. It is the recovery path for a container left in a
 // broken state, e.g. after an interrupted update.
 func (l Lifecycle) RecreateContainer(ctx context.Context, summary Summary) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	slog.Info("recreating workspace container", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName)
 	if err := l.ensureStartedWithOptions(ctx, summary, false, true); err != nil {
 		return fmt.Errorf("start recreated workspace container: %w", err)
@@ -674,6 +690,11 @@ func (l Lifecycle) RecreateContainer(ctx context.Context, summary Summary) error
 // home remains intact, and module reconciliation restores tools that modules
 // install into the disposable container layer.
 func (l Lifecycle) UpdateWorkspaceImage(ctx context.Context, summary Summary) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// A workspace records the image definition it was created with so normal
 	// starts remain stable. An explicit update intentionally opts into the current
 	// global definition, allowing config.yaml to move an old workspace to a newer
@@ -720,6 +741,11 @@ func (l Lifecycle) openCodeVersion(ctx context.Context, containerName string) (s
 }
 
 func (l Lifecycle) Delete(ctx context.Context, summary Summary) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	slog.Info("deleting workspace", "workspace", summary.Manifest.Name, "container", summary.Manifest.ContainerName, "image", summary.Manifest.ImageName)
 
 	// Run the pre-delete commands while the workspace still exists. Best-effort:

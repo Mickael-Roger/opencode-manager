@@ -100,8 +100,13 @@ func (l Lifecycle) Catalog() ([]module.Module, error) {
 // variables. If the script changes ~/.env, the OpenCode server is bounced in
 // place so the new variables take effect.
 func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Module, values map[string]string) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	slog.Info("adding module to workspace", "workspace", summary.Manifest.Name, "module", mod.Name)
-	if err := l.EnsureStarted(ctx, summary); err != nil {
+	if err := l.ensureStarted(ctx, summary, false); err != nil {
 		return err
 	}
 
@@ -144,8 +149,13 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 // id is the instance identity (ModuleInstance.InstanceID): the module name for a
 // singleton, or "name:keyvalue" for one entry of a multi-instance module.
 func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string) error {
+	summary, unlock, err := l.beginWorkspaceOperation(ctx, summary)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	slog.Info("removing module from workspace", "workspace", summary.Manifest.Name, "module", id)
-	if err := l.EnsureStarted(ctx, summary); err != nil {
+	if err := l.ensureStarted(ctx, summary, false); err != nil {
 		return err
 	}
 
