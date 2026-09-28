@@ -59,6 +59,7 @@ prompts:
 | `restartServer` | `true` (default) if the module touches `~/.env`; `false` if it only writes its own config files. |
 | `key` | Name of a prompt that makes the module **multi-instance** (one install per distinct value). |
 | `prompts` | The values to collect from the user. |
+| `mounts` | Optional host paths bind-mounted into the containers of the workspaces that have the module (see [Mounts](#mounts)). |
 
 ### Prompt types
 
@@ -101,6 +102,42 @@ and the editor blocks edits while a task is running. If your module only writes
 its own config files that tools read live (like `~/.aws` or `~/.kube/config`),
 set `restartServer: false` — it is never bounced and can be edited mid-task.
 
+## Mounts
+
+A module can bind-mount host paths into the container of each workspace it is
+installed in — and only those. Unlike the global
+[`extraMounts`](configuration.md#extramounts), this lets you pick per workspace
+which ones get access to a host file, such as a login shared with the host
+instead of copied:
+
+```yaml
+name: claude-auth
+version: 1
+description: Share this host's Claude Code login with the workspace.
+mounts:
+  - source: ~/.claude/.credentials.json
+    target: /home/debian/.claude/.credentials.json
+    optional: true
+```
+
+| Field | Meaning |
+| --- | --- |
+| `source` | Host path: absolute, or starting with `~/` for the host user's home. |
+| `target` | Absolute path inside the container. Cannot be `/` or the workspace home itself. |
+| `readOnly` | `true` to prevent container writes. Default `false`. |
+| `optional` | `true` to skip the mount while `source` does not exist instead of failing the workspace start; it is added on the first start after it appears. |
+
+The mounts are part of the container's spec, so adding or removing such a
+module **recreates the workspace container** (the home and the other modules
+are preserved and reinstalled). On add, the module is recorded and the container
+recreated before `install` runs, so the script already sees the mounted paths; on
+removal the container is recreated after `uninstall`, so access ends right away.
+Because recreation interrupts a running task, a module with mounts cannot set
+`restartServer: false`.
+
+Mount points inside the workspace home are created on the host first (an empty
+file or a directory, owned by you), so the runtime never creates them as root.
+
 ## Host hooks (optional)
 
 Two optional hooks run **on the host** (with full host access), as part of an
@@ -138,5 +175,7 @@ leaving any manually-typed values in place.
 - [ ] `uninstall` fully reverses `install` for that instance.
 - [ ] Secrets resolved on the host via `resolve` rather than stored in the
       manifest, where applicable.
+- [ ] `mounts` only when the container must use the host path itself (live,
+      shared state) rather than a copy made by `resolve`.
 - [ ] Tested by adding/removing the module on a running workspace from the
       editor.

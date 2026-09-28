@@ -90,6 +90,18 @@ func TestContainerSpecDrift(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "module mount added",
+			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "bridge", Env: map[string]string{OpenCodePortEnv: "4097"}},
+			spec: runtime.ContainerSpec{Env: map[string]string{moduleMountsFingerprintEnv: "new"}},
+			want: true,
+		},
+		{
+			name: "module mount removed",
+			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "bridge", Env: map[string]string{OpenCodePortEnv: "4097", moduleMountsFingerprintEnv: "old"}},
+			spec: runtime.ContainerSpec{Env: map[string]string{}},
+			want: true,
+		},
+		{
 			name: "workspace environment changed",
 			rc:   runtime.ContainerRuntimeConfig{NetworkMode: "bridge", Env: map[string]string{OpenCodePortEnv: "4097", workspaceEnvKeysEnv: "API_TOKEN", "API_TOKEN": "old"}},
 			spec: runtime.ContainerSpec{Env: map[string]string{workspaceEnvKeysEnv: "API_TOKEN", "API_TOKEN": "new"}},

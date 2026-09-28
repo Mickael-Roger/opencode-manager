@@ -72,6 +72,37 @@ type Module struct {
 	// lives under (e.g. "cloud" for modules/cloud/aws). It organizes the module
 	// browser in the TUI and is mirrored in the container mount path.
 	Category string
+	// Mounts are host paths bind-mounted into the container of every workspace
+	// that has this module installed, and only those. Adding or removing such a
+	// module recreates the workspace container, so it always restarts the server.
+	Mounts []Mount
+}
+
+// Mount is a host path a module bind-mounts into the workspace container.
+type Mount struct {
+	// Source is the host path: absolute, or relative to the host user's home
+	// when it starts with "~/".
+	Source string `yaml:"source"`
+	// Target is the absolute path inside the container.
+	Target   string `yaml:"target"`
+	ReadOnly bool   `yaml:"readOnly"`
+	// Optional skips the mount while Source does not exist on the host instead
+	// of failing the workspace start. The mount is added on the first start
+	// after it appears.
+	Optional bool `yaml:"optional"`
+}
+
+// HostSource returns Source with a leading "~/" expanded to the host user's
+// home directory.
+func (m Mount) HostSource() (string, error) {
+	if !strings.HasPrefix(m.Source, "~/") {
+		return m.Source, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find user home directory: %w", err)
+	}
+	return filepath.Join(home, m.Source[2:]), nil
 }
 
 // Multi reports whether the module can be installed as multiple independent
@@ -136,6 +167,7 @@ type definition struct {
 	Key           string   `yaml:"key"`
 	RestartServer *bool    `yaml:"restartServer"`
 	Prompts       []Prompt `yaml:"prompts"`
+	Mounts        []Mount  `yaml:"mounts"`
 }
 
 // HasResolveHook reports whether the module ships a host-side resolve script.
@@ -163,6 +195,7 @@ func Load(dir string) (Module, error) {
 		Prompts:       def.Prompts,
 		Key:           def.Key,
 		RestartServer: def.RestartServer == nil || *def.RestartServer,
+		Mounts:        def.Mounts,
 		Dir:           dir,
 		// The category is the name of the directory the module lives under, e.g.
 		// modules/cloud/aws -> "cloud".
@@ -171,6 +204,11 @@ func Load(dir string) (Module, error) {
 
 	if err := mod.validate(); err != nil {
 		return Module{}, fmt.Errorf("invalid module %q: %w", path, err)
+	}
+	// A module with mounts recreates the container on add and remove, which
+	// interrupts a running task just like a server bounce does.
+	if len(mod.Mounts) > 0 && !mod.RestartServer {
+		return Module{}, fmt.Errorf("invalid module %q: a module with mounts cannot set restartServer: false (adding or removing it recreates the container)", path)
 	}
 
 	return mod, nil
@@ -251,6 +289,27 @@ func (m Module) validate() error {
 		if key.Secret() {
 			return fmt.Errorf("key prompt %q must not be a secret", m.Key)
 		}
+	}
+
+	targets := map[string]bool{}
+	for _, mount := range m.Mounts {
+		if mount.Source == "" || mount.Target == "" {
+			return fmt.Errorf("mount source and target are required")
+		}
+		if !filepath.IsAbs(mount.Source) && !strings.HasPrefix(mount.Source, "~/") {
+			return fmt.Errorf("mount source %q must be absolute or start with ~/", mount.Source)
+		}
+		if !filepath.IsAbs(mount.Target) {
+			return fmt.Errorf("mount target %q must be absolute", mount.Target)
+		}
+		target := filepath.Clean(mount.Target)
+		if target == "/" || target == "/home/debian" {
+			return fmt.Errorf("mount target %q cannot replace %s", mount.Target, target)
+		}
+		if targets[target] {
+			return fmt.Errorf("mount target %q is duplicated", mount.Target)
+		}
+		targets[target] = true
 	}
 
 	if err := checkExecutable(filepath.Join(m.Dir, InstallScript)); err != nil {

@@ -402,3 +402,57 @@ func TestBuiltinModulesAreValid(t *testing.T) {
 		t.Fatal("kubernetes context prompt should expose an optionsCommand for the import picker")
 	}
 }
+
+func TestLoadMounts(t *testing.T) {
+	root := t.TempDir()
+	dir := writeModule(t, root, "claude", `name: claude
+version: 1
+mounts:
+  - source: ~/.claude/.credentials.json
+    target: /home/debian/.claude/.credentials.json
+    optional: true
+  - { source: /etc/hosts, target: /etc/host-hosts, readOnly: true }
+`)
+
+	mod, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(mod.Mounts) != 2 || !mod.Mounts[0].Optional || !mod.Mounts[1].ReadOnly {
+		t.Fatalf("unexpected mounts: %+v", mod.Mounts)
+	}
+	if !mod.RestartServer {
+		t.Fatal("a module with mounts must restart the server")
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := mod.Mounts[0].HostSource()
+	if err != nil {
+		t.Fatalf("HostSource: %v", err)
+	}
+	if want := filepath.Join(home, ".claude/.credentials.json"); source != want {
+		t.Fatalf("HostSource = %q, want %q", source, want)
+	}
+}
+
+func TestLoadRejectsInvalidMounts(t *testing.T) {
+	cases := map[string]string{
+		"relative source":   "mounts: [{ source: foo, target: /a }]",
+		"relative target":   "mounts: [{ source: /foo, target: a }]",
+		"missing target":    "mounts: [{ source: /foo }]",
+		"home target":       "mounts: [{ source: /foo, target: /home/debian/ }]",
+		"duplicate target":  "mounts: [{ source: /foo, target: /a }, { source: /bar, target: /a }]",
+		"no server restart": "restartServer: false\nmounts: [{ source: /foo, target: /a }]",
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := writeModule(t, t.TempDir(), "m", "name: m\nversion: 1\n"+extra+"\n")
+			if _, err := Load(dir); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}

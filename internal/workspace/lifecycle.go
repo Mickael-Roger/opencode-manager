@@ -371,6 +371,12 @@ func (l Lifecycle) provisionWithOptions(ctx context.Context, summary Summary, re
 	// scripts are runnable inside the container.
 	mounts = append(mounts, moduleMounts(l.cfg)...)
 	mounts = append(mounts, extraMounts(l.cfg)...)
+	// Mounts declared by the modules installed in this workspace only.
+	installedMounts, installedMountsFingerprint, err := l.installedModuleMounts(manifest)
+	if err != nil {
+		return runtime.StatusUnknown, runtime.ContainerSpec{}, err
+	}
+	mounts = append(mounts, installedMounts...)
 	if l.isImprovement(summary) {
 		internalMounts, err := l.improvementMounts()
 		if err != nil {
@@ -416,6 +422,9 @@ func (l Lifecycle) provisionWithOptions(ctx context.Context, summary Summary, re
 	}
 	if fingerprint := extraMountsFingerprint(l.cfg.ExtraMounts); fingerprint != "" {
 		env[extraMountsFingerprintEnv] = fingerprint
+	}
+	if installedMountsFingerprint != "" {
+		env[moduleMountsFingerprintEnv] = installedMountsFingerprint
 	}
 	if l.isImprovement(summary) {
 		privateMounts := make([]config.ExtraMount, 0, len(mounts))
@@ -557,6 +566,7 @@ const openCodeAuthRelPath = ".local/share/opencode/auth.json"
 const (
 	extraCACertificateFingerprintEnv = "OCM_EXTRA_CA_CERTIFICATE_SHA256"
 	extraMountsFingerprintEnv        = "OCM_EXTRA_MOUNTS_SHA256"
+	moduleMountsFingerprintEnv       = "OCM_MODULE_MOUNTS_SHA256"
 	workspaceEnvKeysEnv              = "OCM_WORKSPACE_ENV_KEYS"
 )
 
@@ -889,6 +899,11 @@ func (l Lifecycle) containerSpecDrift(ctx context.Context, manifest Manifest, sp
 
 	if rc.Env[extraMountsFingerprintEnv] != spec.Env[extraMountsFingerprintEnv] {
 		slog.Debug("container extra mounts differ from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
+		return true
+	}
+
+	if rc.Env[moduleMountsFingerprintEnv] != spec.Env[moduleMountsFingerprintEnv] {
+		slog.Debug("container module mounts differ from desired", "workspace", manifest.Name, "container", manifest.ContainerName)
 		return true
 	}
 
