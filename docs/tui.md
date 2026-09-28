@@ -60,6 +60,36 @@ default preselected); pick one with `↑`/`↓` and attach with `Enter`. Claude 
 is available in every workspace; new harnesses added to the manager appear there
 automatically.
 
+#### Returning to the dashboard
+
+Leaving an attached session returns you to the dashboard; the agent keeps
+working in the container, and `Enter` takes you back to it.
+
+| Runtime | Key | What happens |
+| --- | --- | --- |
+| OpenCode | `Ctrl+C` | Closes the OpenCode client; the server, and any running turn, keep going. |
+| Claude Code | `Ctrl+Q` | Detaches from the live Claude session; the next attach resumes it, even mid-turn. |
+
+#### Detaching from Claude Code
+
+Claude Code runs inside the container under
+[dtach](https://github.com/crigler/dtach), so it keeps working after you leave
+it. Press **`Ctrl+Q`** to detach and return to the dashboard; the session keeps
+running (its status stays live on the dashboard), and the next attach drops you
+back into the same session, even mid-turn, with its screen fully redrawn.
+`Ctrl+C` still goes to Claude to interrupt a turn, and quitting Claude (`/exit`)
+ends the session, so the next attach starts a fresh one. `Ctrl+Q` works on any
+keyboard layout and in terminals where Claude enables the kitty keyboard
+protocol (kitty, foot, Ghostty, WezTerm…): `ocm` relays the session and turns
+Claude's keyboard modes off while you are on the dashboard, and back on when you
+return. The same applies to `ocm ws attach <ws> --runtime claude`.
+
+A running session keeps the environment it started with: after changing modules,
+exit Claude (`/exit`) and attach again so it starts with the new environment.
+Stopping or recreating the container ends the session. Workspace images built before this feature gain
+`dtach` on their next image rebuild; until then Claude runs without detach
+support, as before.
+
 #### Inside `dsh-tui`
 
 A DeepSeek attach opens the embedded `dsh-tui` client on the workspace's most

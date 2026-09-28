@@ -699,10 +699,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workspace.AttachResultMsg:
 		switch {
 		case msg.StillRunning:
-			// Detached via Ctrl-C; the attach client exits non-zero but the
-			// container keeps running, so this is not a failure.
+			// Detached (Ctrl-C from OpenCode, Ctrl-Q from Claude Code); the
+			// attach client may exit non-zero but the container keeps running,
+			// so this is not a failure.
 			slog.Debug("detached from workspace, container still running")
-			m.message = "Detached (Ctrl-C). Container still running in the background."
+			m.message = "Detached. Container still running in the background."
 		case msg.Err != nil:
 			slog.Error("attach session failed", "error", msg.Err)
 			m.showError("Attach Session", fmt.Sprintf("Attach session failed: %v", msg.Err))

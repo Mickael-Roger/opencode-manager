@@ -30,7 +30,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 # that needs to compile native code can install it on demand via passwordless
 # sudo, or bake it in through the EXTRA_PACKAGES build arg.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash ca-certificates curl file git jq nodejs npm \
+      bash ca-certificates curl dtach file git jq nodejs npm \
       openssh-client passwd procps ripgrep sudo ${EXTRA_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 

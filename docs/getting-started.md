@@ -78,8 +78,10 @@ inside the isolated container.
 ![opencode inside a workspace](assets/ocm-opencode.png)
 
 Clone whatever repositories you need inside the workspace home directory and work
-as usual. When you're done, detach and the container keeps running until you stop
-(`t`) or delete (`^d`) it.
+as usual. When you're done, detach (`Ctrl+C` in OpenCode, `Ctrl+Q` in Claude
+Code) to return to the dashboard: the agent keeps working, `Enter` takes you back
+to the same session, and the container keeps running until you stop (`t`) or
+delete (`^d`) it.
 
 ## Next steps
 

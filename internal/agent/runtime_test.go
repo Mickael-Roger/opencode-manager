@@ -24,7 +24,7 @@ func TestRuntimeRegistry(t *testing.T) {
 func TestClaudeCommands(t *testing.T) {
 	provider, _ := NewRegistry().Get(Claude)
 	attach, err := provider.AttachCommand()
-	if err != nil || fmt.Sprint(attach[4:]) != "[claude]" {
+	if err != nil || fmt.Sprint(attach[len(attach)-2:]) != "["+ClaudeSessionSocket+" claude]" {
 		t.Fatalf("AttachCommand = %v, %v", attach, err)
 	}
 	run, err := provider.RunCommand("hello")
@@ -52,6 +52,55 @@ func TestClaudeCommandsLoadWorkspaceEnv(t *testing.T) {
 		t.Fatalf("run %v: %v", argv, err)
 	}
 	if got, want := string(out), `from-env|it's "$HOME" ; $(false)`; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+// runClaudeAttach runs the Claude attach command with fake dtach/claude
+// binaries from bin and returns what they printed.
+func runClaudeAttach(t *testing.T, bin string) string {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("export OCM_TEST_VAR=from-env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provider, _ := NewRegistry().Get(Claude)
+	attach, _ := provider.AttachCommand()
+	cmd := exec.Command(attach[0], attach[1:]...)
+	// Only the fakes on PATH, so a host dtach cannot leak into the fallback case.
+	cmd.Env = []string{"HOME=" + home, "PATH=" + bin}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run %v: %v", attach, err)
+	}
+	return string(out)
+}
+
+func writeFakeBinary(t *testing.T, dir, name string) {
+	t.Helper()
+	script := "#!/bin/sh\nprintf '%s:%s|' \"$OCM_TEST_VAR\" " + name + "\nprintf '%s ' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Claude runs under dtach so detaching (Ctrl-Q) leaves it running and the next
+// attach resumes the same live session.
+func TestClaudeAttachRunsUnderDtach(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeBinary(t, bin, "dtach")
+	writeFakeBinary(t, bin, "claude")
+	want := "from-env:dtach|-A " + ClaudeSessionSocket + " -e ^" + string(rune(ClaudeDetachKey)) + " -r winch -z claude "
+	if got := runClaudeAttach(t, bin); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+// Images built before dtach was added still attach, running Claude directly.
+func TestClaudeAttachWithoutDtachRunsClaude(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeBinary(t, bin, "claude")
+	if got, want := runClaudeAttach(t, bin), "from-env:claude| "; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
