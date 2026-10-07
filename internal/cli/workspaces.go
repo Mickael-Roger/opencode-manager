@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
 	"github.com/mickael-menu/opencode-manager/internal/workspace"
@@ -402,6 +403,9 @@ func newWorkspacesAttachCmd(cfg config.Config) *cobra.Command {
 			c, err := lc.AttachRuntimeCommand(ctx, s, runtimeName)
 			if err != nil {
 				return err
+			}
+			if runtimeName == agent.Claude {
+				return workspace.ClaudeAttachProcess(s.Manifest.ContainerName, c).Run()
 			}
 			return runInteractive(c)
 		},

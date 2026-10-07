@@ -15,12 +15,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mickael-menu/opencode-manager/internal/agent"
 	"github.com/mickael-menu/opencode-manager/internal/config"
 	"github.com/mickael-menu/opencode-manager/internal/runtime"
+	"github.com/mickael-menu/opencode-manager/internal/termproxy"
 )
 
 type Lifecycle struct {
@@ -910,14 +912,32 @@ func (l Lifecycle) AttachRuntime(ctx context.Context, summary Summary, runtimeNa
 		return nil, err
 	}
 
-	return tea.ExecProcess(cmd, func(execErr error) tea.Msg {
+	done := func(execErr error) tea.Msg {
 		// Use a fresh context: the caller's ctx is already cancelled by the time
 		// the attached process exits.
 		bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		status, _ := l.driver.ContainerStatus(bg, summary.Manifest.ContainerName)
 		return AttachResultMsg{Err: execErr, StillRunning: status == runtime.StatusRunning}
-	}), nil
+	}
+	if runtimeName == agent.Claude && !l.isImprovement(summary) {
+		return tea.Exec(ClaudeAttachProcess(summary.Manifest.ContainerName, cmd), done), nil
+	}
+	return tea.ExecProcess(cmd, done), nil
+}
+
+// claudeTerminalModes holds, per container, the terminal modes its detached
+// Claude Code session expects, so a reattach restores them.
+var claudeTerminalModes sync.Map
+
+// ClaudeAttachProcess relays a Claude Code attach command through termproxy.
+// Claude switches capable terminals to the kitty keyboard protocol, where the
+// detach key no longer reaches dtach as the byte it matches; the relay restores
+// it, turns the keyboard modes off after a detach so the dashboard keeps
+// working, and turns them back on when the user reattaches.
+func ClaudeAttachProcess(container string, cmd *exec.Cmd) *termproxy.Command {
+	modes, _ := claudeTerminalModes.LoadOrStore(container, &termproxy.Modes{})
+	return termproxy.New(cmd, agent.ClaudeDetachKey, modes.(*termproxy.Modes))
 }
 
 // ShellCommand ensures the workspace container is running and returns a command

@@ -110,7 +110,9 @@ ocm ws run <ws> --prompt "..."   # headless OpenCode run (CI/scripts)
 ```
 
 From the dashboard you create, attach, edit (`e`), stop, delete, and update
-workspaces — all from the keyboard.
+workspaces — all from the keyboard. Detaching never stops the agent: `Ctrl+C`
+leaves OpenCode and `Ctrl+Q` leaves Claude Code while it keeps working, and
+`Enter` takes you back to the same live session.
 
 DeepSeek Harness is opt-in. OCM enables DSH's `web` profile per workspace,
 supervises its web server alongside OpenCode, and attaches through `dsh-tui` —
