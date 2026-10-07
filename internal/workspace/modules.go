@@ -94,6 +94,109 @@ func (l Lifecycle) Catalog() ([]module.Module, error) {
 	return module.Catalog([]string{dir})
 }
 
+// installedModuleMounts returns the bind mounts declared by the modules installed
+// in the workspace, and a fingerprint of them that changes whenever the set does,
+// so a workspace container is recreated exactly when one of its mounting modules
+// is added or removed (or an optional source appears). Mount points under the
+// workspace home are created on the host first, owned by the host user, so the
+// runtime does not create them as root.
+func (l Lifecycle) installedModuleMounts(manifest Manifest) ([]runtime.Mount, string, error) {
+	if len(manifest.Modules) == 0 {
+		return nil, "", nil
+	}
+	catalog, err := l.Catalog()
+	if err != nil {
+		return nil, "", err
+	}
+	byName := make(map[string]module.Module, len(catalog))
+	for _, mod := range catalog {
+		byName[mod.Name] = mod
+	}
+
+	var mounts []runtime.Mount
+	targets := map[string]string{}
+	for _, inst := range manifest.Modules {
+		mod, ok := byName[inst.Name]
+		if !ok {
+			continue
+		}
+		for _, declared := range mod.Mounts {
+			source, err := declared.HostSource()
+			if err != nil {
+				return nil, "", err
+			}
+			info, err := os.Stat(source)
+			if err != nil {
+				if os.IsNotExist(err) && declared.Optional {
+					slog.Debug("skipping optional module mount with a missing source", "module", mod.Name, "source", source)
+					continue
+				}
+				return nil, "", fmt.Errorf("module %s mount source %q: %w", mod.Name, source, err)
+			}
+			target := filepath.Clean(declared.Target)
+			if previous, ok := targets[target]; ok {
+				// Several instances of one module declare the same mount.
+				if previous == source {
+					continue
+				}
+				return nil, "", fmt.Errorf("module %s mounts %q onto %s, already used by %q", mod.Name, source, target, previous)
+			}
+			targets[target] = source
+			if err := ensureHomeMountPoint(manifest.HomeDir, target, info.IsDir()); err != nil {
+				return nil, "", err
+			}
+			mounts = append(mounts, runtime.Mount{Source: source, Target: target, ReadOnly: declared.ReadOnly})
+		}
+	}
+	if len(mounts) == 0 {
+		return nil, "", nil
+	}
+	data, err := json.Marshal(mounts)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode module mounts: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return mounts, hex.EncodeToString(sum[:]), nil
+}
+
+// ensureHomeMountPoint creates the host-side mount point of a target inside the
+// workspace home (a directory or an empty file), with its parent directories.
+// Targets outside the home are left to the runtime.
+func ensureHomeMountPoint(homeDir, target string, dir bool) error {
+	rel, err := filepath.Rel(openCodeHomeDir, target)
+	if homeDir == "" || err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return nil
+	}
+	path := filepath.Join(homeDir, rel)
+	if dir {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("create module mount point %q: %w", path, err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create module mount point %q: %w", filepath.Dir(path), err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create module mount point %q: %w", path, err)
+	}
+	return file.Close()
+}
+
+// moduleHasMounts reports whether an installed module declares mounts.
+func (l Lifecycle) moduleHasMounts(category, name string) bool {
+	dir := primaryModuleDir(l.cfg)
+	if dir == "" || category == "" {
+		return false
+	}
+	mod, err := module.Load(filepath.Join(dir, category, name))
+	return err == nil && len(mod.Mounts) > 0
+}
+
 // AddModule installs a module into the workspace and records it in the manifest.
 // The install script runs inside the container as the workspace user (which has
 // passwordless sudo) with the prompt values passed as OCM_* environment
@@ -106,6 +209,9 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 	}
 	defer unlock()
 	slog.Info("adding module to workspace", "workspace", summary.Manifest.Name, "module", mod.Name)
+	if len(mod.Mounts) > 0 {
+		return l.addMountingModule(ctx, summary, mod, values)
+	}
 	if err := l.ensureStarted(ctx, summary, false); err != nil {
 		return err
 	}
@@ -145,6 +251,85 @@ func (l Lifecycle) AddModule(ctx context.Context, summary Summary, mod module.Mo
 	return nil
 }
 
+// addMountingModule adds a module that declares mounts. The mounts must exist
+// before its install script runs, so the module is recorded in the manifest
+// first and the container recreated with them; the start's reconcile then runs
+// the install. When the install does not succeed the manifest entry is rolled
+// back and the container reconciled with it, so the workspace does not keep a
+// mount that no installed module grants.
+func (l Lifecycle) addMountingModule(ctx context.Context, summary Summary, mod module.Module, values map[string]string) error {
+	id := mod.InstanceID(values)
+	manifestPath := filepath.Join(summary.Path, ManifestFile)
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		return err
+	}
+	var previous *ModuleInstance
+	for _, m := range manifest.Modules {
+		if m.InstanceID() == id {
+			m := m
+			previous = &m
+		}
+	}
+	manifest.Modules = upsertModule(manifest.Modules, id, mod.Name, mod.Category, mod.Version, values)
+	manifest.UpdatedAt = time.Now().UTC()
+	if err := SaveManifest(manifestPath, manifest); err != nil {
+		return err
+	}
+
+	rollback := func(cause error) error {
+		current, err := LoadManifest(manifestPath)
+		if err != nil {
+			return fmt.Errorf("%w (roll back manifest: %v)", cause, err)
+		}
+		current.Modules = removeModule(current.Modules, id)
+		if previous != nil {
+			current.Modules = append(current.Modules, *previous)
+		}
+		current.UpdatedAt = time.Now().UTC()
+		if err := SaveManifest(manifestPath, current); err != nil {
+			return fmt.Errorf("%w (roll back manifest: %v)", cause, err)
+		}
+		// The container may already run with the module's mounts; recreate it
+		// with the restored mount set. Failing that, stop it: the next start
+		// recreates it from the manifest.
+		if err := l.ensureStarted(ctx, Summary{Manifest: current, Path: summary.Path}, false); err != nil {
+			if stopErr := l.driver.StopContainer(ctx, current.ContainerName); stopErr != nil {
+				return fmt.Errorf("%w (remove module mounts: %v; stop container: %v)", cause, err, stopErr)
+			}
+			return fmt.Errorf("%w (remove module mounts: %v; container stopped)", cause, err)
+		}
+		return cause
+	}
+
+	summary.Manifest = manifest
+	if err := l.ensureStarted(ctx, summary, false); err != nil {
+		return rollback(err)
+	}
+
+	// Reconcile already installed it unless the container was not recreated (the
+	// mounts were unchanged) or its install failed; run it here then, so the
+	// error reaches the user.
+	if v, ok := l.readMarker(ctx, manifest.ContainerName)[id]; !ok || v != mod.Version {
+		homeDir := manifest.HomeDir
+		before := envHash(homeDir)
+		installVals, err := l.resolveInstallValues(ctx, mod.Category, mod.Name, values)
+		if err != nil {
+			return rollback(err)
+		}
+		if err := l.runModuleScript(ctx, summary, mod.Category, mod.Name, module.InstallScript, "install", installVals); err != nil {
+			return rollback(err)
+		}
+		if err := l.writeMarker(ctx, manifest.ContainerName, manifest.Modules); err != nil {
+			return err
+		}
+		l.maybeBounce(ctx, manifest.ContainerName, mod.Name, mod.RestartServer, before, envHash(homeDir))
+	}
+
+	slog.Info("module added", "workspace", manifest.Name, "module", mod.Name)
+	return nil
+}
+
 // RemoveModule runs a module's uninstall script and drops it from the manifest.
 // id is the instance identity (ModuleInstance.InstanceID): the module name for a
 // singleton, or "name:keyvalue" for one entry of a multi-instance module.
@@ -170,6 +355,7 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string)
 		}
 	}
 	restartServer := l.moduleRestartServer(category, modName)
+	hasMounts := l.moduleHasMounts(category, modName)
 
 	homeDir := summary.Manifest.HomeDir
 	before := envHash(homeDir)
@@ -194,7 +380,16 @@ func (l Lifecycle) RemoveModule(ctx context.Context, summary Summary, id string)
 		return err
 	}
 
-	l.maybeBounce(ctx, manifest.ContainerName, modName, restartServer, before, envHash(homeDir))
+	if hasMounts {
+		// Recreate the container without the module's mounts, so the workspace
+		// loses access to them right away. The fresh server reads ~/.env anyway.
+		summary.Manifest = manifest
+		if err := l.ensureStarted(ctx, summary, false); err != nil {
+			return err
+		}
+	} else {
+		l.maybeBounce(ctx, manifest.ContainerName, modName, restartServer, before, envHash(homeDir))
+	}
 
 	slog.Info("module removed", "workspace", manifest.Name, "module", id)
 	return nil
