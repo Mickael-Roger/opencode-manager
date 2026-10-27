@@ -37,7 +37,7 @@ case "$ref" in
   cloud/outscale)   ocm_env=(OCM_PROFILE=ci); verify='command -v octl' ;;
   cloud/ovh)        ocm_env=(OCM_PROFILE=ovh-eu); verify='command -v ovhcloud' ;;
   cloud/scaleway)   ocm_env=(OCM_PROFILE=ci); verify='command -v scw' ;;
-  infra/kubernetes) verify='command -v kubectl' ;;
+  infra/kubernetes) verify='command -v kubectl && command -v kubectl-oidc_login && command -v kubectx' ;;
   source-code/git)  ocm_env=(OCM_NAME=ci-bot OCM_EMAIL=ci@example.com)
                     verify='command -v git && [ "$(git config --global user.email)" = ci@example.com ]' ;;
   tools/ssh)        ocm_env=(OCM_HOST=example.com)
