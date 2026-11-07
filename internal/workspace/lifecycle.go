@@ -1282,7 +1282,8 @@ func imageConfigFromConfig(cfg config.Config) ImageConfig {
 // Revision 14: install pinned pnpm for synchronized DSH profile dependencies.
 // Revision 15: remove the terminal ACP client and use DSH Web profiles.
 // Revision 16: install Claude Code in the base image.
-const baseImageRevision = 16
+// Revision 17: include libatomic1 for Node.js LTS binaries installed by modules.
+const baseImageRevision = 17
 
 func managedBaseImageName(image ImageConfig) (string, error) {
 	payload := struct {
