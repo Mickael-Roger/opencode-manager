@@ -25,6 +25,14 @@ if [ "$installed" = true ]; then
   sudo update-ca-certificates || exit 1
 fi
 
+# The home is bind-mounted, so image-build ownership fixes do not apply to an
+# existing Claude directory. Repair an unwritable directory before Claude or its
+# updater starts, preserving its existing credentials and settings.
+if [ -d "$HOME/.claude" ] && [ ! -w "$HOME/.claude" ]; then
+  sudo chown -R "$(id -u):$(id -g)" "$HOME/.claude" || exit 1
+fi
+mkdir -p -m 0700 "$HOME/.claude" || exit 1
+
 # Keep Claude Code current. The image ships the npm build in the root-owned global
 # node_modules, where Claude's own auto-updater cannot write as the workspace
 # user, so it would stay at whatever version the image was built with. Install
