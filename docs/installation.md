@@ -29,6 +29,27 @@ The npm **postinstall** step also:
 Nothing you already have is clobbered, so re-running the install to upgrade is
 safe.
 
+## Install with Nix
+
+With flakes enabled, install the package from GitHub:
+
+```sh
+nix profile install github:Mickael-Roger/opencode-manager
+```
+
+Alternatively, add `github:Mickael-Roger/opencode-manager` as a flake input
+and include `inputs.opencode-manager.packages.${pkgs.system}.default` in your
+NixOS or Home Manager packages. The package provides `ocm` and
+`opencode-manager`. On launch, it creates the default configuration if needed
+and copies built-in modules into the standard user configuration directory,
+updating built-ins while preserving separately named custom modules. As with the
+npm installer, this initialization uses the default module directory even if
+`moduleDirs` has been customized.
+
+Workspaces created before the module directory existed may have no module bind
+mount. Update/recreate their containers from the dashboard after installation;
+their workspace homes are preserved.
+
 ## Run without installing
 
 ```sh

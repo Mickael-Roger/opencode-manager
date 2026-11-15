@@ -51,6 +51,7 @@
 ## Packaging Notes
 
 - npm packaging is defined by `package.json`, `bin/opencode-manager`, and `scripts/postinstall.js`.
+- `flake.nix` packages the Go binary and modules for Nix. Its launcher runs the npm postinstall initializer at runtime to copy modules into the user config; module hooks must retain their container-compatible shebangs instead of Nix store interpreter paths.
 - The npm package name is `@mickaelroger78/opencode-manager`.
 - The npm package expects prebuilt binaries in `dist/opencode-manager-{linux,darwin}-{x64,arm64}`.
 - `.github/workflows/pipeline.yml` is the full CI/CD pipeline: it lints (gofmt, vet), runs unit tests, builds the four binaries, and runs a docker + podman integration matrix (`selftest` subcommand: base-image build, workspace creation, and upgrade-survives-reinstall). On push to `main` it publishes the dev channel (npm dist-tag `dev` + `docker.io/mroger78/ocm-base:dev`); on a `vX.Y.Z` tag it publishes the stable channel (npm `latest` + promotes the tested base image to `:X.Y.Z` and `:latest`). npm uses trusted publishing; the base image push needs the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets.

@@ -59,6 +59,14 @@ directory on your `PATH`.
 
 > No global install? Use `npx @mickaelroger78/opencode-manager`.
 
+With Nix flakes enabled, install with:
+
+```sh
+nix profile install github:Mickael-Roger/opencode-manager
+```
+
+See [installation](docs/installation.md#install-with-nix) for NixOS and Home Manager usage.
+
 ## Quickstart
 
 1. **Install** (see above).
